@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+dev-data/
+data/
+*.sqlite3*
+*.log
+dist/
+*.zip
+.DS_Store

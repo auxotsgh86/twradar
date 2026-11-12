@@ -1,0 +1,9 @@
+services:
+  twradar:
+    build: .
+    restart: unless-stopped
+    ports: ["8765:8765"]
+    volumes: ["./data:/data"]
+    # environment:
+    #   TWRADAR_TOKEN: "自訂 token（不填會自動產生，存在 data/config.json）"
+    #   TWRADAR_FINMIND_TOKEN: ""
