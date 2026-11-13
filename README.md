@@ -192,7 +192,11 @@ API 全部需要 token，請不要公開分享含 token 的網址。
 ./deploy/backtest.sh -- --grid stopLossPct=8,10,12   # 「--」之後的參數交給 twradar backtest
 ```
 
-資料放在 `~/twradar-backtest`（不影響正在運作的雷達）；第一次會複製 `~/twradar-data/settings.json` 的觀察清單與規則。
+- 這台電腦已安裝雷達（有 `~/twradar-data`）：**共用雷達的資料庫**，抓一次、晨報與回溯都能用。
+  雷達正在執行時，補抓交給雷達的背景工作（與每日排程排隊，不會同時對交易所發請求），腳本只顯示進度；
+  Ctrl+C 只停止顯示，雷達會繼續補。
+- 沒有安裝雷達，或加 `--separate`：用獨立資料夾 `~/twradar-backtest`，第一次會複製雷達的觀察清單與規則。
+- 已安裝雷達時，可直接執行 `~/twradar-app/deploy/backtest.sh`（重跑 `deploy/install.sh` 會更新成最新版）。
 也可以直接用指令：
 
 ```bash

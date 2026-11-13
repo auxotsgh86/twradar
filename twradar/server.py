@@ -474,7 +474,9 @@ def make_handler(app: App):
 
             if head == "backfill" and method == "POST":
                 days = int(self.body().get("days") or app.cfg.backfill_days)
-                return self.json({"ok": True, "queued": app.worker.submit("補抓歷史資料", lambda: app.crawler.backfill(days))})
+                # 標籤含天數：正在補 100 天時再要求補 560 天，會排在後面而不是被忽略
+                return self.json({"ok": True, "days": days,
+                                  "queued": app.worker.submit(f"補抓歷史資料（{days} 天）", lambda: app.crawler.backfill(days))})
 
             if head == "events" and method == "GET":
                 lim = max(1, min(500, int((qs.get("limit") or ["100"])[0])))
