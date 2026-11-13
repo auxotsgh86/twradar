@@ -31,7 +31,7 @@
 git clone https://github.com/auxotsgh86/twradar.git
 cd twradar
 python3 -m twradar serve          # 不需要安裝任何套件；預設 http://localhost:8765
-python3 -m twradar info           # 顯示網址與 token
+python3 -m twradar info           # 顯示網址、token 與初始管理密碼
 python3 -m twradar doctor         # 測試資料來源是否正常
 ```
 
@@ -45,7 +45,7 @@ python3 -m twradar doctor         # 測試資料來源是否正常
 1. 把收到的 zip 檔（或 GitHub 頁面「Code → Download ZIP」下載的檔案）點兩下解壓縮。
 2. 打開解壓縮後的資料夾，在「安裝（Mac 請點兩下）.command」上 **按右鍵 → 打開 → 再按一次「打開」**
    （第一次一定要用右鍵打開，直接點兩下會被 Mac 擋下）。
-3. 等視窗出現「✅ 安裝完成！」。瀏覽器會自動打開網頁；桌面會多一個「右側加碼雷達-連線資訊.txt」，把這個檔案傳給 Paul 就完成了。
+3. 等視窗出現「✅ 安裝完成！」。瀏覽器會自動打開網頁；桌面會多一個「右側加碼雷達-連線資訊.txt」，把這個檔案傳給 Paul 就完成了（檔案裡有管理密碼，請只傳給 Paul）。
 
 **Linux**
 ```bash
@@ -63,15 +63,30 @@ git clone https://github.com/auxotsgh86/twradar.git && cd twradar && bash deploy
 | 項目 | 位置 |
 |---|---|
 | 程式 | `~/twradar-app` |
-| 資料庫、設定、紀錄 | `~/twradar-data`（`twradar.sqlite3`、`config.json`、`twradar.log`） |
+| 資料庫 | `~/twradar-data/twradar.sqlite3` |
+| 使用者設定 | `~/twradar-data/settings.json`（觀察清單、門檻、資料源、排程、顏色；網頁可改，舊版本在 `settings.history/`） |
+| 系統設定 | `~/twradar-data/config.json`（port、token、管理密碼雜湊；網頁不能改） |
+| 紀錄 | `~/twradar-data/twradar.log` |
 | 服務 | Mac：`~/Library/LaunchAgents/tw.radar.plist`；Linux：`systemctl --user status twradar` |
 
 更新版本：解壓新版後重跑安裝即可，資料與 token 保留。移除：`bash deploy/uninstall.sh`（加 `--purge` 連資料一起刪）。
 
+### 權限與密碼
+
+| 身分 | 用什麼登入 | 可以做 |
+|---|---|---|
+| 唯讀 | 唯讀 token（網址 `?token=` 或標頭） | 查看所有資料（晨報用這個） |
+| 管理者 | 網頁輸入管理密碼，或管理 token（只能放標頭） | 改觀察清單、門檻、設定，手動抓取，匯出資料庫，查看與重設 token |
+
+- 初始管理密碼在安裝完成時顯示（也在桌面的連線資訊檔），登入後到「設定 → 權限」改成自己的密碼。
+- 忘記 token：用管理密碼登入，在「設定 → 權限」查看或重設。
+- 忘記管理密碼：在主機上執行 `cd ~/twradar-app && TWRADAR_HOME=~/twradar-data .venv/bin/python -m twradar admin reset-password`。
+- 從 v0.1 升級：原本的 token 自動變成唯讀 token（晨報網址不用改）；觀察清單與門檻自動搬到 `settings.json`。
+
 ### 第一次啟動會發生什麼
 1. 建立預設觀察清單（13 檔，可在網頁「設定與狀態」修改，上限 50 檔）。
 2. 背景補抓約 100 個交易日的全市場資料（每次請求間隔約 8～10 秒，約 1～2 小時），進度顯示在「設定與狀態」。
-3. 之後每個交易日自動排程（台北時間，可在 `config.json` 的 `schedule` 修改）：
+3. 之後每個交易日自動排程（台北時間，可在 `settings.json` 的 `schedule` 修改）：
 
 | 時間 | 動作 |
 |---|---|
@@ -104,7 +119,8 @@ API 全部需要 token，請不要公開分享含 token 的網址。
 
 ## 三、API
 
-認證：`Authorization: Bearer <token>`、`X-Token: <token>`，或網址加 `?token=<token>`（方便只能發 GET 的工具）。
+認證：唯讀 token 可用 `Authorization: Bearer <token>`、`X-Token: <token>`，或網址加 `?token=<token>`（方便只能發 GET 的工具）。
+標示「管理」的端點需要管理 token（只接受標頭）或管理者登入；所有非 GET 的請求都需要管理者。
 
 | 方法 | 路徑 | 說明 |
 |---|---|---|
@@ -115,10 +131,14 @@ API 全部需要 token，請不要公開分享含 token 的網址。
 | GET | `/api/v1/stocks/{code}/history?days=120` | 個股歷史（含 MA20/MA60、法人、融資）；`&format=csv` |
 | GET | `/api/v1/dates` | 所有日期與狀態 |
 | GET | `/api/v1/status` | 系統狀態、排程、補抓進度 |
-| GET/POST/DELETE | `/api/v1/watchlist` | 觀察清單（POST JSON：`code,name,market,group,note,keyLevel`） |
-| GET/PUT | `/api/v1/rules` | 判定門檻 |
-| POST | `/api/v1/crawl` `/api/v1/analyze` `/api/v1/backfill` | 手動觸發 |
-| GET | `/api/v1/export/sqlite` | 下載整個資料庫 |
+| GET/POST/DELETE | `/api/v1/watchlist` | 觀察清單（POST 為管理；JSON：`code,name,market,group,note,keyLevel,holding,cost,shares`） |
+| GET/PUT | `/api/v1/rules` | 判定門檻（PUT 為管理） |
+| POST | `/api/v1/crawl` `/api/v1/analyze` `/api/v1/backfill` | 手動觸發（管理） |
+| GET | `/api/v1/export/sqlite` | 下載整個資料庫（管理） |
+| GET/PUT | `/api/v1/settings` | 全部設定（管理；token 類欄位遮蔽顯示，送回遮蔽值代表不變；不合法回 400 並列出每個錯誤的位置） |
+| GET / POST | `/api/v1/settings/history`、`/settings/restore`（`{id}`）、`/settings/reset`（`{section}`）、`/settings/export` | 設定版本與還原（管理） |
+| POST | `/api/v1/auth/login`（`{password}`）、`/auth/logout`；GET `/auth/me` | 網頁登入（不需 token） |
+| GET / POST | `/api/v1/auth/tokens`、`/auth/rotate`（`{kind: read\|admin}`）、`/auth/password`（`{current,new}`） | 查看／重設 token、改密碼（管理） |
 
 ### 回應一定帶狀態
 ```json
@@ -163,7 +183,7 @@ API 全部需要 token，請不要公開分享含 token 的網址。
 - 證交所四項、櫃買中心三項來源皆已在實機確認可依日期抓取（2026/11）。程式會分辨「網站回傳較新日期（參數不對）」與「當日尚未公布」兩種情況，前者立即改用 FinMind 備援。
 - 主力分點、買賣家數差沒有官方全市場資料，目前不抓，判定時該項顯示「?」。
 - 休市判斷：平日 17:00 後證交所仍無當日資料就視為休市。
-- FinMind 免費額度有限；量大時可到 finmindtrade.com 申請 token，填入 `config.json` 的 `finmind_token`。
+- FinMind 免費額度有限；量大時可到 finmindtrade.com 申請 token，填入 `settings.json` 的 `sources.options.finmind.token`。
 
 ## 專案結構
 
@@ -171,6 +191,9 @@ API 全部需要 token，請不要公開分享含 token 的網址。
 twradar/
   providers/    資料源（可替換）：base.py 介面、twse.py 證交所、tpex.py 櫃買中心、finmind.py 逐檔備援
   dates.py      日期工具
+  settings.py   使用者設定 settings.json：驗證、版本、遷移
+  auth.py       權限：唯讀／管理者、密碼、session、Authenticator 介面
+  config.py     系統設定 config.json
   net.py        HTTP 抓取：請求間隔、重試、封鎖偵測
   jobs.py       抓取流程、歷史補抓、背景工作佇列、每日排程
   analysis.py   指標計算（MA20/MA60、均量、連續買賣）與訊號判定

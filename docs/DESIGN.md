@@ -1,6 +1,6 @@
 # twradar 設計文件（v0.2 草案）
 
-> 狀態：**設計定案，實作中（P1 完成）**。本文件記錄設計決策與理由，實作以本文件為準；有變更時先改這裡。
+> 狀態：**設計定案，實作中（P1、P2 完成）**。本文件記錄設計決策與理由，實作以本文件為準；有變更時先改這裡。
 > 最後更新：2026-11-13
 
 ## 0. 決策紀錄
@@ -72,7 +72,8 @@ class Provider:
 
 - primary 依序抓全市場資料；某市場某資料集失敗時，fallback 依序逐檔補觀察清單（只抓缺的資料集，不覆蓋已成功的官方資料）。
 - `options.<id>.base` 可改網址（測試用）。
-- P1 暫存於 `config.json`（相容舊的 `use_finmind_fallback`、`finmind_token`）；P2 移到 `settings.json`。
+- 存在 `settings.json` 的 `sources`；v0.1 的 `config.json` 欄位（`use_finmind_fallback`、`finmind_token`）升級時自動搬過來。
+- 設定的資料源變更後，下一次抓取前自動重建（`Crawler.refresh()`），不必重啟。
 
 ### 3.3 條件與資料的關係
 
@@ -245,7 +246,12 @@ class Provider:
 - 原子寫入（先寫暫存檔再改名），每次存檔保留前 20 版於 `settings.history/`，可在網頁還原。
 - 網頁提供匯出／匯入 JSON、「恢復預設」。
 - API token 等敏感值在網頁上遮蔽顯示。
-- 從 v0.1.3 升級時，自動把 SQLite `settings` 表中的觀察清單與門檻轉成 `settings.json`。
+- 從 v0.1.3 升級時，自動把 SQLite 的觀察清單（`stocks` 表）與門檻（`settings.rules`）、`config.json` 的排程與資料源轉成 `settings.json`，並從 `config.json` 移除這些舊欄位。
+- 新版本新增的內建參數、欄位在載入時自動補上預設值（`normalize`）；內建參數被刪掉也會自動補回。
+- 檔案被手動修改：自動重新載入；內容不合法就沿用上一個合法版本，並在「系統狀態」顯示錯誤（`settingsError`）。
+- 觀察清單從 SQLite 移到 `settings.json`（SQLite `stocks` 表只保留供遷移）。
+
+（P2 已實作：`twradar/settings.py`。）
 
 ### 6.4 權限（D10）
 
@@ -263,7 +269,12 @@ class Provider:
   - 忘記管理密碼 → 在主機上執行 `twradar admin reset-password`，或看安裝時桌面產生的「連線資訊」檔。
 - **升級**：v0.1.3 原本的 `token` 轉為 `readToken`（晨報不用改），另外產生 `adminToken` 與初始管理密碼，寫入 `twradar info` 與桌面連線資訊檔。
 - **可替換**：驗證透過 `Authenticator` 介面（輸入 request，輸出 `Principal(role)`），日後可接外部權限系統而不改 API。
-- 登入失敗計次，連續失敗會暫時鎖定，避免公開網址被暴力嘗試。
+- 登入失敗計次：同一 IP 15 分鐘內失敗 5 次、或所有來源合計 20 次，鎖定 15 分鐘。
+- 同時帶多種憑證（例如網址有唯讀 token、又已登入）時取權限最高者。
+- `config.json`、`settings.json` 權限設為 600；服務啟動的紀錄不印出管理密碼與管理 token。
+- CLI：`twradar admin reset-password`、`admin set-password`、`admin rotate-token read|admin`。
+
+（P2 已實作：`twradar/auth.py`。）
 
 ## 7. 設定頁（網頁）
 

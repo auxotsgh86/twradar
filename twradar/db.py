@@ -9,7 +9,7 @@ from pathlib import Path
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
-CREATE TABLE IF NOT EXISTS stocks (            -- 觀察清單
+CREATE TABLE IF NOT EXISTS stocks (            -- v0.1 觀察清單（v0.2 起改存 settings.json，只供遷移）
   code TEXT PRIMARY KEY, name TEXT NOT NULL, market TEXT NOT NULL DEFAULT 'TWSE',
   grp TEXT DEFAULT '', note TEXT DEFAULT '', key_level REAL, sort_order INTEGER DEFAULT 999,
   added_at TEXT DEFAULT (datetime('now'))
@@ -94,22 +94,6 @@ class DB:
         with self.tx() as c:
             c.execute("INSERT INTO events(level,message) VALUES(?,?)", (level, message))
             c.execute("DELETE FROM events WHERE id < (SELECT MAX(id) - 2000 FROM events)")
-
-    # ---------- watchlist ----------
-    def watchlist(self) -> list[dict]:
-        return [dict(r) for r in self.q("SELECT * FROM stocks ORDER BY sort_order, code")]
-
-    def upsert_stock(self, s: dict) -> None:
-        with self.tx() as c:
-            c.execute("""INSERT INTO stocks(code,name,market,grp,note,key_level,sort_order)
-                VALUES(:code,:name,:market,:grp,:note,:key_level,:sort_order)
-                ON CONFLICT(code) DO UPDATE SET name=excluded.name, market=excluded.market, grp=excluded.grp,
-                note=excluded.note, key_level=excluded.key_level, sort_order=excluded.sort_order""",
-                      {"grp": "", "note": "", "key_level": None, "sort_order": 999, "market": "TWSE", **s})
-
-    def delete_stock(self, code: str) -> None:
-        with self.tx() as c:
-            c.execute("DELETE FROM stocks WHERE code=?", (code,))
 
     # ---------- runs ----------
     def get_run(self, date: str) -> dict | None:

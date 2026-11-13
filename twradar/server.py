@@ -1,18 +1,20 @@
 """Web API 與網頁 UI（標準函式庫 http.server）。
 
-所有 /api/v1 端點（health 除外）都要 token：
-  Header `Authorization: Bearer <token>`、`X-Token: <token>`，或網址參數 `?token=<token>`。
+權限（見 auth.py）：
+- 唯讀：唯讀 token（`Authorization: Bearer`、`X-Token` 或 `?token=`），可讀取所有資料。
+- 管理者：管理 token（只接受標頭）或網頁密碼登入（cookie），可修改設定、觸發抓取、匯出資料庫。
+不需登入：/api/v1/health、/api/v1/auth/login、/api/v1/auth/me、/api/v1/auth/logout。
 """
 from __future__ import annotations
 
 import csv
-import hmac
 import io
 import json
 import logging
 import mimetypes
 import re
 import tempfile
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -20,11 +22,14 @@ from urllib.parse import parse_qs, urlparse
 from . import __version__
 from .dates import is_weekend, norm_date
 from .analysis import DEFAULT_RULES, LIGHT_LABEL, evaluate, indicators_many, rules_of, run_analysis
+from .auth import COOKIE, SESSION_DAYS, AuthError, Authenticator, Credentials, TokenPasswordAuthenticator
+from .settings import SettingsError, SettingsStore, mask, stock as new_stock
 from .config import Config, now_tw
 from .db import DB
 from .jobs import STATUS_TEXT, Crawler, Scheduler, Worker, prev_weekday, today
 
 log = logging.getLogger("twradar.server")
+ADMIN_ONLY = ("settings", "export")  # 這些路徑連讀取都需要管理者
 WEB = Path(__file__).parent / "web"
 
 CSV_COLS = ["code", "name", "market", "light", "lightLabel", "close", "chgPct", "vol", "vol5", "ma20", "ma60",
@@ -44,10 +49,13 @@ def parse_date(s: str | None) -> str | None:
 
 
 class App:
-    def __init__(self, cfg: Config, db: DB, start_background: bool = True, crawler: Crawler | None = None):
+    def __init__(self, cfg: Config, db: DB, settings: SettingsStore, start_background: bool = True,
+                 crawler: Crawler | None = None, authenticator: Authenticator | None = None):
         self.cfg = cfg
         self.db = db
-        self.crawler = crawler or Crawler(db, cfg)
+        self.settings = settings
+        self.auth = authenticator or TokenPasswordAuthenticator(cfg)
+        self.crawler = crawler or Crawler(db, cfg, settings)
         self.worker = Worker(self.crawler)
         self.scheduler = Scheduler(self.crawler, self.worker) if start_background else None
 
@@ -93,17 +101,18 @@ class App:
 
     def day_stocks(self, d: str) -> list[dict]:
         sigs = {r["code"]: json.loads(r["payload"]) for r in self.db.q("SELECT code, payload FROM signals WHERE date=?", (d,))}
-        R = rules_of(self.db)
+        R = rules_of(self.settings)
         out = []
-        watch = self.db.watchlist()
+        watch = self.settings.watchlist()
         late = indicators_many(self.db, [w["code"] for w in watch if w["code"] not in sigs], d)
         for w in watch:
             p = sigs.get(w["code"])
             if not p:  # 分析之後才加入的個股：即時計算
                 rec = late[w["code"]]
                 p = {"data": rec, "signal": evaluate(rec, w, R)}
-            out.append({"code": w["code"], "name": w["name"], "market": w["market"], "group": w["grp"],
-                        "note": w["note"], "keyLevel": w["key_level"], "data": p["data"], "signal": p["signal"]})
+            out.append({"code": w["code"], "name": w["name"], "market": w["market"], "group": w["group"],
+                        "note": w["note"], "keyLevel": w["keyLevel"], "holding": w["holding"],
+                        "data": p["data"], "signal": p["signal"]})
         return out
 
     def envelope(self, d: str) -> dict:
@@ -113,7 +122,7 @@ class App:
         for s in stocks:
             summary[s["signal"]["light"]] += 1
         return {"apiVersion": 1, **st, "generatedAt": now_tw().isoformat(timespec="seconds"),
-                "rules": rules_of(self.db), "market": self.market_of(d), "summary": summary, "stocks": stocks}
+                "rules": rules_of(self.settings), "market": self.market_of(d), "summary": summary, "stocks": stocks}
 
     def latest_date(self, ready_only: bool = False) -> str | None:
         rows = self.db.q("SELECT date, status FROM runs WHERE status!='holiday' ORDER BY date DESC LIMIT 30")
@@ -159,14 +168,21 @@ class App:
                         "ma60": round(sum(c60) / 60, 2) if len(c60) == 60 else None})
         return out[-days:]
 
+    def reanalyze_latest(self) -> None:
+        d = self.latest_date()
+        if d:
+            run_analysis(self.db, d, self.settings)
+
     def system(self) -> dict:
         runs = [dict(r) for r in self.db.q("SELECT date,status,attempts,finished_at,message FROM runs ORDER BY date DESC LIMIT 15")]
         n_days = self.db.one("SELECT COUNT(DISTINCT date) AS n FROM quotes")["n"]
         return {"version": __version__, "now": now_tw().isoformat(timespec="seconds"),
                 "worker": self.worker.state(), "backfill": self.db.get_setting("backfill"),
                 "nextRuns": self.scheduler.next_runs() if self.scheduler else [],
-                "tradingDaysStored": n_days, "watchlistSize": len(self.db.watchlist()),
-                "maxWatchlist": self.cfg.max_watchlist, "finmindFallback": self.cfg.use_finmind_fallback,
+                "tradingDaysStored": n_days, "watchlistSize": len(self.settings.watchlist()),
+                "maxWatchlist": self.cfg.max_watchlist, "finmindFallback": bool(self.settings.source_plan()[1]),
+                "sources": {"primary": self.crawler.step_ids, "fallback": [p.id for p in self.crawler.fallback]},
+                "settingsError": self.settings.last_error,
                 "recentRuns": runs}
 
 
@@ -192,8 +208,8 @@ def make_handler(app: App):
             if self.command != "HEAD":
                 self.wfile.write(body)
 
-        def json(self, obj, code: int = 200):
-            self.send(code, json.dumps(obj, ensure_ascii=False, indent=1).encode(), "application/json; charset=utf-8")
+        def json(self, obj, code: int = 200, extra: dict | None = None):
+            self.send(code, json.dumps(obj, ensure_ascii=False, indent=1).encode(), "application/json; charset=utf-8", extra)
 
         def err(self, code: int, msg: str):
             self.json({"error": msg, "status": code}, code)
@@ -216,10 +232,21 @@ def make_handler(app: App):
             except Exception:
                 return {}
 
-        def authed(self, qs) -> bool:
-            tok = (self.headers.get("Authorization") or "").removeprefix("Bearer ").strip() \
-                or self.headers.get("X-Token") or (qs.get("token") or [""])[0]
-            return bool(tok) and hmac.compare_digest(tok, app.cfg.token)
+        def credentials(self, qs) -> Credentials:
+            cookie = ""
+            try:
+                jar = SimpleCookie(self.headers.get("Cookie") or "")
+                if COOKIE in jar:
+                    cookie = jar[COOKIE].value
+            except CookieError:
+                pass
+            bearer = (self.headers.get("Authorization") or "").removeprefix("Bearer ").strip() or self.headers.get("X-Token") or ""
+            return Credentials(bearer=bearer.strip(), query_token=(qs.get("token") or [""])[0], cookie=cookie,
+                               client=self.client_address[0] if self.client_address else "")
+
+        def session_cookie(self, value: str, max_age: int) -> dict:
+            secure = "; Secure" if (self.headers.get("X-Forwarded-Proto") or "").lower() == "https" else ""
+            return {"Set-Cookie": f"{COOKIE}={value}; Max-Age={max_age}; Path=/; HttpOnly; SameSite=Strict{secure}"}
 
         # ---------- 路由 ----------
         def do_OPTIONS(self):
@@ -249,9 +276,21 @@ def make_handler(app: App):
                     return self.static(p)
                 if p == "/api/v1/health":
                     return self.json({"ok": True, "version": __version__, "now": now_tw().isoformat(timespec="seconds")})
-                if not self.authed(qs):
-                    return self.err(401, "需要 token（Authorization: Bearer <token> 或 ?token=）")
+                cred = self.credentials(qs)
+                if p.startswith("/api/v1/auth/"):
+                    return self.auth_api(method, p.split("/")[4] if len(p.split("/")) > 4 else "", cred)
+                who = app.auth.authenticate(cred)
+                if not who:
+                    return self.err(401, "需要 token（Authorization: Bearer <token> 或 ?token=）或管理者登入")
+                parts = p.split("/")[3:]
+                if (method != "GET" or (parts and parts[0] in ADMIN_ONLY)) and not who.is_admin:
+                    return self.err(403, "這個動作需要管理者權限（請用管理密碼登入，或使用管理 token）")
+                self.who = who
                 return self.api(method, p, qs)
+            except AuthError as e:
+                return self.err(e.status, str(e))
+            except SettingsError as e:
+                return self.json({"error": "設定不合法：" + str(e), "status": 400, "errors": e.errors}, 400)
             except Exception as e:
                 log.exception("request failed")
                 return self.err(500, f"伺服器錯誤：{e!r}")
@@ -265,6 +304,60 @@ def make_handler(app: App):
             if ctype.startswith("text/") or ctype.endswith("javascript"):
                 ctype += "; charset=utf-8"
             self.send(200, f.read_bytes(), ctype)
+
+        def auth_api(self, method: str, action: str, cred: Credentials):
+            if action == "login" and method == "POST":
+                cookie = app.auth.login(str(self.body().get("password") or ""), cred.client)
+                app.db.log("info", f"管理者登入（{cred.client}）")
+                return self.json({"ok": True, "role": "admin"}, extra=self.session_cookie(cookie, SESSION_DAYS * 86400))
+            if action == "logout" and method == "POST":
+                return self.json({"ok": True}, extra=self.session_cookie("", 0))
+            who = app.auth.authenticate(cred)
+            if action == "me" and method == "GET":
+                return self.json({"role": who.role if who else None, "via": who.via if who else None,
+                                  "initialPassword": bool(who and who.is_admin and app.cfg.admin_initial_password)})
+            if not who or not who.is_admin:
+                return self.err(401 if not who else 403, "需要管理者權限")
+            if action == "tokens" and method == "GET":
+                return self.json(app.auth.tokens())
+            if action == "rotate" and method == "POST":
+                kind = str(self.body().get("kind") or "")
+                tok = app.auth.rotate_token(kind)
+                app.db.log("warn", f"{'唯讀' if kind == 'read' else '管理'} token 已重設")
+                return self.json({"ok": True, "kind": kind, "token": tok})
+            if action == "password" and method == "POST":
+                b = self.body()
+                cookie = app.auth.change_password(str(b.get("current") or ""), b.get("new"))
+                app.db.log("warn", "管理密碼已變更，其他裝置的登入已失效")
+                return self.json({"ok": True}, extra=self.session_cookie(cookie, SESSION_DAYS * 86400))
+            return self.err(404, "找不到這個 API")
+
+        def settings_api(self, method: str, parts: list[str], qs):
+            st = app.settings
+            sub = parts[1] if len(parts) > 1 else ""
+            if not sub and method == "GET":
+                return self.json({"settings": mask(st.get()), "rev": st.rev, "error": st.last_error})
+            if not sub and method == "PUT":
+                b = self.body()
+                saved = st.save(b.get("settings", b))
+                app.reanalyze_latest()
+                return self.json({"ok": True, "settings": mask(saved), "rev": st.rev})
+            if sub == "history" and method == "GET":
+                return self.json(st.history())
+            if sub == "restore" and method == "POST":
+                saved = st.restore(str(self.body().get("id") or ""))
+                app.reanalyze_latest()
+                return self.json({"ok": True, "settings": mask(saved), "rev": st.rev})
+            if sub == "reset" and method == "POST":
+                saved = st.reset(str(self.body().get("section") or ""))
+                app.reanalyze_latest()
+                return self.json({"ok": True, "settings": mask(saved), "rev": st.rev})
+            if sub == "export" and method == "GET":
+                stamp = now_tw().strftime("%Y%m%d-%H%M")
+                body = json.dumps(st.get(), ensure_ascii=False, indent=2).encode()
+                return self.send(200, body, "application/json; charset=utf-8",
+                                 {"Content-Disposition": f'attachment; filename="twradar-settings-{stamp}.json"'})
+            return self.err(404, "找不到這個 API")
 
         def api(self, method: str, p: str, qs):
             fmt = (qs.get("format") or ["json"])[0]
@@ -310,43 +403,55 @@ def make_handler(app: App):
                 rows = app.history(code, days)
                 if fmt == "csv":
                     return self.csv_out(rows, list(rows[0].keys()) if rows else ["date"], f"twradar-{code}-history.csv")
-                w = next((x for x in app.db.watchlist() if x["code"] == code), None)
+                w = next((x for x in app.settings.watchlist() if x["code"] == code), None)
                 return self.json({"code": code, "name": w["name"] if w else None, "days": len(rows), "rows": rows})
+
+            if head == "settings":
+                return self.settings_api(method, parts, qs)
 
             if head == "watchlist":
                 if method == "GET":
-                    return self.json(app.db.watchlist())
+                    return self.json(app.settings.watchlist())
                 if method == "POST":
                     b = self.body()
-                    code = str(b.get("code", "")).strip().upper()
-                    if not re.fullmatch(r"[0-9A-Z]{4,6}", code) or not b.get("name"):
-                        return self.err(400, "需要 code（4–6 碼）與 name")
-                    wl = app.db.watchlist()
-                    if code not in {x["code"] for x in wl} and len(wl) >= app.cfg.max_watchlist:
-                        return self.err(400, f"觀察清單上限 {app.cfg.max_watchlist} 檔")
                     market = "TPEx" if str(b.get("market", "")).upper() in ("TPEX", "OTC", "上櫃") else "TWSE"
-                    stock = {"code": code, "name": str(b["name"]).strip(), "market": market,
-                             "grp": str(b.get("group", b.get("grp", ""))), "note": str(b.get("note", "")),
-                             "key_level": b.get("keyLevel", b.get("key_level")),
-                             "sort_order": int(b.get("order", b.get("sort_order", len(wl) + 1)) or 999)}
-                    app.db.upsert_stock(stock)
-                    app.worker.submit(f"補 {code} 歷史", lambda: app.crawler.ensure_history(stock))
-                    return self.json({"ok": True, "stock": stock})
+                    item = new_stock(**{**b, "code": str(b.get("code", "")).strip().upper(),
+                                        "name": str(b.get("name") or "").strip(), "market": market})
+
+                    def upsert(s):
+                        wl = s["watchlist"]
+                        i = next((k for k, w in enumerate(wl) if w["code"] == item["code"]), None)
+                        if i is None:
+                            pos = b.get("order")
+                            wl.insert(int(pos) - 1 if isinstance(pos, int) and pos > 0 else len(wl), item)
+                        else:  # 只更新有送來的欄位（舊版網頁不會送 holding、cost 等）
+                            given = {k: v for k, v in item.items() if k in b or k in ("code", "name", "market")}
+                            if "keyLevel" not in b and "key_level" in b:
+                                given["keyLevel"] = b["key_level"]
+                            wl[i] = {**wl[i], **given}
+                    app.settings.update(upsert)
+                    app.worker.submit(f"補 {item['code']} 歷史", lambda: app.crawler.ensure_history(item))
+                    return self.json({"ok": True, "stock": item})
                 if method == "DELETE" and len(parts) > 1:
-                    app.db.delete_stock(parts[1].upper())
+                    code = parts[1].upper()
+                    app.settings.update(lambda s: s.__setitem__("watchlist", [w for w in s["watchlist"] if w["code"] != code]))
                     return self.json({"ok": True})
 
             if head == "rules":
                 if method == "GET":
-                    return self.json({"rules": rules_of(app.db), "defaults": DEFAULT_RULES})
+                    return self.json({"rules": rules_of(app.settings), "defaults": DEFAULT_RULES,
+                                      "params": app.settings.get()["params"]})
                 if method == "PUT":
                     b = self.body()
-                    new = {k: float(b[k]) for k in DEFAULT_RULES if k in b and isinstance(b[k], (int, float))}
-                    app.db.set_setting("rules", {**rules_of(app.db), **new})
-                    d = app.latest_date()
-                    if d:
-                        run_analysis(app.db, d)
-                    return self.json({"ok": True, "rules": rules_of(app.db)})
+
+                    def setv(s):
+                        for prm in s["params"]:
+                            v = b.get(prm["id"])
+                            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                                prm["value"] = v
+                    app.settings.update(setv)
+                    app.reanalyze_latest()
+                    return self.json({"ok": True, "rules": rules_of(app.settings)})
 
             if head == "crawl" and method == "POST":
                 b = self.body()
@@ -360,7 +465,7 @@ def make_handler(app: App):
                 d = parse_date(self.body().get("date")) or app.latest_date()
                 if not d:
                     return self.err(400, "沒有可分析的日期")
-                return self.json({"ok": True, "date": iso(d), "summary": run_analysis(app.db, d)})
+                return self.json({"ok": True, "date": iso(d), "summary": run_analysis(app.db, d, app.settings)})
 
             if head == "backfill" and method == "POST":
                 days = int(self.body().get("days") or app.cfg.backfill_days)

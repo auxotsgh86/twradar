@@ -6,14 +6,15 @@ from datetime import datetime
 
 from .config import TW
 from .db import DB
+from .settings import BUILTIN_PARAMS, SettingsStore
 
-DEFAULT_RULES = {"maTol": 0.5, "streakDays": 2, "amplify": 2, "volRatio": 1, "marginFlat": 0,
-                 "divergeMargin": 0, "blackPct": 3, "blowoff": 1.5}
+DEFAULT_RULES = {p["id"]: p["value"] for p in BUILTIN_PARAMS}
 LIGHT_LABEL = {"go": "加碼訊號", "wait": "觀察中", "stop": "不宜加碼", "na": "資料不足"}
 
 
-def rules_of(db: DB) -> dict:
-    return {**DEFAULT_RULES, **(db.get_setting("rules", {}) or {})}
+def rules_of(settings: SettingsStore) -> dict:
+    """目前的參數值 {id: value}（含使用者自訂參數）。"""
+    return {**DEFAULT_RULES, **settings.params()}
 
 
 def _lots(v):
@@ -201,7 +202,7 @@ def evaluate(rec: dict, stock: dict, R: dict) -> dict:
     if light == "wait" and checks.get("pv") == "pass" and chips < 2:
         needs.append(f"再多 {2 - chips} 項籌碼支持")
     key_note = None
-    kl = stock.get("key_level")
+    kl = stock.get("keyLevel")
     if kl is not None and close is not None:
         above = close >= kl
         key_note = f"關鍵價 {_fmt(kl)}：" + ("已站上" if above else f"尚未站上（差 {_fmt(kl - close, 2)}）")
@@ -216,14 +217,14 @@ def evaluate(rec: dict, stock: dict, R: dict) -> dict:
             "belowMa20": below, "keyLevelNote": key_note}
 
 
-def run_analysis(db: DB, d: str) -> dict:
-    R = rules_of(db)
+def run_analysis(db: DB, d: str, settings: SettingsStore) -> dict:
+    R = rules_of(settings)
     run = db.get_run(d)
     crawl_status = run["status"] if run else "not_started"
     summary = {"go": 0, "wait": 0, "stop": 0, "na": 0}
     with db.tx() as c:
         c.execute("DELETE FROM signals WHERE date=?", (d,))
-        watch = db.watchlist()
+        watch = settings.watchlist()
         recs = indicators_many(db, [s["code"] for s in watch], d)
         for s in watch:
             rec = recs[s["code"]]

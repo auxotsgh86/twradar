@@ -14,6 +14,7 @@ from .dates import is_weekend, prev_weekday
 from .db import DB
 from .net import FetchError, Fetcher
 from .providers import DATASET_TABLE, Batch, Provider, Transport, build
+from .settings import SettingsStore
 
 log = logging.getLogger("twradar.jobs")
 
@@ -35,10 +36,12 @@ def today() -> str:
 class Crawler:
     """依設定的資料源順序抓取。HTTP（transport）與資料源皆可注入。"""
 
-    def __init__(self, db: DB, cfg: Config, transport: Transport | None = None,
+    def __init__(self, db: DB, cfg: Config, settings: SettingsStore, transport: Transport | None = None,
                  primary: list[Provider] | None = None, fallback: list[Provider] | None = None):
         self.db = db
         self.cfg = cfg
+        self.settings = settings
+        self._plan = None
         self._custom = primary is not None or fallback is not None
         self._primary, self._fallback_p = primary, fallback
         self.f = transport or Fetcher(cfg.request_interval, cfg.user_agent)
@@ -51,11 +54,23 @@ class Crawler:
     @f.setter
     def f(self, transport: Transport) -> None:
         self._f = transport
+        self._plan = None
+        self.refresh()
+
+    def refresh(self) -> None:
+        """設定的資料源有變更時重建（每次抓取前檢查）。"""
         if self._custom:
+            if self._plan is not None:
+                return
             self.primary, self.fallback = self._primary or [], self._fallback_p or []
+            self._plan = "custom"
         else:
-            p, fb, opts = self.cfg.source_plan()
-            self.primary, self.fallback = build(p, transport, opts), build(fb, transport, opts)
+            plan = self.settings.source_plan(self.cfg.env)
+            if plan == self._plan:
+                return
+            p, fb, opts = plan
+            self.primary, self.fallback = build(p, self._f, opts), build(fb, self._f, opts)
+            self._plan = plan
         self.steps = [(f"{pv.id}_{ds}", pv, ds) for pv in self.primary for ds in pv.datasets]
         self.step_ids = [s for s, _, _ in self.steps]
         self.step_labels = {s: pv.step_label(ds) for s, pv, ds in self.steps}
@@ -75,6 +90,7 @@ class Crawler:
 
     # ---------- 單一交易日 ----------
     def crawl_day(self, d: str, final: bool = False, analyze: bool = True, fallback: bool = True) -> dict:
+        self.refresh()
         if is_weekend(d):
             run = {"date": d, "status": "holiday", "steps": {}, "attempts": 0, "started_at": _now(),
                    "finished_at": _now(), "message": "週末休市"}
@@ -131,7 +147,7 @@ class Crawler:
         self.db.save_run(run)
         self.db.log("warn" if missing else "info", f"{d} {STATUS_TEXT[run['status']]}。{run['message']}")
         if analyze:
-            run_analysis(self.db, d)
+            run_analysis(self.db, d, self.settings)
         return run
 
     def _past_publish(self, d: str) -> bool:
@@ -142,7 +158,7 @@ class Crawler:
         """全市場來源失敗（被擋或格式不符）時，用逐檔資料源補觀察清單。"""
         if not self.fallback:
             return
-        watch = self.db.watchlist()
+        watch = self.settings.watchlist()
         for pv in self.primary:
             for mkt in pv.markets:
                 bad = [(s, ds) for s, p, ds in self.steps if p is pv
@@ -201,10 +217,10 @@ class Crawler:
                     self.db.log("error", state["error"])
                     break
             d = prev_weekday(d)
-        for w in self.db.watchlist():
+        for w in self.settings.watchlist():
             self.ensure_history(w)
         for dd in self.db.trading_dates(limit=5):
-            run_analysis(self.db, dd)
+            run_analysis(self.db, dd, self.settings)
         state.update(status="done", current=None, finished_at=_now())
         self.db.set_setting("backfill", state)
         self.db.log("info", f"歷史資料補抓完成：{state['done']} 個交易日")
@@ -279,7 +295,7 @@ class Scheduler:
     def slots(self, day: str) -> list[tuple[str, str, bool]]:
         """(觸發時間 key, 目標交易日, 是否最後一次)"""
         out = []
-        for hm in self.c.cfg.schedule:
+        for hm in self.c.settings.schedule():
             h = int(hm.split(":")[0])
             if h < 12:  # 清晨：補抓前一交易日，最後一次
                 out.append((f"{day} {hm}", prev_weekday(day), True))

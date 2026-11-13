@@ -11,10 +11,6 @@ const cls = v => isNum(v) ? (v > 0 ? "up" : v < 0 ? "down" : "") : "";
 const LIGHT = {go: "加碼訊號", wait: "觀察中", stop: "不宜加碼", na: "資料不足"};
 const STATUS = {complete: "完成", waiting: "等待交易所公布", running: "抓取中", partial: "部分缺漏", failed: "失敗",
   holiday: "休市", not_started: "尚未開始", provisional: "暫定", pending: "等待中", ok: "完成", nodata: "尚未公布", fallback: "備援完成"};
-const RULES = [["maTol","月線容許誤差（%）","低於月線但在此範圍內不算跌破"],["streakDays","法人連續買超天數 ≥",""],
-  ["amplify","單日買超放大倍數 ≥","當日買超 ÷ 前 4 日平均絕對值"],["volRatio","量能門檻（倍 5 日均量）>",""],
-  ["marginFlat","融資持平容許增量（張）≤",""],["divergeMargin","背離：融資增加超過（張）>",""],
-  ["blackPct","長黑跌幅（%）≥",""],["blowoff","爆量倍數 ≥",""]];
 
 /* ---------- token ---------- */
 let TOKEN = "";
@@ -24,8 +20,11 @@ if (m) { TOKEN = decodeURIComponent(m[1]); try { localStorage.setItem("twradar-t
 const withTok = u => u + (u.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(TOKEN);
 
 async function api(path, opts = {}) {
-  const r = await fetch("/api/v1" + path, {...opts, headers: {"Authorization": "Bearer " + TOKEN, "Content-Type": "application/json"}});
-  if (r.status === 401) { askToken(); throw new Error("需要 token"); }
+  const headers = {"Content-Type": "application/json"};
+  if (TOKEN) headers.Authorization = "Bearer " + TOKEN;
+  const r = await fetch("/api/v1" + path, {...opts, headers, credentials: "same-origin"});
+  if (r.status === 401) { askToken(); throw new Error("需要登入"); }
+  if (r.status === 403) { askToken("這個動作需要管理者權限，請用管理密碼登入。"); throw new Error("需要管理者權限"); }
   const j = await r.json();
   if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
   return j;
@@ -36,12 +35,23 @@ function sheet(html, mount) {
   $("#ov").addEventListener("click", e => { if (e.target.id === "ov" || e.target.closest("[data-close]")) $("#layer").innerHTML = ""; });
   mount && mount($("#ov .sheet"));
 }
-function askToken() {
+function askToken(msg) {
   if ($("#tokForm")) return;
-  sheet(`<h2>輸入存取 token</h2><div class="small muted">token 在安裝完成時顯示，也存在電腦桌面的「右側加碼雷達-連線資訊.txt」。</div>
-    <form id="tokForm" class="row"><input id="tok" style="flex:1" autocomplete="off" placeholder="貼上 token"><button class="primary">確定</button></form>`,
-    s => s.querySelector("#tokForm").addEventListener("submit", e => { e.preventDefault(); TOKEN = s.querySelector("#tok").value.trim();
-      try { localStorage.setItem("twradar-token", TOKEN); } catch (err) {} $("#layer").innerHTML = ""; route(); }));
+  sheet(`<h2>登入</h2>${msg ? `<div class="banner warn">${esc(msg)}</div>` : ""}
+    <h3>管理者</h3><div class="small muted">可修改設定。密碼在安裝完成時顯示，也存在電腦桌面的「右側加碼雷達-連線資訊.txt」。</div>
+    <form id="pwForm" class="row"><input id="pw" type="password" style="flex:1" autocomplete="current-password" placeholder="管理密碼"><button class="primary">登入</button></form>
+    <h3>唯讀</h3><div class="small muted">只能查看。輸入唯讀 token（管理者可在「設定 → 權限」查到）。</div>
+    <form id="tokForm" class="row"><input id="tok" style="flex:1" autocomplete="off" placeholder="貼上唯讀 token"><button>確定</button></form>`,
+    s => {
+      s.querySelector("#tokForm").addEventListener("submit", e => { e.preventDefault(); TOKEN = s.querySelector("#tok").value.trim();
+        try { localStorage.setItem("twradar-token", TOKEN); } catch (err) {} $("#layer").innerHTML = ""; route(); });
+      s.querySelector("#pwForm").addEventListener("submit", async e => { e.preventDefault();
+        const r = await fetch("/api/v1/auth/login", {method: "POST", headers: {"Content-Type": "application/json"}, credentials: "same-origin",
+          body: JSON.stringify({password: s.querySelector("#pw").value})});
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { toast(j.error || "登入失敗"); return; }
+        $("#layer").innerHTML = ""; toast("已用管理者身分登入"); route(); });
+    });
 }
 
 /* ---------- 共用 ---------- */
@@ -224,11 +234,40 @@ async function viewReport(date) {
 }
 
 /* ---------- 頁面：設定與狀態 ---------- */
+async function authPanel() {
+  const me = await fetch("/api/v1/auth/me", {credentials: "same-origin", headers: TOKEN ? {Authorization: "Bearer " + TOKEN} : {}}).then(r => r.json());
+  if (me.role !== "admin") return `<section class="panel" style="display:flex;flex-direction:column;gap:10px"><div class="row between"><h2>權限</h2>${badge("na", "唯讀")}</div>
+    <div class="small muted">目前只能查看。要修改觀察清單、門檻或設定，請用管理密碼登入。</div><div class="row"><button class="primary" id="loginBtn">管理者登入</button></div></section>`;
+  const t = await api("/auth/tokens");
+  const tokRow = (k, label, v, hint) => `<div class="field"><label>${label}</label><div class="row"><input readonly value="${esc(v)}" id="tok-${k}" style="flex:1;font-family:var(--mono,monospace)">
+    <button data-copy="tok-${k}">複製</button><button class="danger" data-rotate="${k}">重設</button></div><span class="hint">${hint}</span></div>`;
+  return `<section class="panel" style="display:flex;flex-direction:column;gap:10px"><div class="row between"><h2>權限</h2>${badge("ok", "管理者")}</div>
+    ${me.initialPassword ? `<div class="banner warn">目前用的是安裝時產生的密碼，建議改成自己好記的密碼。</div>` : ""}
+    ${tokRow("read", "唯讀 token（給晨報）", t.readToken, "可放在網址 ?token=；重設後晨報要換成新 token")}
+    ${tokRow("admin", "管理 token（給管理腳本）", t.adminToken, "只能放在 Authorization 標頭")}
+    <form id="pwChange" class="grid2"><div class="field"><label for="pw-cur">目前密碼</label><input id="pw-cur" type="password" autocomplete="current-password" required></div>
+      <div class="field"><label for="pw-new">新密碼（至少 8 字元）</label><input id="pw-new" type="password" autocomplete="new-password" minlength="8" required></div>
+      <div class="field" style="justify-content:flex-end"><button class="primary">變更密碼</button></div></form>
+    <div class="small muted">變更密碼後，其他裝置需要重新登入。忘記密碼：在主機上執行 <span class="num">twradar admin reset-password</span>。</div>
+    ${me.via === "session" ? `<div class="row"><button id="logoutBtn">登出</button></div>` : ""}</section>`;
+}
+function bindAuthPanel() {
+  $("#loginBtn") && ($("#loginBtn").onclick = () => askToken());
+  document.querySelectorAll("[data-copy]").forEach(b => b.onclick = async () => { try { await navigator.clipboard.writeText($("#" + b.dataset.copy).value); toast("已複製"); } catch (e) { $("#" + b.dataset.copy).select(); } });
+  document.querySelectorAll("[data-rotate]").forEach(b => b.onclick = () => sheet(`<h2>重設${b.dataset.rotate === "read" ? "唯讀" : "管理"} token？</h2><div class="small muted">舊的 token 會立刻失效，使用它的程式（例如晨報）要換成新的。</div><div class="row" style="justify-content:flex-end"><button data-close>取消</button><button class="danger" id="yes">重設</button></div>`,
+    s => s.querySelector("#yes").onclick = async () => { const j = await api("/auth/rotate", {method: "POST", body: JSON.stringify({kind: b.dataset.rotate})});
+      if (b.dataset.rotate === "read" && TOKEN) { TOKEN = j.token; try { localStorage.setItem("twradar-token", TOKEN); } catch (e) {} }
+      $("#layer").innerHTML = ""; toast("已重設"); viewSettings(); }));
+  $("#pwChange") && $("#pwChange").addEventListener("submit", async ev => { ev.preventDefault();
+    try { await api("/auth/password", {method: "POST", body: JSON.stringify({current: $("#pw-cur").value, new: $("#pw-new").value})}); toast("密碼已變更"); viewSettings(); } catch (err) { toast(err.message); } });
+  $("#logoutBtn") && ($("#logoutBtn").onclick = async () => { await fetch("/api/v1/auth/logout", {method: "POST", credentials: "same-origin"}); toast("已登出"); viewSettings(); });
+}
+
 async function viewSettings() {
-  const [sys, wl, rules, ev] = await Promise.all([api("/status"), api("/watchlist"), api("/rules"), api("/events?limit=80")]);
+  const [sys, wl, rules, ev, authHTML] = await Promise.all([api("/status"), api("/watchlist"), api("/rules"), api("/events?limit=80"), authPanel()]);
   const bf = sys.backfill;
   $("#view").innerHTML = `
-   <h1>設定與狀態</h1>
+   <h1>設定與狀態</h1>${authHTML}
    <section class="panel" style="display:flex;flex-direction:column;gap:10px"><div class="row between"><h2>系統狀態</h2><span class="small muted">版本 ${esc(sys.version)}・${esc(sys.now.replace("T", " ").slice(0, 16))}</span></div>
      <div class="grid2"><div class="kv"><span class="k">目前工作</span><span>${esc(sys.worker.current || "閒置")}</span></div>
       <div class="kv"><span class="k">排隊中</span><span>${esc(sys.worker.pending.join("、") || "無")}</span></div>
@@ -246,42 +285,47 @@ async function viewSettings() {
       <div class="field"><label for="a-grp">分組</label><input id="a-grp"></div>
       <div class="field"><label for="a-key">關鍵價（選填）</label><input id="a-key" inputmode="decimal"></div>
       <div class="field"><label for="a-note">觀察重點</label><input id="a-note"></div>
+      <div class="field"><label for="a-hold">持有中</label><select id="a-hold"><option value="0">否</option><option value="1">是</option></select></div>
+      <div class="field"><label for="a-cost">成本價（選填）</label><input id="a-cost" inputmode="decimal"></div>
+      <div class="field"><label for="a-shares">股數（選填）</label><input id="a-shares" inputmode="numeric"></div>
       <div class="field" style="justify-content:flex-end"><button class="primary">加入／更新</button></div></form>
-     <div class="tablewrap"><table><thead><tr><th class="l">代號</th><th class="l">名稱</th><th class="l">市場</th><th class="l">分組</th><th>關鍵價</th><th class="l">觀察重點</th><th></th></tr></thead><tbody>
-      ${wl.map(w => `<tr><td class="l num">${esc(w.code)}</td><td class="l">${esc(w.name)}</td><td class="l">${w.market === "TPEx" ? "上櫃" : "上市"}</td><td class="l">${esc(w.grp)}</td><td class="num">${fmt(w.key_level)}</td><td class="l" style="white-space:normal">${esc(w.note)}</td>
+     <div class="tablewrap"><table><thead><tr><th class="l">代號</th><th class="l">名稱</th><th class="l">市場</th><th class="l">分組</th><th>關鍵價</th><th class="l">持有</th><th class="l">觀察重點</th><th></th></tr></thead><tbody>
+      ${wl.map(w => `<tr><td class="l num">${esc(w.code)}</td><td class="l">${esc(w.name)}</td><td class="l">${w.market === "TPEx" ? "上櫃" : "上市"}</td><td class="l">${esc(w.group)}</td><td class="num">${fmt(w.keyLevel)}</td><td class="l">${w.holding ? "是" + (isNum(w.cost) ? "（成本 " + fmt(w.cost, 2) + "）" : "") : ""}</td><td class="l" style="white-space:normal">${esc(w.note)}</td>
         <td><button data-edit='${esc(JSON.stringify(w))}'>編輯</button> <button class="danger" data-del="${esc(w.code)}">移除</button></td></tr>`).join("")}
      </tbody></table></div></section>
    <section class="panel" style="display:flex;flex-direction:column;gap:10px"><h2>判定門檻</h2>
-     <form id="rulesForm" class="grid2">${RULES.map(([k, l, h]) => `<div class="field"><label for="r-${k}">${l}</label><input id="r-${k}" name="${k}" type="number" step="any" value="${rules.rules[k]}"><span class="hint">${h}　預設 ${rules.defaults[k]}</span></div>`).join("")}
+     <form id="rulesForm" class="grid2">${rules.params.map(p => `<div class="field"><label for="r-${esc(p.id)}">${esc(p.label)}${p.unit ? "（" + esc(p.unit) + "）" : ""}</label><input id="r-${esc(p.id)}" name="${esc(p.id)}" type="number" step="any" value="${p.value}"${isNum(p.min) ? ` min="${p.min}"` : ""}${isNum(p.max) ? ` max="${p.max}"` : ""}><span class="hint">${esc(p.note || "")}${p.id in rules.defaults ? "　預設 " + rules.defaults[p.id] : "　自訂參數"}</span></div>`).join("")}
       <div class="field" style="justify-content:flex-end"><button class="primary">儲存並重新分析</button></div></form></section>
    <section class="panel" style="display:flex;flex-direction:column;gap:10px"><h2>API</h2>
-     <div class="small">晨報排程與其他程式可呼叫（token 放在 <span class="num">?token=</span> 或 Authorization header）：</div>
+     <div class="small">讀取用唯讀 token（放在 <span class="num">?token=</span> 或 Authorization header）；修改設定、觸發抓取、匯出資料庫需要管理 token（只能放在 Authorization header）：</div>
      <div class="log">GET /api/v1/latest              最新交易日（含狀態 status / ready）
 GET /api/v1/latest?ready=1      最新「抓取＋分析皆完成」的交易日
 GET /api/v1/days/2026-11-11     指定日；?format=csv | radar | status
 GET /api/v1/stocks/2330/history?days=120&amp;format=csv
 GET /api/v1/dates  /status  /watchlist  /rules  /events
-GET /api/v1/export/sqlite       下載整個資料庫</div></section>
+GET /api/v1/export/sqlite       下載整個資料庫（管理）
+GET/PUT /api/v1/settings        全部設定（管理）；/settings/history、/restore、/reset、/export</div></section>
    <section class="panel"><h2>系統紀錄</h2><div class="log">${ev.map(e => `${esc(e.at)}  [${esc(e.level)}] ${esc(e.message)}`).join("\n")}</div></section>`;
+  bindAuthPanel();
   const act = async (p, body, msg) => { try { await api(p, {method: "POST", body: JSON.stringify(body || {})}); toast(msg); setTimeout(viewSettings, 800); } catch (err) { toast(err.message); } };
   $("#crawlBtn").onclick = () => act("/crawl", {}, "已排入抓取");
   $("#anaBtn").onclick = () => act("/analyze", {}, "已重新分析");
   $("#bfBtn").onclick = () => act("/backfill", {}, "已排入歷史補抓");
   $("#addForm").addEventListener("submit", async ev => { ev.preventDefault();
-    const b = {code: $("#a-code").value.trim(), name: $("#a-name").value.trim(), market: $("#a-mkt").value, group: $("#a-grp").value.trim(), note: $("#a-note").value.trim(), keyLevel: $("#a-key").value ? Number($("#a-key").value) : null};
-    const old = wl.find(w => w.code === b.code.toUpperCase()); if (old) b.order = old.sort_order;
+    const b = {code: $("#a-code").value.trim(), name: $("#a-name").value.trim(), market: $("#a-mkt").value, group: $("#a-grp").value.trim(), note: $("#a-note").value.trim(), keyLevel: $("#a-key").value ? Number($("#a-key").value) : null,
+      holding: $("#a-hold").value === "1", cost: $("#a-cost").value ? Number($("#a-cost").value) : null, shares: $("#a-shares").value ? parseInt($("#a-shares").value, 10) : null};
     try { await api("/watchlist", {method: "POST", body: JSON.stringify(b)}); toast("已儲存 " + b.code + "，歷史資料會在背景補齊"); viewSettings(); } catch (err) { toast(err.message); } });
   document.querySelectorAll("[data-edit]").forEach(btn => btn.onclick = () => { const w = JSON.parse(btn.dataset.edit);
-    $("#a-code").value = w.code; $("#a-name").value = w.name; $("#a-mkt").value = w.market; $("#a-grp").value = w.grp || ""; $("#a-note").value = w.note || ""; $("#a-key").value = w.key_level ?? ""; $("#a-code").focus(); });
+    $("#a-code").value = w.code; $("#a-name").value = w.name; $("#a-mkt").value = w.market; $("#a-grp").value = w.group || ""; $("#a-note").value = w.note || ""; $("#a-key").value = w.keyLevel ?? "";
+    $("#a-hold").value = w.holding ? "1" : "0"; $("#a-cost").value = w.cost ?? ""; $("#a-shares").value = w.shares ?? ""; $("#a-code").focus(); });
   document.querySelectorAll("[data-del]").forEach(btn => btn.onclick = () => sheet(`<h2>移除 ${esc(btn.dataset.del)}？</h2><div class="small muted">已抓取的歷史資料會保留。</div><div class="row" style="justify-content:flex-end"><button data-close>取消</button><button class="danger" id="yes">移除</button></div>`,
     s => s.querySelector("#yes").onclick = async () => { await api("/watchlist/" + btn.dataset.del, {method: "DELETE"}); $("#layer").innerHTML = ""; toast("已移除"); viewSettings(); }));
-  $("#rulesForm").addEventListener("submit", async ev => { ev.preventDefault(); const b = {}; RULES.forEach(([k]) => { const v = Number(ev.target[k].value); if (isFinite(v)) b[k] = v; });
+  $("#rulesForm").addEventListener("submit", async ev => { ev.preventDefault(); const b = {}; rules.params.forEach(p => { const v = Number(ev.target[p.id].value); if (isFinite(v)) b[p.id] = v; });
     try { await api("/rules", {method: "PUT", body: JSON.stringify(b)}); toast("已儲存並重新分析"); } catch (err) { toast(err.message); } });
 }
 
 /* ---------- 路由 ---------- */
 async function route() {
-  if (!TOKEN) { askToken(); return; }
   const h = location.hash.replace(/^#/, "") || "/";
   const [, page, arg] = h.split("/");
   document.querySelectorAll("#tabs a").forEach(a => a.classList.toggle("on", a.dataset.tab === (page === "report" ? "report" : page === "settings" ? "settings" : "home")));

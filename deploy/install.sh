@@ -100,5 +100,5 @@ DESK="$HOME/Desktop"; [ -d "$DESK" ] || DESK="$HOME/桌面"; [ -d "$DESK" ] || D
 printf "%s\n\n第一次啟動會在背景補抓約 100 個交易日的歷史資料（約 1～2 小時），完成前月線、季線可能不完整。\n請保持電腦開機、不要進入睡眠。\n" "$INFO" > "$DESK/右側加碼雷達-連線資訊.txt"
 echo "$INFO"
 echo "✅ 安裝完成！連線資訊已存到：$DESK/右側加碼雷達-連線資訊.txt"
-URL="http://localhost:$PORT/#t=$(sed -n 's/^API token：//p' <<<"$INFO")"
+URL="http://localhost:$PORT/#t=$(sed -n 's/^唯讀 token（給晨報）：//p' <<<"$INFO")"
 if [ "$OS" = "Darwin" ]; then open "$URL" || true; fi
