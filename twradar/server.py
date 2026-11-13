@@ -101,17 +101,18 @@ class App:
 
     def day_stocks(self, d: str) -> list[dict]:
         sigs = {r["code"]: json.loads(r["payload"]) for r in self.db.q("SELECT code, payload FROM signals WHERE date=?", (d,))}
+        S = self.settings.get()
         R = rules_of(self.settings)
         out = []
-        watch = self.settings.watchlist()
+        watch = S["watchlist"]
         late = indicators_many(self.db, [w["code"] for w in watch if w["code"] not in sigs], d)
         for w in watch:
             p = sigs.get(w["code"])
             if not p:  # 分析之後才加入的個股：即時計算
                 rec = late[w["code"]]
-                p = {"data": rec, "signal": evaluate(rec, w, R)}
+                p = {"data": rec, "signal": evaluate(rec, w, R, S)}
             out.append({"code": w["code"], "name": w["name"], "market": w["market"], "group": w["group"],
-                        "note": w["note"], "keyLevel": w["keyLevel"], "holding": w["holding"],
+                        "note": w["note"], "keyLevel": w["keyLevel"], "holding": w["holding"], "cost": w["cost"],
                         "data": p["data"], "signal": p["signal"]})
         return out
 
@@ -436,6 +437,10 @@ def make_handler(app: App):
                     code = parts[1].upper()
                     app.settings.update(lambda s: s.__setitem__("watchlist", [w for w in s["watchlist"] if w["code"] != code]))
                     return self.json({"ok": True})
+
+            if head == "rules" and len(parts) > 1 and parts[1] == "catalog" and method == "GET":
+                from .rules import catalog
+                return self.json(catalog(app.settings.get()))
 
             if head == "rules":
                 if method == "GET":

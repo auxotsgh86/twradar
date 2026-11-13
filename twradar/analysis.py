@@ -1,4 +1,4 @@
-"""指標計算與右側加碼訊號判定（規則與「右側加碼雷達」網頁工具一致）。"""
+"""指標計算與每日判定（判定邏輯在 rules.py 與 conditions.py）。"""
 from __future__ import annotations
 
 import json
@@ -6,10 +6,10 @@ from datetime import datetime
 
 from .config import TW
 from .db import DB
+from .rules import LIGHT_LABEL, evaluate as rules_evaluate
 from .settings import BUILTIN_PARAMS, SettingsStore
 
 DEFAULT_RULES = {p["id"]: p["value"] for p in BUILTIN_PARAMS}
-LIGHT_LABEL = {"go": "加碼訊號", "wait": "觀察中", "stop": "不宜加碼", "na": "資料不足"}
 
 
 def rules_of(settings: SettingsStore) -> dict:
@@ -52,24 +52,25 @@ def _latest_rows(db: DB, table: str, cols: str, codes: list[str], d: str, n: int
 def indicators_many(db: DB, codes: list[str], d: str) -> dict[str, dict]:
     """整份清單的當日指標（欄位名稱與網頁工具相同；缺的欄位不放）。每張表只查一次。"""
     codes = list(dict.fromkeys(codes))
-    Q = _latest_rows(db, "quotes", "code, date, close, change, volume", codes, d, 61)
+    Q = _latest_rows(db, "quotes", "code, date, open, high, low, close, change, volume", codes, d, 61)
     I = _latest_rows(db, "inst", "code, date, foreign_net, trust_net, dealer_net", codes, d, 30)
+    MH = _latest_rows(db, "margin", "code, date, margin_prev, margin_bal, short_prev, short_bal", codes, d, 60)
+    M = {c: rows[0] for c, rows in MH.items() if rows and rows[0]["date"] == d}
     ph = ",".join("?" * len(codes))
-    M = {r["code"]: r for r in db.q(f"SELECT * FROM margin WHERE date=? AND code IN ({ph})", (d, *codes))} if codes else {}
     SRC: dict[str, set] = {}
     if codes:
         for t in ("quotes", "inst", "margin"):
             for r in db.q(f"SELECT code, src FROM {t} WHERE date=? AND code IN ({ph})", (d, *codes)):
                 if r["src"]:
                     SRC.setdefault(r["code"], set()).add(r["src"])
-    return {c: _indicators(Q[c], I[c], M.get(c), SRC.get(c), d) for c in codes}
+    return {c: _indicators(Q[c], I[c], M.get(c), SRC.get(c), d, MH.get(c) or []) for c in codes}
 
 
 def indicators(db: DB, code: str, d: str) -> dict:
     return indicators_many(db, [code], d)[code]
 
 
-def _indicators(q: list, ins: list, m, srcs: set | None, d: str) -> dict:
+def _indicators(q: list, ins: list, m, srcs: set | None, d: str, mh: list | None = None) -> dict:
     rec: dict = {}
     if q and q[0]["date"] == d and q[0]["close"] is not None:
         cur = q[0]
@@ -89,6 +90,15 @@ def _indicators(q: list, ins: list, m, srcs: set | None, d: str) -> dict:
         p20 = [r["close"] for r in q[1:21] if r["close"] is not None]
         if len(p20) == 20:
             rec["prevHigh"] = max(p20)
+        for k in ("open", "high", "low"):
+            if cur[k] is not None:
+                rec[k] = cur[k]
+        prev_close = cur["close"] - cur["change"] if cur["change"] is not None else None
+        if cur["high"] is not None and prev_close:
+            rec["highPct"] = round((cur["high"] / prev_close - 1) * 100, 2)
+        if None not in (cur["high"], cur["low"], cur["open"]):
+            rng = cur["high"] - cur["low"]
+            rec["upperShadowPct"] = round((cur["high"] - max(cur["open"], cur["close"])) / rng * 100, 1) if rng > 0 else 0.0
     if ins and ins[0]["date"] == d:
         rec["foreign"] = _lots(ins[0]["foreign_net"])
         rec["trust"] = _lots(ins[0]["trust_net"])
@@ -105,6 +115,7 @@ def _indicators(q: list, ins: list, m, srcs: set | None, d: str) -> dict:
             ts.append(r["trust_net"])
         rec["foreignStreak"] = _streak(fs)
         rec["trustStreak"] = _streak(ts)
+        rec["instStreak"] = _streak([None if f is None and t is None else (f or 0) + (t or 0) for f, t in zip(fs, ts)])
         if len(fs) >= 5 and None not in fs[:5]:
             rec["foreign5d"] = _lots(sum(fs[:5]))
         if len(ts) >= 5 and None not in ts[:5]:
@@ -114,121 +125,88 @@ def _indicators(q: list, ins: list, m, srcs: set | None, d: str) -> dict:
             rec["marginChg"] = m["margin_bal"] - m["margin_prev"]
         if m["short_bal"] is not None and m["short_prev"] is not None:
             rec["shortChg"] = m["short_bal"] - m["short_prev"]
+        if mh:
+            # 融資連增天數（日期需與收盤日期連續）
+            by = {r["date"]: r for r in mh}
+            n = 0
+            for r0 in q:
+                r = by.get(r0["date"])
+                if not r or r["margin_bal"] is None or r["margin_prev"] is None or r["margin_bal"] <= r["margin_prev"]:
+                    break
+                n += 1
+            rec["marginStreak"] = n
+            bals = [r["margin_bal"] for r in mh if r["margin_bal"] is not None]
+            if len(bals) >= 20 and m["margin_bal"] is not None:
+                lo, hi = min(bals), max(bals)
+                rec["marginPos60"] = round((m["margin_bal"] - lo) / (hi - lo) * 100, 1) if hi > lo else 0.0
     if srcs:
         rec["source"] = "、".join(sorted(srcs))
     return {k: v for k, v in rec.items() if v is not None}
 
 
-def _fmt(v, d=0):
-    return "—" if v is None else f"{v:,.{d}f}"
+def evaluate(rec: dict, stock: dict, R: dict, settings: dict | None = None) -> dict:
+    """單檔判定（相容舊呼叫方式）。settings 為完整設定 dict；None 時用預設規則。"""
+    return rules_evaluate(rec, stock, R, settings)
 
 
-def evaluate(rec: dict, stock: dict, R: dict) -> dict:
-    g = rec.get
-    checks, needs, warns, missing = {}, [], [], []
-    fS, tS, f5, t5 = g("foreignStreak"), g("trustStreak"), g("foreign5d"), g("trust5d")
+def _confirm(prev: list[str], raw: str, n: int) -> tuple[str, bool]:
+    """訊號確認：新燈號需連續 n 日（含今日）成立才轉換。prev 為前幾日的 (原始燈號, 確認燈號)，新到舊。"""
+    if n <= 1 or not prev:
+        return raw, False
+    confirmed_prev = prev[0][1]
+    if raw == confirmed_prev:
+        return raw, False
+    recent = [p[0] for p in prev[: n - 1]]
+    if len(recent) == n - 1 and all(r == raw for r in recent):
+        return raw, False
+    return confirmed_prev, True
 
-    def amp(x, s):
-        if x is None or x <= 0 or s is None:
-            return False
-        avg = (s - x) / 4
-        return x >= R["amplify"] * max(abs(avg), 1)
 
-    # 法人
-    if g("foreign") is None and g("trust") is None:
-        checks["inst"] = "na"; missing.append("三大法人")
-    else:
-        why = []
-        if fS is not None and fS >= R["streakDays"]: why.append(f"外資連 {fS} 買")
-        if tS is not None and tS >= R["streakDays"]: why.append(f"投信連 {tS} 買")
-        if amp(g("foreign"), f5): why.append("外資買超放大")
-        if amp(g("trust"), t5): why.append("投信買超放大")
-        checks["inst"] = "pass" if why else "fail"
-        checks["instWhy"] = "、".join(why)
-        if not why:
-            cur = "" if fS is None else (f"（外資目前連 {fS} 買）" if fS > 0 else f"（外資目前連 {-fS} 賣）" if fS < 0 else "（外資持平）")
-            needs.append(f"外資或投信連買 ≥ {R['streakDays']} 日{cur}")
-    # 主力
-    mf, bd = g("mainForce"), g("brokerDiff")
-    if mf is None and bd is None:
-        checks["main"] = "na"; missing.append("主力分點")
-    else:
-        p = (bd is not None and bd < 0) or (mf is not None and mf > 0 and not (bd is not None and bd > 0))
-        checks["main"] = "pass" if p else "fail"
-        if not p: needs.append("主力分點集中買進（家數差轉負）")
-    # 散戶
-    if g("marginChg") is None or g("chgPct") is None:
-        checks["retail"] = "na"; missing.append("融資")
-    else:
-        p = g("marginChg") <= R["marginFlat"] and g("chgPct") > 0
-        checks["retail"] = "pass" if p else "fail"
-        if not p:
-            needs.append(f"融資減少（目前 {g('marginChg'):+,} 張）" if g("chgPct") > 0 else "股價上漲且融資不增")
-    # 價量
-    close, ma20 = g("close"), g("ma20")
-    has_pv = close is not None and ma20 is not None
-    vol_r = (g("vol") / g("vol5")) if g("vol") is not None and g("vol5") else None
-    below = None
-    if not has_pv or vol_r is None:
-        checks["pv"] = "na"; missing.append("收盤/月線" if not has_pv else "量能")
-    if has_pv:
-        below = close < ma20 * (1 - R["maTol"] / 100)
-        under = close < ma20
-        if vol_r is not None:
-            vol_up = vol_r > R["volRatio"]
-            breakout = g("prevHigh") is not None and close > g("prevHigh")
-            p = (not under and vol_up) or (breakout and vol_up)
-            checks["pv"] = "pass" if p else "fail"
-            if not p:
-                needs.append(f"帶量站上月線 {_fmt(ma20, 2)}" if under else f"量能 > 5 日均量（目前 {vol_r:.2f} 倍）")
-    # 扣分
-    inst_known = g("foreign") is not None or g("trust") is not None
-    inst_net = (g("foreign") or 0) + (g("trust") or 0)
-    if g("chgPct") is not None and g("chgPct") > 0 and inst_known and inst_net < 0 and g("marginChg") is not None and g("marginChg") > R["divergeMargin"]:
-        warns.append("籌碼背離：上漲但法人賣、融資增")
-    if below:
-        warns.append(f"跌破月線 {_fmt(ma20, 2)}")
-    if g("chgPct") is not None and g("chgPct") <= -R["blackPct"] and vol_r is not None and vol_r >= R["blowoff"]:
-        warns.append("爆量長黑")
-    chips = sum(1 for k in ("inst", "main", "retail") if checks.get(k) == "pass")
-    if not rec or (not has_pv and not inst_known):
-        light = "na"
-    elif warns:
-        light = "stop"
-    elif checks.get("pv") == "pass" and chips >= 2:
-        light = "go"
-    else:
-        light = "wait"
-    if light == "wait" and checks.get("pv") == "pass" and chips < 2:
-        needs.append(f"再多 {2 - chips} 項籌碼支持")
-    key_note = None
-    kl = stock.get("keyLevel")
-    if kl is not None and close is not None:
-        above = close >= kl
-        key_note = f"關鍵價 {_fmt(kl)}：" + ("已站上" if above else f"尚未站上（差 {_fmt(kl - close, 2)}）")
-        if above and vol_r is not None:
-            key_note += "，量能確認" if vol_r > R["volRatio"] else "，但量能不足"
-    return {"light": light, "lightLabel": LIGHT_LABEL[light],
-            "checks": {"inst": checks.get("inst", "na"), "main": checks.get("main", "na"),
-                       "retail": checks.get("retail", "na"), "priceVolume": checks.get("pv", "na")},
-            "instWhy": checks.get("instWhy", ""), "chipsPassed": chips, "needs": needs, "warnings": warns,
-            "missing": missing, "volRatio": None if vol_r is None else round(vol_r, 3),
-            "maDistPct": None if not has_pv else round((close / ma20 - 1) * 100, 2),
-            "belowMa20": below, "keyLevelNote": key_note}
+def _previous(db: DB, codes: list[str], d: str, n: int) -> dict[str, list]:
+    """前 n 個分析日的訊號（新到舊）。"""
+    if n <= 0 or not codes:
+        return {}
+    dates = [r["date"] for r in db.q("SELECT date FROM analysis WHERE date<? ORDER BY date DESC LIMIT ?", (d, n))]
+    if not dates:
+        return {}
+    out: dict[str, list] = {}
+    ph = ",".join("?" * len(dates))
+    for r in db.q(f"SELECT date, code, payload FROM signals WHERE date IN ({ph}) ORDER BY date DESC", tuple(dates)):
+        sig = json.loads(r["payload"]).get("signal", {})
+        out.setdefault(r["code"], []).append(sig)
+    return out
+
+
+def _apply_confirm(sig: dict, prev: list[dict], n: int) -> None:
+    sig["rawLight"] = sig["light"]
+    light, pending = _confirm([(p.get("rawLight", p.get("light")), p.get("light")) for p in prev], sig["light"], n)
+    if pending:
+        sig["light"], sig["lightLabel"], sig["pending"] = light, LIGHT_LABEL.get(light, light), sig["rawLight"]
+    if "hold" in sig:
+        h = sig["hold"]
+        h["rawLight"] = h["light"]
+        hp = [(p["hold"].get("rawLight", p["hold"]["light"]), p["hold"]["light"]) for p in prev if "hold" in p]
+        light, pending = _confirm(hp, h["light"], n)
+        if pending:
+            h["light"], h["lightLabel"], h["pending"] = light, LIGHT_LABEL.get(light, light), h["rawLight"]
 
 
 def run_analysis(db: DB, d: str, settings: SettingsStore) -> dict:
-    R = rules_of(settings)
+    S = settings.get()
+    R = {**DEFAULT_RULES, **{p["id"]: p["value"] for p in S["params"]}}
+    n_confirm = S.get("confirmDays", 1)
     run = db.get_run(d)
     crawl_status = run["status"] if run else "not_started"
     summary = {"go": 0, "wait": 0, "stop": 0, "na": 0}
     with db.tx() as c:
         c.execute("DELETE FROM signals WHERE date=?", (d,))
-        watch = settings.watchlist()
+        watch = S["watchlist"]
         recs = indicators_many(db, [s["code"] for s in watch], d)
+        prev = _previous(db, [s["code"] for s in watch], d, max(0, n_confirm - 1))
         for s in watch:
             rec = recs[s["code"]]
-            sig = evaluate(rec, s, R)
+            sig = evaluate(rec, s, R, S)
+            _apply_confirm(sig, prev.get(s["code"], []), n_confirm)
             summary[sig["light"]] += 1
             c.execute("INSERT INTO signals(date,code,light,payload) VALUES(?,?,?,?)",
                       (d, s["code"], sig["light"], json.dumps({"data": rec, "signal": sig}, ensure_ascii=False)))

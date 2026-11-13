@@ -209,6 +209,17 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(D.roc("20261106"), "115/11/06")
 
 
+def _v013_settings():
+    """v0.1.3 的規則（沒有「法人對作」），用於對照。"""
+    from twradar.rules import default_playbooks
+    pb = default_playbooks()
+    pb["entry"][1]["when"]["any"].remove("instConflict")
+    return {"playbooks": pb, "conditions": []}
+
+
+V013 = _v013_settings()
+
+
 class EngineTests(unittest.TestCase):
     """用 2026/11/11 實際數字，結果需與晨報一致。"""
 
@@ -225,9 +236,13 @@ class EngineTests(unittest.TestCase):
     def test_mediatek_near_ma_not_red(self):
         r = {"close": 3990, "chgPct": 4.18, "vol": 10733.6, "vol5": 16606.8, "ma20": 3991.5, "foreign": -426,
              "trust": 112, "foreignStreak": -6, "trustStreak": 6}
-        e = evaluate(r, {"keyLevel": 4000}, DEFAULT_RULES)
+        e = evaluate(r, {"keyLevel": 4000}, DEFAULT_RULES, V013)
         self.assertEqual(e["light"], "wait")
         self.assertIn("尚未站上", e["keyLevelNote"])
+        # v0.2 新增「法人對作」：外資賣 426、投信買 112 張（約 4.5 億）→ 不宜加碼
+        e = evaluate(r, {"keyLevel": 4000}, DEFAULT_RULES)
+        self.assertEqual(e["light"], "stop")
+        self.assertIn("法人對作", e["warnings"][0])
 
     def test_divergence_red(self):
         r = {"close": 4500, "chgPct": 3.09, "vol": 3933, "vol5": 5544, "ma20": 4772.5, "foreign": -1078, "trust": 55, "marginChg": 245}
@@ -340,6 +355,20 @@ class EndToEnd(unittest.TestCase):
         st, body = self.get("/", token=False)
         self.assertEqual(st, 200)
         self.assertIn("右側加碼雷達", body.decode())
+
+    def test_hold_signal_in_api(self):
+        self.st.update(lambda x: x["watchlist"][0].update(holding=True, keyLevel=99999.0))
+        try:
+            self.app.reanalyze_latest()
+            st, body = self.get("/api/v1/latest")
+            rows = {s["code"]: s for s in json.loads(body)["stocks"]}
+            w0 = self.st.watchlist()[0]["code"]
+            self.assertEqual(rows[w0]["signal"]["hold"]["rule"], "停損")  # 跌破關鍵價
+            self.assertIn("trace", rows[w0]["signal"])
+            self.assertTrue(all("hold" not in s["signal"] for c, s in rows.items() if c != w0))
+        finally:
+            self.st.update(lambda x: x["watchlist"][0].update(holding=False, keyLevel=None))
+            self.app.reanalyze_latest()
 
     def test_sqlite_export(self):
         st, _ = self.get("/api/v1/export/sqlite")
@@ -624,6 +653,163 @@ class AuthApiTests(unittest.TestCase):
         self.assertEqual(self.st.get()["confirmDays"], 1)
         st, js, _ = self.call("/api/v1/rules", "PUT", {"maTol": 1.2}, A)
         self.assertEqual(js["rules"]["maTol"], 1.2)
+
+
+class RulesEngineTests(unittest.TestCase):
+    """P3 規則引擎。"""
+
+    def test_parity_with_v013(self):
+        """預設規則（去掉新增的法人對作）與 v0.1.3 在隨機資料上結果完全相同。"""
+        import random
+        import legacy_v013 as L
+        rnd = random.Random(11)
+
+        def maybe(v, p=0.15):
+            return None if rnd.random() < p else v
+        keys = ["light", "lightLabel", "checks", "instWhy", "chipsPassed", "needs", "warnings", "missing",
+                "volRatio", "maDistPct", "belowMa20", "keyLevelNote"]
+        for _ in range(3000):
+            close = rnd.uniform(20, 3000)
+            rec = {"close": maybe(close), "chgPct": maybe(rnd.uniform(-10, 10)), "vol": maybe(rnd.uniform(0, 5000)),
+                   "vol5": maybe(rnd.choice([0, rnd.uniform(1, 5000)])), "ma20": maybe(close * rnd.uniform(0.9, 1.1)),
+                   "prevHigh": maybe(close * rnd.uniform(0.9, 1.1)), "foreign": maybe(rnd.randint(-3000, 3000)),
+                   "trust": maybe(rnd.randint(-500, 500)), "foreignStreak": maybe(rnd.randint(-6, 6)),
+                   "trustStreak": maybe(rnd.randint(-6, 6)), "foreign5d": maybe(rnd.randint(-8000, 8000)),
+                   "trust5d": maybe(rnd.randint(-2000, 2000)), "marginChg": maybe(rnd.randint(-500, 500)),
+                   "mainForce": maybe(rnd.randint(-5, 5), 0.8), "brokerDiff": maybe(rnd.randint(-5, 5), 0.8)}
+            rec = {k: v for k, v in rec.items() if v is not None}
+            stock = {"keyLevel": maybe(close * rnd.uniform(0.9, 1.1), 0.6)}
+            a, b = L.evaluate(rec, stock, DEFAULT_RULES), evaluate(rec, stock, DEFAULT_RULES, V013)
+            for k in keys:
+                self.assertEqual(a[k], b[k], (k, rec))
+
+    def test_three_valued_logic(self):
+        from twradar.conditions import Ctx
+        from twradar.rules import Engine
+        eng = Engine([{"id": "p", "label": "p", "left": 1, "op": ">", "right": 0},
+                      {"id": "f", "label": "f", "left": 0, "op": ">", "right": 1},
+                      {"id": "n", "label": "n", "left": {"field": "close"}, "op": ">", "right": 0}])
+        ctx = Ctx({}, {}, DEFAULT_RULES)
+        ev = lambda node: eng.ev(node, ctx)
+        self.assertEqual(ev({"all": ["p", "n"]}), "na")
+        self.assertEqual(ev({"all": ["f", "n"]}), "fail")
+        self.assertEqual(ev({"any": ["f", "n"]}), "na")
+        self.assertEqual(ev({"any": ["p", "n"]}), "pass")
+        self.assertEqual(ev({"atLeast": {"n": 2, "of": ["p", "n", "f"]}}), "na")
+        self.assertEqual(ev({"atLeast": {"n": 2, "of": ["p", "f", "f"]}}), "fail")
+        self.assertEqual(ev({"none": ["f", "f"]}), "pass")
+        self.assertEqual(ev({"not": "n"}), "na")
+
+    HOLD = {"close": 120.0, "chgPct": 1.0, "vol": 100, "vol5": 100, "ma20": 110.0, "foreign": 10, "trust": 0,
+            "instStreak": 1, "marginChg": 0, "marginStreak": 0, "marginPos60": 50, "highPct": 1, "upperShadowPct": 10,
+            "high": 121, "low": 118, "open": 119}
+
+    def hold(self, rec=None, **stock):
+        st = {"holding": True, **stock}
+        return evaluate({**self.HOLD, **(rec or {})}, st, DEFAULT_RULES)["hold"]
+
+    def test_hold_layers(self):
+        self.assertEqual(self.hold(cost=100)["light"], "keep")
+        # 停損：虧損 10% 以上（含費稅）
+        h = self.hold(cost=135)
+        self.assertEqual((h["light"], h["rule"]), ("exit", "停損"))
+        self.assertLess(h["profitPct"], -10)
+        # 停損：跌破月線＋法人連賣，即使獲利
+        h = self.hold({"close": 100, "instStreak": -3}, cost=80)
+        self.assertEqual((h["light"], h["rule"]), ("exit", "停損"))
+        # 跌破關鍵價
+        self.assertEqual(self.hold(keyLevel=125)["light"], "exit")
+        # 獲利 ≥ 20% ＋ 籌碼轉弱 2 項 → 減碼；3 項 → 退場
+        two = {"marginStreak": 3, "marginPos60": 90}
+        h = self.hold(two, cost=95)
+        self.assertEqual((h["light"], h["rule"]), ("reduce", "獲利保護"))
+        self.assertEqual(len(h["reasons"]), 3)  # 獲利 + 兩項轉弱
+        h = self.hold({**two, "instStreak": -2}, cost=95)
+        self.assertEqual((h["light"], h["rule"]), ("exit", "獲利出場"))
+        # 獲利不到 20%：籌碼轉弱只提示，不減碼
+        h = self.hold(two, cost=110)
+        self.assertEqual(h["light"], "keep")
+        self.assertEqual(len(h["weak"]), 2)
+        # 過熱：乖離 ≥ 15%、衝高未鎖、爆量開板
+        self.assertEqual(self.hold({"close": 127, "high": 128}, cost=100)["rule"], "過熱")
+        self.assertEqual(self.hold({"highPct": 9.6, "high": 126, "upperShadowPct": 70, "vol": 80}, cost=100)["rule"], "過熱")
+        self.assertEqual(self.hold({"highPct": 9.8, "high": 126, "vol": 250}, cost=100)["rule"], "過熱")
+        # 鎖漲停（收盤＝最高）且量縮：不出場
+        self.assertEqual(self.hold({"highPct": 9.9, "high": 120, "upperShadowPct": 0, "vol": 50}, cost=100)["light"], "keep")
+        # 沒填成本：停損與獲利條件為資料不足，其他照常
+        self.assertEqual(self.hold()["light"], "keep")
+        self.assertEqual(self.hold(keyLevel=125)["light"], "exit")
+        # 沒持有：沒有持有面
+        self.assertNotIn("hold", evaluate(self.HOLD, {"cost": 100}, DEFAULT_RULES))
+
+    def test_conflict_amount_threshold(self):
+        r = {"close": 100.0, "chgPct": 1, "vol": 300, "vol5": 100, "ma20": 90, "foreign": 400, "trust": -200,
+             "foreignStreak": 3, "marginChg": -1}
+        self.assertEqual(evaluate(r, {}, DEFAULT_RULES)["light"], "stop")    # 投信賣 200 張 × 100 元 = 2,000 萬
+        r.update(close=10.0, ma20=9.0)
+        self.assertEqual(evaluate(r, {}, DEFAULT_RULES)["light"], "go")      # 200 萬元：雜訊，不算對作
+
+    def test_custom_condition_in_playbook(self):
+        from twradar.settings import default_settings
+        S = default_settings()
+        S["conditions"] = [{"id": "aboveMa60", "label": "站上季線", "left": {"field": "close"}, "op": ">=",
+                            "right": {"field": "ma60", "adjPct": "-param:maTol"}}]
+        S["playbooks"]["entry"].insert(1, {"light": "noAdd", "label": "季線下", "when": {"not": "aboveMa60"}})
+        r = {"close": 95, "ma20": 90, "ma60": 100, "chgPct": 1, "vol": 300, "vol5": 100, "foreign": 1, "foreignStreak": 3}
+        e = evaluate(r, {}, DEFAULT_RULES, S)
+        self.assertEqual((e["light"], e["rule"]), ("stop", "季線下"))
+        r["close"] = 99.6  # 季線 100 × (1 − 0.5%) = 99.5
+        self.assertNotEqual(evaluate(r, {}, DEFAULT_RULES, S)["rule"], "季線下")
+
+    def test_rule_validation(self):
+        from twradar.settings import SettingsError, SettingsStore
+        st = SettingsStore(Path(tempfile.mkdtemp()) / "settings.json", 50)
+        s = st.get()
+        s["conditions"] = [{"id": "inst", "label": "x", "left": {"field": "nope"}, "op": "=>", "right": {"param": "zz"}}]
+        s["playbooks"]["entry"] = [{"light": "watch", "default": True},
+                                   {"light": "go", "when": {"atLeast": {"n": 5, "of": ["inst", "ghost"]}}}]
+        with self.assertRaises(SettingsError) as cm:
+            st.save(s)
+        paths = {x["path"] for x in cm.exception.errors}
+        for want in ("conditions[0].id", "conditions[0].left.field", "conditions[0].op", "conditions[0].right.param",
+                     "playbooks.entry[0]", "playbooks.entry[1].light", "playbooks.entry[1].when.atLeast.n",
+                     "playbooks.entry[1].when.atLeast.of[1]", "playbooks.entry"):
+            self.assertIn(want, paths)
+
+    def test_old_settings_get_default_rules(self):
+        from twradar.settings import SettingsStore
+        path = Path(tempfile.mkdtemp()) / "settings.json"
+        st = SettingsStore(path, 50)
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["playbooks"] = {"entry": [], "hold": []}  # P2 版本的設定
+        data["params"] = [p for p in data["params"] if p["id"] != "stopLossPct"]
+        path.write_text(json.dumps(data), encoding="utf-8")
+        s = SettingsStore(path, 50).get()
+        self.assertTrue(s["playbooks"]["entry"] and s["playbooks"]["hold"])
+        self.assertIn("stopLossPct", {p["id"] for p in s["params"]})
+
+    def test_confirm_days(self):
+        from twradar.analysis import _confirm
+        self.assertEqual(_confirm([("wait", "wait")], "go", 2), ("wait", True))
+        self.assertEqual(_confirm([("go", "wait"), ("wait", "wait")], "go", 2), ("go", False))
+        self.assertEqual(_confirm([("go", "go")], "go", 3), ("go", False))
+        self.assertEqual(_confirm([], "stop", 2), ("stop", False))
+        self.assertEqual(_confirm([("wait", "wait")], "go", 1), ("go", False))
+
+    def test_new_indicators(self):
+        from twradar.analysis import _indicators
+        days = sorted(D.weekdays_back("20261111", 25), reverse=True)
+        q = [{"date": d, "open": 100, "high": 110, "low": 99, "close": 102 if i == 0 else 100, "change": 2 if i == 0 else 0,
+              "volume": 1000} for i, d in enumerate(days)]
+        ins = [{"date": d, "foreign_net": -1000 if i < 3 else 5000, "trust_net": 0, "dealer_net": 0} for i, d in enumerate(days)]
+        mh = [{"date": d, "margin_prev": 100, "margin_bal": 100 + (30 - i if i < 2 else -1), "short_prev": 0, "short_bal": 0}
+              for i, d in enumerate(days)]
+        rec = _indicators(q, ins, mh[0], None, days[0], mh)
+        self.assertEqual(rec["instStreak"], -3)
+        self.assertEqual(rec["marginStreak"], 2)
+        self.assertEqual(rec["marginPos60"], 100.0)
+        self.assertEqual(rec["highPct"], 10.0)                    # 110 / 100 − 1
+        self.assertAlmostEqual(rec["upperShadowPct"], 72.7, 1)    # (110 − 102) / (110 − 99)
 
 
 if __name__ == "__main__":

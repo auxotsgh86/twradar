@@ -8,7 +8,12 @@ const fmtS = (v, d = 0) => isNum(v) ? (v > 0 ? "+" : "") + fmt(v, d) : "—";
 const fmtP = v => isNum(v) ? (v > 0 ? "+" : "") + v.toFixed(2) + "%" : "—";
 const pd = v => isNum(v) ? (v < 200 ? 2 : (v % 1 ? 1 : 0)) : 0;
 const cls = v => isNum(v) ? (v > 0 ? "up" : v < 0 ? "down" : "") : "";
-const LIGHT = {go: "加碼訊號", wait: "觀察中", stop: "不宜加碼", na: "資料不足"};
+const LIGHT = {go: "加碼訊號", wait: "觀察中", stop: "不宜加碼", na: "資料不足", keep: "續抱", reduce: "減碼", exit: "退場"};
+const holdLine = h => [
+  [h.rule && h.rule !== LIGHT[h.light] ? h.rule : "", ...(h.reasons || [])].filter(Boolean).join("、"),
+  h.weak && h.weak.length ? "留意：" + h.weak.join("、") : "",
+  isNum(h.profitPct) ? `報酬 ${fmtS(h.profitPct, 1)}%` : "",
+  h.pending ? `待確認轉為「${LIGHT[h.pending] || h.pending}」` : ""].filter(Boolean).join("；");
 const STATUS = {complete: "完成", waiting: "等待交易所公布", running: "抓取中", partial: "部分缺漏", failed: "失敗",
   holiday: "休市", not_started: "尚未開始", provisional: "暫定", pending: "等待中", ok: "完成", nodata: "尚未公布", fallback: "備援完成"};
 
@@ -93,6 +98,7 @@ function cardHTML(s) {
    ${g.light === "wait" && g.needs.length ? `<div class="need"><b>還差：</b>${esc(g.needs.join("；"))}</div>` : ""}
    ${g.light === "go" ? `<div class="need"><b>依據：</b>${esc([g.instWhy, g.checks.retail === "pass" ? "融資減且上漲" : "", g.checks.main === "pass" ? "主力集中" : "", "價量確認"].filter(Boolean).join("、"))}；觀察價位 月線 ${fmt(r.ma20, 2)}${isNum(r.prevHigh) ? "、前高 " + fmt(r.prevHigh, pd(r.prevHigh)) : ""}</div>` : ""}
    ${g.light === "stop" ? `<div class="need"><b>原因：</b>${esc(g.warnings.join("；"))}</div>` : ""}
+   ${g.hold ? `<div class="need row" style="gap:6px;align-items:baseline"><b>持有：</b>${badge(g.hold.light)}<span>${esc(holdLine(g.hold))}</span></div>` : ""}
    ${g.keyLevelNote ? `<div class="note">${esc(g.keyLevelNote)}</div>` : ""}${s.note ? `<div class="note">${esc(s.note)}</div>` : ""}
    ${g.missing.length ? `<div class="note">未取得：${esc(g.missing.join("、"))}</div>` : ""}</article>`;
 }
@@ -200,6 +206,12 @@ async function viewStock(code) {
 }
 
 /* ---------- 頁面：報表 ---------- */
+function holdSec(st) {
+  const list = st.filter(s => s.signal.hold).sort((a, b) => ["exit", "reduce", "keep", "na"].indexOf(a.signal.hold.light) - ["exit", "reduce", "keep", "na"].indexOf(b.signal.hold.light));
+  if (!list.length) return "";
+  return `<div class="sec"><h2>持有部位（${list.length}）</h2>${list.map(s => { const r = s.data, h = s.signal.hold;
+    return `<p style="margin:8px 0">${badge(h.light)} <b>${esc(s.code)} ${esc(s.name)}</b>　收 ${fmt(r.close, pd(r.close))}（<span class="${cls(r.chgPct)}">${fmtP(r.chgPct)}</span>）<br><span class="muted">${esc(holdLine(h) || "—")}</span></p>`; }).join("")}</div>`;
+}
 async function viewReport(date) {
   await loadDates();
   const e = date ? await api("/days/" + date) : await api("/latest");
@@ -218,14 +230,14 @@ async function viewReport(date) {
     <div><h1>右側加碼晨報｜資料日 ${d.replace(/-/g, "/")}</h1><div class="small muted">產出時間 ${new Date().toLocaleString("zh-TW", {hour12: false})}・資料狀態：${esc(e.statusText)}</div></div>
     ${marketHTML(m)}
     <div class="tiles">${["go", "wait", "stop"].map(k => `<div class="tile ${k}"><span class="n">${e.summary[k]}</span><span class="l">${LIGHT[k]}</span></div>`).join("")}</div>
-    <div class="sec"><h2>訊號矩陣</h2><div class="tablewrap"><table class="matrix"><thead><tr><th class="l">個股</th><th>法人</th><th>主力</th><th>散戶</th><th>價量</th><th>燈號</th></tr></thead><tbody>
+    <div class="sec"><h2>訊號矩陣</h2><div class="tablewrap"><table class="matrix"><thead><tr><th class="l">個股</th><th>法人</th><th>主力</th><th>散戶</th><th>價量</th><th>燈號</th>${st.some(s => s.signal.hold) ? "<th>持有面</th>" : ""}</tr></thead><tbody>
      ${st.map(s => { const c = s.signal.checks, mk = v => `<span class="mx ${v}">${{pass: "✓", fail: "✕", na: "?"}[v]}</span>`;
-       return `<tr><td class="l"><b class="num">${esc(s.code)}</b> ${esc(s.name)}</td><td>${mk(c.inst)}</td><td>${mk(c.main)}</td><td>${mk(c.retail)}</td><td>${mk(c.priceVolume)}</td><td>${badge(s.signal.light)}</td></tr>`; }).join("")}
+       return `<tr><td class="l"><b class="num">${esc(s.code)}</b> ${esc(s.name)}</td><td>${mk(c.inst)}</td><td>${mk(c.main)}</td><td>${mk(c.retail)}</td><td>${mk(c.priceVolume)}</td><td>${badge(s.signal.light)}</td>${st.some(x => x.signal.hold) ? `<td>${s.signal.hold ? badge(s.signal.hold.light) : ""}</td>` : ""}</tr>`; }).join("")}
     </tbody></table></div></div>
     <div class="sec"><h2>收盤與月線乖離（%）</h2><div class="small muted">0 線為月線，右側＝站上月線；長條顏色為燈號</div>${hBars(withMA, {color: lightColor, unit: "%"})}</div>
     <div class="sec"><h2>外資／投信 當日買賣超（張）</h2><div class="legend"><span><i style="background:var(--c-foreign)"></i>外資</span><span><i style="background:var(--c-trust)"></i>投信</span></div>
      ${divBars(st.map(s => s.code), [{values: st.map(s => s.data.foreign ?? null), color: "var(--c-foreign)"}, {values: st.map(s => s.data.trust ?? null), color: "var(--c-trust)"}], {h: 220, lab: d => d, every: 1})}</div>
-    ${sec("go", "加碼訊號")}${sec("wait", "觀察中")}${sec("stop", "轉弱／不宜加碼")}${sec("na", "資料不足")}
+    ${holdSec(st)}${sec("go", "加碼訊號")}${sec("wait", "觀察中")}${sec("stop", "轉弱／不宜加碼")}${sec("na", "資料不足")}
     <div class="sec"><h2>精簡表</h2>${tableHTML(st)}</div>
     <div class="small muted">資料來源：證交所、櫃買中心${st.some(s => (s.data.source || "").includes("FinMind")) ? "、FinMind" : ""}。以上為籌碼訊號整理，非投資建議。</div>
    </article>`;

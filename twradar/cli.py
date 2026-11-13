@@ -178,7 +178,7 @@ def main(argv=None) -> None:
         rec = indicators(db, args.code.upper(), d)
         w = next((x for x in st.watchlist() if x["code"] == args.code.upper()), {})
         print(json.dumps({"date": d, "code": args.code.upper(), "data": rec,
-                          "signal": evaluate(rec, w, rules_of(st))}, ensure_ascii=False, indent=1))
+                          "signal": evaluate(rec, w, rules_of(st), st.get())}, ensure_ascii=False, indent=1))
     elif args.cmd == "info":
         open_all(cfg)  # 確保已完成升級
         print(info_text(cfg))

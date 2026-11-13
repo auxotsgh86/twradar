@@ -53,6 +53,10 @@ BUILTIN_PARAMS = [
     {"id": "blowoff", "label": "爆量倍數 ≥", "value": 1.5, "unit": "倍", "min": 1, "max": 20, "note": ""},
 ]
 
+from .rules import ENGINE_PARAMS, default_playbooks, validate_rules  # noqa: E402
+
+BUILTIN_PARAMS += ENGINE_PARAMS
+
 COLOR_KEYS = ("up", "down", "flat", "add", "watch", "noAdd", "keep", "reduce", "exit", "na")
 COLOR_PRESETS = {
     # 台股慣例：多紅空綠
@@ -79,7 +83,7 @@ def default_settings() -> dict:
                       for c, n, m, g, k, note in SEED_WATCHLIST],
         "params": copy.deepcopy(BUILTIN_PARAMS),
         "conditions": [],
-        "playbooks": {"entry": [], "hold": []},
+        "playbooks": default_playbooks(),
         "confirmDays": 1,
     }
 
@@ -248,12 +252,13 @@ def validate(s: dict, max_watchlist: int = 50, providers: dict | None = None) ->
             if b["id"] not in ids:
                 e("params", f"內建參數 {b['id']}（{b['label']}）不能刪除")
 
-    # conditions / playbooks（P3 規則引擎會加上完整檢查）
+    # conditions / playbooks
     if not isinstance(s.get("conditions"), list):
         e("conditions", "必須是陣列")
     pb = s.get("playbooks")
     if not isinstance(pb, dict) or not all(isinstance(pb.get(k), list) for k in ("entry", "hold")):
         e("playbooks", "必須包含 entry 與 hold 兩個陣列")
+    validate_rules(s, e)
     cd = s.get("confirmDays")
     if not isinstance(cd, int) or isinstance(cd, bool) or not 1 <= cd <= 5:
         e("confirmDays", "必須是 1～5 的整數")
@@ -280,6 +285,10 @@ def normalize(s: dict) -> dict:
                 colors.setdefault(k, base[k])
     if isinstance(s.get("sources"), dict):
         s["sources"].setdefault("options", {})
+    if isinstance(s.get("playbooks"), dict):  # v0.2 P2 以前沒有規則：補上預設規則
+        for k, v in default_playbooks().items():
+            if not s["playbooks"].get(k):
+                s["playbooks"][k] = v
     if isinstance(s.get("params"), list):
         have = {p.get("id") for p in s["params"] if isinstance(p, dict)}
         s["params"] += [copy.deepcopy(b) for b in BUILTIN_PARAMS if b["id"] not in have]
