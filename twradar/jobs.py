@@ -8,18 +8,15 @@ import time
 import traceback
 from datetime import datetime, timedelta
 
-from . import sources as S
 from .analysis import run_analysis
 from .config import TW, Config, now_tw
+from .dates import is_weekend, prev_weekday
 from .db import DB
 from .net import FetchError, Fetcher
+from .providers import DATASET_TABLE, Batch, Provider, Transport, build
 
 log = logging.getLogger("twradar.jobs")
 
-STEPS = ["twse_quotes", "twse_inst", "twse_margin", "twse_flows", "tpex_quotes", "tpex_inst", "tpex_margin"]
-STEP_LABEL = {"twse_quotes": "上市收盤行情", "twse_inst": "上市三大法人", "twse_margin": "上市融資融券",
-              "twse_flows": "三大法人金額", "tpex_quotes": "上櫃收盤行情", "tpex_inst": "上櫃三大法人",
-              "tpex_margin": "上櫃融資融券"}
 DONE = ("ok", "fallback")
 STATUS_TEXT = {
     "not_started": "尚未開始抓取", "running": "抓取中", "waiting": "部分資料交易所尚未公布，稍後自動重抓",
@@ -35,22 +32,50 @@ def today() -> str:
     return now_tw().strftime("%Y%m%d")
 
 
-def prev_weekday(d: str) -> str:
-    x = datetime.strptime(d, "%Y%m%d") - timedelta(days=1)
-    while x.weekday() >= 5:
-        x -= timedelta(days=1)
-    return x.strftime("%Y%m%d")
-
-
 class Crawler:
-    def __init__(self, db: DB, cfg: Config):
+    """依設定的資料源順序抓取。HTTP（transport）與資料源皆可注入。"""
+
+    def __init__(self, db: DB, cfg: Config, transport: Transport | None = None,
+                 primary: list[Provider] | None = None, fallback: list[Provider] | None = None):
         self.db = db
         self.cfg = cfg
-        self.f = Fetcher(cfg.request_interval, cfg.user_agent)
+        self._custom = primary is not None or fallback is not None
+        self._primary, self._fallback_p = primary, fallback
+        self.f = transport or Fetcher(cfg.request_interval, cfg.user_agent)
+
+    # transport 換掉時重建資料源（資料源持有 transport）
+    @property
+    def f(self) -> Transport:
+        return self._f
+
+    @f.setter
+    def f(self, transport: Transport) -> None:
+        self._f = transport
+        if self._custom:
+            self.primary, self.fallback = self._primary or [], self._fallback_p or []
+        else:
+            p, fb, opts = self.cfg.source_plan()
+            self.primary, self.fallback = build(p, transport, opts), build(fb, transport, opts)
+        self.steps = [(f"{pv.id}_{ds}", pv, ds) for pv in self.primary for ds in pv.datasets]
+        self.step_ids = [s for s, _, _ in self.steps]
+        self.step_labels = {s: pv.step_label(ds) for s, pv, ds in self.steps}
+
+    def _put(self, batch: Batch) -> int:
+        n = 0
+        for table, rows in batch.items():
+            if not rows:
+                continue
+            if table == "market":
+                for r in rows:
+                    self.db.put_market(r)
+                n += len(rows)
+            else:
+                n += getattr(self.db, "put_" + table)(rows)
+        return n
 
     # ---------- 單一交易日 ----------
     def crawl_day(self, d: str, final: bool = False, analyze: bool = True, fallback: bool = True) -> dict:
-        if S.is_weekend(d):
+        if is_weekend(d):
             run = {"date": d, "status": "holiday", "steps": {}, "attempts": 0, "started_at": _now(),
                    "finished_at": _now(), "message": "週末休市"}
             self.db.save_run(run)
@@ -60,26 +85,18 @@ class Crawler:
         if run["status"] == "holiday":
             return run
         run.update(status="running", attempts=run["attempts"] + 1, started_at=_now(), finished_at=None)
-        for s in STEPS:
+        for s in self.step_ids:
             run["steps"].setdefault(s, {"status": "pending"})
         self.db.save_run(run)
         self.db.log("info", f"開始抓取 {d}（第 {run['attempts']} 次{'，最後一次' if final else ''}）")
 
-        handlers = {
-            "twse_quotes": self._twse_quotes, "twse_inst": lambda d: self.db.put_inst(S.twse_inst(self.f, d)),
-            "twse_margin": lambda d: self.db.put_margin(S.twse_margin(self.f, d)),
-            "twse_flows": self._twse_flows,
-            "tpex_quotes": lambda d: self.db.put_quotes(S.tpex_quotes(self.f, d)),
-            "tpex_inst": lambda d: self.db.put_inst(S.tpex_inst(self.f, d)),
-            "tpex_margin": lambda d: self.db.put_margin(S.tpex_margin(self.f, d)),
-        }
-        for s in STEPS:
-            st = run["steps"][s]
-            if st.get("status") in DONE:
+        for i, (s, pv, ds) in enumerate(self.steps):
+            if run["steps"][s].get("status") in DONE:
                 continue
             try:
-                n = handlers[s](d)
-                run["steps"][s] = {"status": "ok", "rows": n, "at": _now()}
+                batch = pv.fetch(ds, d)
+                self._put(batch)
+                run["steps"][s] = {"status": "ok", "rows": len(batch.get(DATASET_TABLE[ds], [])), "at": _now()}
             except FetchError as e:
                 run["steps"][s] = {"status": "nodata" if e.kind == "nodata" else "failed", "kind": e.kind,
                                    "error": str(e), "url": e.url, "at": _now()}
@@ -88,33 +105,28 @@ class Crawler:
                 run["steps"][s] = {"status": "failed", "kind": "parse", "error": repr(e), "at": _now()}
             self.db.save_run(run)
             # 第一步就判斷是否休市
-            if s == "twse_quotes" and run["steps"][s]["status"] == "nodata" and self._past_publish(d):
-                inst = None
-                try:
-                    S.twse_inst(self.f, d)
-                except FetchError as e:
-                    inst = e.kind
-                if inst == "nodata":
-                    run.update(status="holiday", finished_at=_now(), message="交易所無當日資料，判定休市")
-                    run["steps"] = {}
-                    self.db.save_run(run)
-                    self.db.log("info", f"{d} 休市")
-                    return run
+            if i == 0 and run["steps"][s]["status"] == "nodata" and self._past_publish(d) and pv.confirm_no_trading(d):
+                run.update(status="holiday", finished_at=_now(), message="交易所無當日資料，判定休市")
+                run["steps"] = {}
+                self.db.save_run(run)
+                self.db.log("info", f"{d} 休市")
+                return run
 
         if fallback:
             self._fallback(d, run, final)
-        ok = [s for s in STEPS if run["steps"][s]["status"] in DONE]
-        missing = [s for s in STEPS if s not in ok]
+        ok = [s for s in self.step_ids if run["steps"][s]["status"] in DONE]
+        missing = [s for s in self.step_ids if s not in ok]
+        label = self.step_labels
         if not missing:
             run["status"], run["message"] = "complete", "全部資料已抓取"
         elif final:
             run["status"] = "partial" if ok else "failed"
-            run["message"] = "缺：" + "、".join(STEP_LABEL[s] for s in missing)
+            run["message"] = "缺：" + "、".join(label[s] for s in missing)
         else:
             hard = [s for s in missing if run["steps"][s]["status"] == "failed"]
             run["status"] = "waiting"
-            run["message"] = ("尚未公布：" + "、".join(STEP_LABEL[s] for s in missing if s not in hard)
-                              + (("；失敗：" + "、".join(STEP_LABEL[s] for s in hard)) if hard else ""))
+            run["message"] = ("尚未公布：" + "、".join(label[s] for s in missing if s not in hard)
+                              + (("；失敗：" + "、".join(label[s] for s in hard)) if hard else ""))
         run["finished_at"] = _now()
         self.db.save_run(run)
         self.db.log("warn" if missing else "info", f"{d} {STATUS_TEXT[run['status']]}。{run['message']}")
@@ -126,45 +138,43 @@ class Crawler:
         n = now_tw()
         return d < n.strftime("%Y%m%d") or n.hour * 60 + n.minute >= 17 * 60
 
-    def _twse_quotes(self, d: str) -> int:
-        rows, market = S.twse_quotes(self.f, d)
-        if market:
-            self.db.put_market(market)
-        return self.db.put_quotes(rows)
-
-    def _twse_flows(self, d: str) -> int:
-        self.db.put_market(S.twse_flows(self.f, d))
-        return 1
-
     def _fallback(self, d: str, run: dict, final: bool) -> None:
-        """官方來源失敗（被擋或格式不符）時，用 FinMind 逐檔補觀察清單。"""
-        if not self.cfg.use_finmind_fallback:
+        """全市場來源失敗（被擋或格式不符）時，用逐檔資料源補觀察清單。"""
+        if not self.fallback:
             return
-        for mkt, steps in (("TWSE", ["twse_quotes", "twse_inst", "twse_margin"]),
-                           ("TPEx", ["tpex_quotes", "tpex_inst", "tpex_margin"])):
-            bad = [s for s in steps if run["steps"][s]["status"] == "failed"
-                   or (final and run["steps"][s]["status"] == "nodata")]
-            if not bad:
-                continue
-            codes = [w["code"] for w in self.db.watchlist() if w["market"] == mkt][: self.cfg.max_watchlist]
-            got = {"quotes": 0, "inst": 0, "margin": 0}
-            for code in codes:
-                try:
-                    data = S.finmind_stock(self.f, code, mkt, d, d, self.cfg.finmind_token)
-                except FetchError as e:
-                    self.db.log("warn", f"FinMind 備援失敗 {code}：{e}")
+        watch = self.db.watchlist()
+        for pv in self.primary:
+            for mkt in pv.markets:
+                bad = [(s, ds) for s, p, ds in self.steps if p is pv
+                       and any(ds in fb.datasets for fb in self.fallback)
+                       and (run["steps"][s]["status"] == "failed" or (final and run["steps"][s]["status"] == "nodata"))]
+                if not bad:
                     continue
-                for key, put in (("quotes", self.db.put_quotes), ("inst", self.db.put_inst), ("margin", self.db.put_margin)):
-                    rows = [r for r in data[key] if r["date"] == d]
-                    if rows:
-                        put(rows)
-                        got[key] += 1
-            for s in bad:
-                key = s.split("_")[1]
-                if codes and got[key] == len(codes):
-                    run["steps"][s] = {"status": "fallback", "rows": got[key], "source": "FinMind（僅觀察清單）",
-                                       "official_error": run["steps"][s].get("error"), "at": _now()}
-            self.db.save_run(run)
+                want = tuple(ds for _, ds in bad)
+                codes = [w["code"] for w in watch if w["market"] == mkt][: self.cfg.max_watchlist]
+                got = {ds: 0 for ds in want}
+                used: dict[str, str] = {}
+                for code in codes:
+                    for fb in self.fallback:
+                        sub = tuple(ds for ds in want if ds in fb.datasets)
+                        try:
+                            data = fb.fetch_stock(code, mkt, d, d, sub)
+                        except FetchError as e:
+                            self.db.log("warn", f"{fb.label} 備援失敗 {code}：{e}")
+                            continue
+                        for ds in sub:
+                            table = DATASET_TABLE[ds]
+                            rows = [r for r in data.get(table, []) if r["date"] == d]
+                            if rows:
+                                self._put({table: rows})
+                                got[ds] += 1
+                                used[ds] = fb.label
+                        break
+                for s, ds in bad:
+                    if codes and got[ds] == len(codes):
+                        run["steps"][s] = {"status": "fallback", "rows": got[ds], "source": f"{used[ds]}（僅觀察清單）",
+                                           "official_error": run["steps"][s].get("error"), "at": _now()}
+        self.db.save_run(run)
 
     # ---------- 補歷史 ----------
     def backfill(self, days: int | None = None) -> None:
@@ -200,25 +210,24 @@ class Crawler:
         self.db.log("info", f"歷史資料補抓完成：{state['done']} 個交易日")
 
     def ensure_history(self, stock: dict, need: int = 61) -> None:
-        """單一個股歷史不足（例如官方來源被擋、或剛加入的股票）時，用 FinMind 一次補齊。"""
+        """單一個股歷史不足（例如官方來源被擋、或剛加入的股票）時，用逐檔資料源一次補齊。"""
         n = self.db.one("SELECT COUNT(*) AS n FROM quotes WHERE code=?", (stock["code"],))["n"]
-        if n >= need or not self.cfg.use_finmind_fallback:
+        if n >= need or not self.fallback:
             return
         end = today()
         start = (datetime.strptime(end, "%Y%m%d") - timedelta(days=int(need * 1.6) + 20)).strftime("%Y%m%d")
-        try:
-            data = S.finmind_stock(self.f, stock["code"], stock["market"], start, end, self.cfg.finmind_token)
-        except FetchError as e:
-            self.db.log("warn", f"{stock['code']} 歷史資料補抓失敗：{e}")
+        for fb in self.fallback:
+            try:
+                data = fb.fetch_stock(stock["code"], stock["market"], start, end)
+            except FetchError as e:
+                self.db.log("warn", f"{stock['code']} 歷史資料補抓失敗（{fb.label}）：{e}")
+                continue
+            # 只補官方沒有的日期，避免覆蓋官方資料
+            for table in ("quotes", "inst", "margin"):
+                have = {r["date"] for r in self.db.q(f"SELECT date FROM {table} WHERE code=?", (stock["code"],))}
+                self._put({table: [r for r in data.get(table, []) if r["date"] not in have]})
+            self.db.log("info", f"{stock['code']} 已用 {fb.label} 補齊 {len(data.get('quotes', []))} 天歷史")
             return
-        # 只補官方沒有的日期，避免覆蓋官方資料
-        have = {r["date"] for r in self.db.q("SELECT date FROM quotes WHERE code=?", (stock["code"],))}
-        self.db.put_quotes([r for r in data["quotes"] if r["date"] not in have])
-        have_i = {r["date"] for r in self.db.q("SELECT date FROM inst WHERE code=?", (stock["code"],))}
-        self.db.put_inst([r for r in data["inst"] if r["date"] not in have_i])
-        have_m = {r["date"] for r in self.db.q("SELECT date FROM margin WHERE code=?", (stock["code"],))}
-        self.db.put_margin([r for r in data["margin"] if r["date"] not in have_m])
-        self.db.log("info", f"{stock['code']} 已用 FinMind 補齊 {len(data['quotes'])} 天歷史")
 
 
 class Worker:
@@ -285,7 +294,7 @@ class Scheduler:
             day = (n + timedelta(days=add)).strftime("%Y%m%d")
             for key, target, final in self.slots(day):
                 t = datetime.strptime(key, "%Y%m%d %H:%M").replace(tzinfo=TW)
-                if t > n and not S.is_weekend(target) and not (not final and S.is_weekend(day)):
+                if t > n and not is_weekend(target) and not (not final and is_weekend(day)):
                     res.append(t.isoformat(timespec="minutes"))
         return sorted(res)[:4]
 
@@ -300,7 +309,7 @@ class Scheduler:
                 continue
             fired[key] = True
             changed = True
-            if S.is_weekend(target) or (not final and S.is_weekend(day)):
+            if is_weekend(target) or (not final and is_weekend(day)):
                 continue
             run = self.db.get_run(target)
             if run and run["status"] in ("complete", "holiday") or (run and final and run["status"] == "partial"):

@@ -35,9 +35,40 @@ def _streak(vals: list) -> int | None:
     return s * n
 
 
+def _latest_rows(db: DB, table: str, cols: str, codes: list[str], d: str, n: int) -> dict[str, list]:
+    """每檔取 d（含）之前最近 n 筆，新到舊。一次查詢整份清單。"""
+    if not codes:
+        return {}
+    ph = ",".join("?" * len(codes))
+    rows = db.q(f"SELECT {cols} FROM (SELECT {cols}, ROW_NUMBER() OVER (PARTITION BY code ORDER BY date DESC) AS rn "
+                f"FROM {table} WHERE code IN ({ph}) AND date<=?) WHERE rn<=? ORDER BY code, date DESC", (*codes, d, n))
+    out: dict[str, list] = {c: [] for c in codes}
+    for r in rows:
+        out[r["code"]].append(r)
+    return out
+
+
+def indicators_many(db: DB, codes: list[str], d: str) -> dict[str, dict]:
+    """整份清單的當日指標（欄位名稱與網頁工具相同；缺的欄位不放）。每張表只查一次。"""
+    codes = list(dict.fromkeys(codes))
+    Q = _latest_rows(db, "quotes", "code, date, close, change, volume", codes, d, 61)
+    I = _latest_rows(db, "inst", "code, date, foreign_net, trust_net, dealer_net", codes, d, 30)
+    ph = ",".join("?" * len(codes))
+    M = {r["code"]: r for r in db.q(f"SELECT * FROM margin WHERE date=? AND code IN ({ph})", (d, *codes))} if codes else {}
+    SRC: dict[str, set] = {}
+    if codes:
+        for t in ("quotes", "inst", "margin"):
+            for r in db.q(f"SELECT code, src FROM {t} WHERE date=? AND code IN ({ph})", (d, *codes)):
+                if r["src"]:
+                    SRC.setdefault(r["code"], set()).add(r["src"])
+    return {c: _indicators(Q[c], I[c], M.get(c), SRC.get(c), d) for c in codes}
+
+
 def indicators(db: DB, code: str, d: str) -> dict:
-    """回傳與網頁工具相同欄位名稱的當日紀錄（缺的欄位不放）。"""
-    q = db.q("SELECT date, close, change, volume FROM quotes WHERE code=? AND date<=? ORDER BY date DESC LIMIT 61", (code, d))
+    return indicators_many(db, [code], d)[code]
+
+
+def _indicators(q: list, ins: list, m, srcs: set | None, d: str) -> dict:
     rec: dict = {}
     if q and q[0]["date"] == d and q[0]["close"] is not None:
         cur = q[0]
@@ -57,18 +88,16 @@ def indicators(db: DB, code: str, d: str) -> dict:
         p20 = [r["close"] for r in q[1:21] if r["close"] is not None]
         if len(p20) == 20:
             rec["prevHigh"] = max(p20)
-    ins = db.q("SELECT date, foreign_net, trust_net, dealer_net FROM inst WHERE code=? AND date<=? ORDER BY date DESC LIMIT 30", (code, d))
     if ins and ins[0]["date"] == d:
         rec["foreign"] = _lots(ins[0]["foreign_net"])
         rec["trust"] = _lots(ins[0]["trust_net"])
         if ins[0]["dealer_net"] is not None:
             rec["dealer"] = _lots(ins[0]["dealer_net"])
         # 連續天數只在日期連續（以收盤日期序列判斷）時計算
-        days = [r["date"] for r in q]
         by = {r["date"]: r for r in ins}
         fs, ts = [], []
-        for dd in days:
-            r = by.get(dd)
+        for r0 in q:
+            r = by.get(r0["date"])
             if not r:
                 break
             fs.append(r["foreign_net"])
@@ -79,17 +108,13 @@ def indicators(db: DB, code: str, d: str) -> dict:
             rec["foreign5d"] = _lots(sum(fs[:5]))
         if len(ts) >= 5 and None not in ts[:5]:
             rec["trust5d"] = _lots(sum(ts[:5]))
-    m = db.one("SELECT * FROM margin WHERE code=? AND date=?", (code, d))
     if m:
         if m["margin_bal"] is not None and m["margin_prev"] is not None:
             rec["marginChg"] = m["margin_bal"] - m["margin_prev"]
         if m["short_bal"] is not None and m["short_prev"] is not None:
             rec["shortChg"] = m["short_bal"] - m["short_prev"]
-    srcs = [r["src"] for r in db.q(
-        "SELECT src FROM quotes WHERE code=? AND date=? UNION SELECT src FROM inst WHERE code=? AND date=? "
-        "UNION SELECT src FROM margin WHERE code=? AND date=?", (code, d, code, d, code, d)) if r["src"]]
     if srcs:
-        rec["source"] = "、".join(sorted(set(srcs)))
+        rec["source"] = "、".join(sorted(srcs))
     return {k: v for k, v in rec.items() if v is not None}
 
 
@@ -198,8 +223,10 @@ def run_analysis(db: DB, d: str) -> dict:
     summary = {"go": 0, "wait": 0, "stop": 0, "na": 0}
     with db.tx() as c:
         c.execute("DELETE FROM signals WHERE date=?", (d,))
-        for s in db.watchlist():
-            rec = indicators(db, s["code"], d)
+        watch = db.watchlist()
+        recs = indicators_many(db, [s["code"] for s in watch], d)
+        for s in watch:
+            rec = recs[s["code"]]
             sig = evaluate(rec, s, R)
             summary[sig["light"]] += 1
             c.execute("INSERT INTO signals(date,code,light,payload) VALUES(?,?,?,?)",

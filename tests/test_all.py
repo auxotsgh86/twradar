@@ -2,6 +2,7 @@
 
 執行：python -m unittest discover -s tests -v
 """
+import io
 import json
 import os
 import sys
@@ -19,10 +20,12 @@ sys.path.insert(0, str(ROOT))
 TMP = tempfile.mkdtemp()
 os.environ["TWRADAR_HOME"] = TMP
 
-from twradar import sources as S  # noqa: E402
+from twradar import dates as D  # noqa: E402
+from twradar.providers import build  # noqa: E402
+from twradar.providers.common import sign  # noqa: E402
 from twradar.analysis import DEFAULT_RULES, evaluate  # noqa: E402
 from twradar.config import load_config  # noqa: E402
-from twradar.net import Fetcher  # noqa: E402
+from twradar.net import FetchError, Fetcher  # noqa: E402
 
 # ---------------- 依 2026/11 實際回應整理的格式 ----------------
 T86_FIELDS = ["證券代號", "證券名稱", "外陸資買進股數(不含外資自營商)", "外陸資賣出股數(不含外資自營商)",
@@ -63,7 +66,7 @@ class FakeExchange:
         if "finmind" in path:
             ds = qs["dataset"][0]
             sid = qs["data_id"][0]
-            st, en = S.norm_date(qs["start_date"][0]), S.norm_date(qs["end_date"][0])
+            st, en = D.norm_date(qs["start_date"][0]), D.norm_date(qs["end_date"][0])
             data = []
             for dd in self.days:
                 if not (st <= dd <= en) or (sid, dd) not in self.px:
@@ -82,7 +85,7 @@ class FakeExchange:
                                  "MarginPurchaseTodayBalance": 9653, "ShortSaleYesterdayBalance": 202, "ShortSaleTodayBalance": 195})
             return 200, json.dumps({"msg": "success", "status": 200, "data": data}).encode()
         d = (qs.get("date") or qs.get("dayDate") or qs.get("d") or [""])[0]
-        d = S.norm_date(d) if d else ""
+        d = D.norm_date(d) if d else ""
         nodata = {"stat": "很抱歉，沒有符合條件的資料!"}
         if "/tpex/" in path and self.block_tpex:
             return 403, b"<html>FOR SECURITY REASONS</html>"
@@ -172,14 +175,18 @@ def start_fake(fx: FakeExchange):
     srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{srv.server_address[1]}"
-    S.TWSE = base + "/twse"
-    S.TPEX = base + "/tpex"
-    S.FINMIND = base + "/finmind"
-    return srv
+    return srv, {"twse": {"base": base + "/twse"}, "tpex": {"base": base + "/tpex"}, "finmind": {"base": base + "/finmind"}}
+
+
+def use_fake(cfg, opts):
+    """把設定的資料源指向假交易所（依賴注入，不改模組全域變數）。"""
+    cfg.sources = {"primary": ["twse", "tpex"], "fallback": ["finmind"], "options": opts}
+    cfg.request_interval = 0
+    return cfg
 
 
 def weekdays(n, end="20261111"):
-    return sorted(S.weekdays_back(end, n))
+    return sorted(D.weekdays_back(end, n))
 
 
 class ParserTests(unittest.TestCase):
@@ -187,10 +194,10 @@ class ParserTests(unittest.TestCase):
         from twradar.net import num
         self.assertEqual(num("1,234.50"), 1234.5)
         self.assertIsNone(num("--"))
-        self.assertEqual(S._sign('<p style= color:green>-</p>'), -1)
-        self.assertEqual(S._sign('<p>X</p>'), 0)
-        self.assertEqual(S.norm_date("115/11/06"), "20261106")
-        self.assertEqual(S.roc("20261106"), "115/11/06")
+        self.assertEqual(sign('<p style= color:green>-</p>'), -1)
+        self.assertEqual(sign('<p>X</p>'), 0)
+        self.assertEqual(D.norm_date("115/11/06"), "20261106")
+        self.assertEqual(D.roc("20261106"), "115/11/06")
 
 
 class EngineTests(unittest.TestCase):
@@ -234,11 +241,10 @@ class EndToEnd(unittest.TestCase):
         cls.days = weekdays(70)
         cls.holiday = cls.days[-5]
         cls.fx = FakeExchange([d for d in cls.days], holiday={cls.holiday}, no_margin={cls.days[-1]})
-        cls.srv = start_fake(cls.fx)
+        cls.srv, opts = start_fake(cls.fx)
         from twradar.cli import open_db
         from twradar.server import App, make_handler
-        cls.cfg = load_config()
-        cls.cfg.request_interval = 0
+        cls.cfg = use_fake(load_config(), opts)
         cls.cfg.port = 0
         cls.db = open_db(cls.cfg)
         # 只留下假交易所有的三檔
@@ -246,7 +252,7 @@ class EndToEnd(unittest.TestCase):
             if w["code"] not in ("2330", "2454", "6488"):
                 cls.db.delete_stock(w["code"])
         cls.app = App(cls.cfg, cls.db, start_background=False)
-        cls.app.crawler.f = Fetcher(0, "test")
+        cls.app.crawler.f = Fetcher(0, "test")  # 測試替換 transport 後資料源要跟著換
         cls.api_srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(cls.app))
         threading.Thread(target=cls.api_srv.serve_forever, daemon=True).start()
         cls.base = f"http://127.0.0.1:{cls.api_srv.server_address[1]}"
@@ -337,21 +343,76 @@ class FallbackTests(unittest.TestCase):
     def test_tpex_blocked_uses_finmind(self):
         days = weekdays(3, "20261106")
         fx = FakeExchange(days, block_tpex=True)
-        start_fake(fx)
+        _, opts = start_fake(fx)
         os.environ["TWRADAR_HOME"] = tempfile.mkdtemp()
         from twradar.cli import open_db
         from twradar.jobs import Crawler
-        cfg = load_config()
+        cfg = use_fake(load_config(), opts)
         db = open_db(cfg)
         for w in db.watchlist():
             if w["code"] not in ("2330", "2454", "6488"):
                 db.delete_stock(w["code"])
-        cr = Crawler(db, cfg)
-        cr.f = Fetcher(0, "test")
+        cr = Crawler(db, cfg, transport=Fetcher(0, "test"))
         run = cr.crawl_day(days[-1], final=True)
         self.assertEqual(run["steps"]["tpex_quotes"]["status"], "fallback", run["steps"]["tpex_quotes"])
         self.assertEqual(run["status"], "complete")
         os.environ["TWRADAR_HOME"] = TMP
+
+
+class ProviderDITests(unittest.TestCase):
+    """資料源可注入：不經 HTTP 的記憶體資料源也能跑完整流程。"""
+
+    def _db(self):
+        os.environ["TWRADAR_HOME"] = tempfile.mkdtemp()
+        from twradar.cli import open_db
+        cfg = load_config()
+        db = open_db(cfg)
+        for w in db.watchlist():
+            if w["code"] != "2330":
+                db.delete_stock(w["code"])
+        os.environ["TWRADAR_HOME"] = TMP
+        return cfg, db
+
+    def test_in_memory_provider(self):
+        from twradar.jobs import Crawler
+        from twradar.providers import Provider
+
+        class Mem(Provider):
+            id, label, markets, datasets = "mem", "記憶體", ("TWSE",), ("quotes", "inst")
+
+            def fetch(self, dataset, d):
+                if dataset == "quotes":
+                    return {"quotes": [{"date": d, "code": "2330", "name": "台積電", "market": "TWSE", "close": 100.0,
+                                        "change": 1.0, "volume": 1000, "src": "mem"}]}
+                return {"inst": [{"date": d, "code": "2330", "foreign_net": 5000, "trust_net": 0, "src": "mem"}]}
+
+        cfg, db = self._db()
+        cr = Crawler(db, cfg, transport=None, primary=[Mem(None)], fallback=[])
+        run = cr.crawl_day("20261111", final=True)
+        self.assertEqual(run["status"], "complete")
+        self.assertEqual(set(run["steps"]), {"mem_quotes", "mem_inst"})
+        from twradar.analysis import indicators
+        rec = indicators(db, "2330", "20261111")
+        self.assertEqual((rec["close"], rec["foreign"], rec["source"]), (100.0, 5, "mem"))
+
+    def test_unknown_provider_rejected(self):
+        with self.assertRaises(ValueError):
+            build(["nope"], Fetcher(0, "t"))
+
+    def test_fallback_disabled(self):
+        cfg, _ = self._db()
+        cfg.use_finmind_fallback = False
+        self.assertEqual(cfg.source_plan()[1], [])
+
+    def test_doctor_against_fake(self):
+        from twradar.cli import doctor
+        days = weekdays(3, "20261111")
+        _, opts = start_fake(FakeExchange(days))
+        cfg = use_fake(load_config(), opts)
+        import contextlib
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            code = doctor(cfg, days[-1], transport=Fetcher(0, "test"))
+        self.assertEqual(code, 0, out.getvalue())
 
 
 if __name__ == "__main__":
@@ -362,22 +423,22 @@ class TpexDateIgnoredTests(unittest.TestCase):
     def test_ignored_date_triggers_fallback(self):
         days = weekdays(5, "20261111")
         fx = FakeExchange(days, otc_ok=False)
-        start_fake(fx)
+        _, opts = start_fake(fx)
         os.environ["TWRADAR_HOME"] = tempfile.mkdtemp()
         from twradar.cli import open_db
         from twradar.jobs import Crawler
-        cfg = load_config()
+        cfg = use_fake(load_config(), opts)
         db = open_db(cfg)
         for w in db.watchlist():
             if w["code"] not in ("2330", "2454", "6488"):
                 db.delete_stock(w["code"])
-        cr = Crawler(db, cfg)
-        cr.f = Fetcher(0, "test")
-        with self.assertRaises(S.FetchError) as cm:
-            S.tpex_quotes(cr.f, days[-3])
+        cr = Crawler(db, cfg, transport=Fetcher(0, "test"))
+        tpex = build(["tpex"], cr.f, opts)[0]
+        with self.assertRaises(FetchError) as cm:
+            tpex.fetch("quotes", days[-3])
         self.assertEqual(cm.exception.kind, "parse")
         run = cr.crawl_day(days[-3], final=False)
         self.assertEqual(run["steps"]["tpex_quotes"]["status"], "fallback")
         # 當天（網站最新一天）直接用官方資料
-        self.assertEqual(len(S.tpex_quotes(cr.f, days[-1])), 1)
+        self.assertEqual(len(tpex.fetch("quotes", days[-1])["quotes"]), 1)
         os.environ["TWRADAR_HOME"] = TMP

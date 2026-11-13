@@ -35,9 +35,20 @@ class Config:
     # 選填：FinMind API token（官方來源抓不到時的備援），https://finmindtrade.com
     finmind_token: str = ""
     use_finmind_fallback: bool = True
+    # 資料源：primary 依序抓全市場資料；fallback 為逐檔備援（依序嘗試）；options 以資料源 id 為鍵
+    sources: dict = field(default_factory=lambda: {"primary": ["twse", "tpex"], "fallback": ["finmind"], "options": {}})
     user_agent: str = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
                        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36 twradar/0.1")
     max_watchlist: int = 50
+
+    def source_plan(self) -> tuple[list[str], list[str], dict]:
+        """回傳 (primary, fallback, options)。相容舊設定 use_finmind_fallback、finmind_token。"""
+        src = {"primary": ["twse", "tpex"], "fallback": ["finmind"], "options": {}, **(self.sources or {})}
+        fallback = list(src["fallback"]) if self.use_finmind_fallback else []
+        options = {k: dict(v) for k, v in (src.get("options") or {}).items()}
+        if self.finmind_token:
+            options.setdefault("finmind", {}).setdefault("token", self.finmind_token)
+        return list(src["primary"]), fallback, options
 
     @property
     def db_path(self) -> Path:

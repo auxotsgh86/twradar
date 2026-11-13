@@ -169,7 +169,8 @@ API 全部需要 token，請不要公開分享含 token 的網址。
 
 ```
 twradar/
-  sources.py    資料來源解析（證交所、櫃買中心、FinMind）
+  providers/    資料源（可替換）：base.py 介面、twse.py 證交所、tpex.py 櫃買中心、finmind.py 逐檔備援
+  dates.py      日期工具
   net.py        HTTP 抓取：請求間隔、重試、封鎖偵測
   jobs.py       抓取流程、歷史補抓、背景工作佇列、每日排程
   analysis.py   指標計算（MA20/MA60、均量、連續買賣）與訊號判定

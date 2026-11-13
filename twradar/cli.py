@@ -21,12 +21,14 @@ import sys
 from logging.handlers import RotatingFileHandler
 
 from . import __version__
-from . import sources as S
 from .analysis import run_analysis
 from .config import load_config, home_dir
 from .db import DB
-from .jobs import Crawler, prev_weekday, today
+from .dates import norm_date, prev_weekday
+from .jobs import Crawler, today
 from .net import FetchError, Fetcher
+from .providers import build
+from .providers.common import dates_in, tables
 
 SEED = [  # 首次啟動的預設觀察清單
     ("2330", "台積電", "TWSE", "科技／半導體權值", None, "已建 100 股底倉；看月線回踩是否守住"),
@@ -87,30 +89,23 @@ def info_text(cfg) -> str:
             f"API 範例：http://{ip}:{cfg.port}/api/v1/latest?token={cfg.token}\n")
 
 
-def doctor(cfg, date: str | None = None) -> int:
-    f = Fetcher(max(3.0, cfg.request_interval), cfg.user_agent)
-    d = S.norm_date(date) if date else prev_weekday(today())
-    print(f"測試資料日：{d}（若遇到休市，請改用 --date 指定）\n")
-    tests = [
-        ("上市收盤行情 MI_INDEX", lambda: len(S.twse_quotes(f, d)[0])),
-        ("上市三大法人 T86", lambda: len(S.twse_inst(f, d))),
-        ("上市融資融券 MI_MARGN", lambda: len(S.twse_margin(f, d))),
-        ("三大法人金額 BFI82U", lambda: S.twse_flows(f, d)["foreign_amt"]),
-        ("上櫃收盤行情", lambda: len(S.tpex_quotes(f, d))),
-        ("上櫃三大法人", lambda: len(S.tpex_inst(f, d))),
-        ("上櫃融資融券", lambda: len(S.tpex_margin(f, d))),
-        ("FinMind 備援（6488）", lambda: len(S.finmind_stock(f, "6488", "TPEx", d, d, cfg.finmind_token)["quotes"])),
-    ]
+def doctor(cfg, date: str | None = None, transport=None) -> int:
+    f = transport or Fetcher(max(3.0, cfg.request_interval), cfg.user_agent)
+    d = norm_date(date) if date else prev_weekday(today())
+    primary, fallback, opts = cfg.source_plan()
+    print(f"測試資料日：{d}（若遇到休市，請改用 --date 指定）")
+    print(f"資料源：主要 {', '.join(primary)}；備援 {', '.join(fallback) or '（無）'}\n")
     bad = 0
-    for label, fn in tests:
-        try:
-            print(f"  ✅ {label}：{fn()}")
-        except FetchError as e:
-            bad += 1
-            print(f"  ❌ {label}：{e}" + (f"\n       {e.url}" if e.url else ""))
-        except Exception as e:
-            bad += 1
-            print(f"  ❌ {label}：格式解析錯誤 {e!r}")
+    for pv in build(primary + fallback, f, opts):
+        for label, fn in pv.doctor(d):
+            try:
+                print(f"  ✅ {label}：{fn()}")
+            except FetchError as e:
+                bad += 1
+                print(f"  ❌ {label}：{e}" + (f"\n       {e.url}" if e.url else ""))
+            except Exception as e:
+                bad += 1
+                print(f"  ❌ {label}：格式解析錯誤 {e!r}")
     print("\n全部正常" if not bad else f"\n{bad} 項失敗。請執行 `python -m twradar probe` 並把結果傳給維護者。")
     return 1 if bad else 0
 
@@ -118,9 +113,10 @@ def doctor(cfg, date: str | None = None) -> int:
 def probe(cfg, date: str | None = None) -> None:
     """列出櫃買中心各候選網址實際回傳的內容摘要，協助修正格式。"""
     f = Fetcher(max(3.0, cfg.request_interval), cfg.user_agent)
-    d = S.norm_date(date) if date else prev_weekday(today())
+    d = norm_date(date) if date else prev_weekday(today())
+    _, _, opts = cfg.source_plan()
     print(f"要求日期：{d}\n")
-    for u in S.tpex_quote_urls(d):
+    for u in build(["tpex"], f, opts)[0].quote_urls(d):
         print("■", u)
         try:
             js = f.get_json(u, retries=0)
@@ -130,8 +126,8 @@ def probe(cfg, date: str | None = None) -> None:
         if isinstance(js, dict):
             print("   頂層欄位：", {k: (v if isinstance(v, (str, int, float)) and len(str(v)) < 60 else type(v).__name__)
                                 for k, v in js.items()})
-        print("   回應中的日期：", S._dates_in(js) or "（無）")
-        for i, (title, fields, rows) in enumerate(S._tables(js)):
+        print("   回應中的日期：", dates_in(js) or "（無）")
+        for i, (title, fields, rows) in enumerate(tables(js)):
             print(f"   表格 {i}：{str(title)[:50]}｜{len(rows)} 列")
             print("     欄位：", fields)
             if rows:
@@ -165,14 +161,14 @@ def main(argv=None) -> None:
     elif args.cmd == "crawl":
         setup_logging(cfg)
         db = open_db(cfg)
-        d = S.norm_date(args.date) if args.date else today()
+        d = norm_date(args.date) if args.date else today()
         print(json.dumps(Crawler(db, cfg).crawl_day(d, final=args.final), ensure_ascii=False, indent=1))
     elif args.cmd == "backfill":
         setup_logging(cfg)
         Crawler(open_db(cfg), cfg).backfill(args.days)
     elif args.cmd == "analyze":
         db = open_db(cfg)
-        d = S.norm_date(args.date) if args.date else (db.trading_dates(limit=1) or [today()])[0]
+        d = norm_date(args.date) if args.date else (db.trading_dates(limit=1) or [today()])[0]
         print(run_analysis(db, d))
     elif args.cmd == "doctor":
         sys.exit(doctor(cfg, args.date))
@@ -181,7 +177,7 @@ def main(argv=None) -> None:
     elif args.cmd == "show":
         from .analysis import evaluate, indicators, rules_of
         db = open_db(cfg)
-        d = S.norm_date(args.date) if args.date else (db.trading_dates(limit=1) or [today()])[0]
+        d = norm_date(args.date) if args.date else (db.trading_dates(limit=1) or [today()])[0]
         rec = indicators(db, args.code.upper(), d)
         w = next((x for x in db.watchlist() if x["code"] == args.code.upper()), {})
         print(json.dumps({"date": d, "code": args.code.upper(), "data": rec,

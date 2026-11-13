@@ -18,11 +18,11 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from . import __version__
-from . import sources as S
-from .analysis import DEFAULT_RULES, LIGHT_LABEL, evaluate, indicators, rules_of, run_analysis
+from .dates import is_weekend, norm_date
+from .analysis import DEFAULT_RULES, LIGHT_LABEL, evaluate, indicators_many, rules_of, run_analysis
 from .config import Config, now_tw
 from .db import DB
-from .jobs import STATUS_TEXT, STEP_LABEL, STEPS, Crawler, Scheduler, Worker, prev_weekday, today
+from .jobs import STATUS_TEXT, Crawler, Scheduler, Worker, prev_weekday, today
 
 log = logging.getLogger("twradar.server")
 WEB = Path(__file__).parent / "web"
@@ -39,15 +39,15 @@ def iso(d: str) -> str:
 def parse_date(s: str | None) -> str | None:
     if not s:
         return None
-    d = S.norm_date(s)
+    d = norm_date(s)
     return d if d and re.fullmatch(r"\d{8}", d) else None
 
 
 class App:
-    def __init__(self, cfg: Config, db: DB, start_background: bool = True):
+    def __init__(self, cfg: Config, db: DB, start_background: bool = True, crawler: Crawler | None = None):
         self.cfg = cfg
         self.db = db
-        self.crawler = Crawler(db, cfg)
+        self.crawler = crawler or Crawler(db, cfg)
         self.worker = Worker(self.crawler)
         self.scheduler = Scheduler(self.crawler, self.worker) if start_background else None
 
@@ -69,7 +69,7 @@ class App:
         if run:
             status = run["status"]
         else:
-            status = "holiday" if S.is_weekend(d) else "not_started"
+            status = "holiday" if is_weekend(d) else "not_started"
         a_status = an["status"] if an else "not_started"
         if status in ("running",):
             a_status = "pending" if not an else a_status
@@ -85,8 +85,8 @@ class App:
             "crawl": {"status": status, "attempts": run["attempts"] if run else 0,
                       "startedAt": run["started_at"] if run else None, "finishedAt": run["finished_at"] if run else None,
                       "message": run["message"] if run else "",
-                      "steps": {s: {"label": STEP_LABEL[s], **(run["steps"].get(s, {"status": "pending"}))}
-                                for s in STEPS} if run and run["steps"] else {}},
+                      "steps": {s: {"label": self.crawler.step_labels[s], **(run["steps"].get(s, {"status": "pending"}))}
+                                for s in self.crawler.step_ids} if run and run["steps"] else {}},
             "analysis": {"status": a_status, "analyzedAt": an["analyzed_at"] if an else None,
                          "summary": json.loads(an["summary"]) if an and an["summary"] else None},
         }
@@ -95,10 +95,12 @@ class App:
         sigs = {r["code"]: json.loads(r["payload"]) for r in self.db.q("SELECT code, payload FROM signals WHERE date=?", (d,))}
         R = rules_of(self.db)
         out = []
-        for w in self.db.watchlist():
+        watch = self.db.watchlist()
+        late = indicators_many(self.db, [w["code"] for w in watch if w["code"] not in sigs], d)
+        for w in watch:
             p = sigs.get(w["code"])
             if not p:  # 分析之後才加入的個股：即時計算
-                rec = indicators(self.db, w["code"], d)
+                rec = late[w["code"]]
                 p = {"data": rec, "signal": evaluate(rec, w, R)}
             out.append({"code": w["code"], "name": w["name"], "market": w["market"], "group": w["grp"],
                         "note": w["note"], "keyLevel": w["key_level"], "data": p["data"], "signal": p["signal"]})

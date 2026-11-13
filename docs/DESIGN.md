@@ -1,6 +1,6 @@
 # twradar 設計文件（v0.2 草案）
 
-> 狀態：**討論中**。本文件記錄設計決策與理由，實作以本文件為準；有變更時先改這裡。
+> 狀態：**設計定案，實作中（P1 完成）**。本文件記錄設計決策與理由，實作以本文件為準；有變更時先改這裡。
 > 最後更新：2026-11-13
 
 ## 0. 決策紀錄
@@ -41,33 +41,38 @@
 
 ## 3. 資料源（DI）
 
-### 3.1 介面
+### 3.1 介面（P1 已實作，`twradar/providers/`）
 
 ```python
-class Provider(Protocol):
-    id: str                         # "twse", "tpex", "finmind", "tdcc" ...
-    provides: dict[str, Scope]      # {"quotes": "market"|"stock", "inst": ..., ...}
-    def fetch(self, dataset: str, d: str, codes: list[str] | None) -> list[Record]: ...
+class Provider:
+    id: str                       # "twse", "tpex", "finmind" ...
+    scope: str                    # "market"：某天全市場；"stock"：逐檔一段期間
+    markets: tuple[str, ...]      # 涵蓋的市場，例如 ("TWSE",)
+    datasets: tuple[str, ...]     # 依抓取順序，例如 ("quotes", "inst", "margin", "flows")
+    def fetch(self, dataset, d) -> Batch: ...                                # scope="market"
+    def fetch_stock(self, code, market, start, end, datasets) -> Batch: ...  # scope="stock"
+    def confirm_no_trading(self, d) -> bool: ...                             # 休市確認
+    def doctor(self, d) -> list[(label, fn)]: ...                            # twradar doctor
 ```
 
-- **Dataset（標準資料種類）**：`quotes`、`inst`、`margin`、`market_flows`，之後可加 `holders`（集保股權分散，週資料）等。
-- **Record** 用 dataclass 定義，單位統一在 Provider 內轉換（成交量／法人 = 股，融資券 = 張）。
-- **Transport（HTTP）也注入**：Provider 不自己開連線，測試時換成假的 transport。
-- **Registry**：`@provider("twse")` 註冊；新增來源 = 新增一個檔案。
+- **Batch**：`{"quotes": [...], "inst": [...], "margin": [...], "market": [...]}`，每列已是資料庫格式；單位在 Provider 內統一（成交量、法人 = 股；融資券 = 張；金額 = 元）。
+- **Transport（HTTP）注入**：Provider 不自己開連線；`Crawler(db, cfg, transport=..., primary=[...], fallback=[...])` 都可注入，測試用假伺服器或記憶體資料源。
+- **Registry**：`@register` 註冊；新增來源 = 在 `providers/` 新增一個檔案並在 `__init__.py` import。
+- **抓取步驟** = 每個 primary 資料源 × 它的 datasets，步驟 id 為 `{provider}_{dataset}`（與 v0.1.3 相同，API 不變）。
 
 ### 3.2 設定
 
 ```json
 "sources": {
-  "quotes":       ["twse", "tpex", "finmind"],
-  "inst":         ["twse", "tpex", "finmind"],
-  "margin":       ["twse", "tpex", "finmind"],
-  "market_flows": ["twse"],
-  "options": { "finmind": { "token": "" }, "requestInterval": 8 }
+  "primary":  ["twse", "tpex"],
+  "fallback": ["finmind"],
+  "options":  { "finmind": { "token": "" } }
 }
 ```
 
-依序嘗試；`market` 範圍的來源失敗後，用 `stock` 範圍的來源逐檔補觀察清單。
+- primary 依序抓全市場資料；某市場某資料集失敗時，fallback 依序逐檔補觀察清單（只抓缺的資料集，不覆蓋已成功的官方資料）。
+- `options.<id>.base` 可改網址（測試用）。
+- P1 暫存於 `config.json`（相容舊的 `use_finmind_fallback`、`finmind_token`）；P2 移到 `settings.json`。
 
 ### 3.3 條件與資料的關係
 
