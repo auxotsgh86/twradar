@@ -38,9 +38,9 @@ select,input{font:inherit;font-size:13px;color:var(--fg);background:var(--surfac
 .banner.ok{border-color:var(--go);background:var(--go-bg)} .banner.warn{border-color:var(--wait);background:var(--wait-bg)} .banner.bad{border-color:var(--stop);background:var(--stop-bg)}
 .badge{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;padding:3px 10px;border-radius:999px;white-space:nowrap}
 .badge i{width:8px;height:8px;border-radius:50%;background:currentColor}
-.b-go,.b-complete,.b-ok,.b-fallback{background:var(--go-bg);color:var(--go)}
-.b-wait,.b-waiting,.b-running,.b-provisional,.b-partial,.b-pending,.b-nodata{background:var(--wait-bg);color:var(--wait)}
-.b-stop,.b-failed{background:var(--stop-bg);color:var(--stop)}
+.b-go,.b-keep,.b-complete,.b-ok,.b-fallback{background:var(--go-bg);color:var(--go)}
+.b-wait,.b-reduce,.b-waiting,.b-running,.b-provisional,.b-partial,.b-pending,.b-nodata{background:var(--wait-bg);color:var(--wait)}
+.b-stop,.b-exit,.b-failed{background:var(--stop-bg);color:var(--stop)}
 .b-na,.b-holiday,.b-not_started{background:var(--na-bg);color:var(--na)}
 .steps{display:flex;flex-wrap:wrap;gap:6px}
 .market{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px}

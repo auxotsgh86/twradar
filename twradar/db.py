@@ -9,7 +9,7 @@ from pathlib import Path
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
-CREATE TABLE IF NOT EXISTS stocks (            -- 觀察清單
+CREATE TABLE IF NOT EXISTS stocks (            -- v0.1 觀察清單（v0.2 起改存 settings.json，只供遷移）
   code TEXT PRIMARY KEY, name TEXT NOT NULL, market TEXT NOT NULL DEFAULT 'TWSE',
   grp TEXT DEFAULT '', note TEXT DEFAULT '', key_level REAL, sort_order INTEGER DEFAULT 999,
   added_at TEXT DEFAULT (datetime('now'))
@@ -31,6 +31,10 @@ CREATE TABLE IF NOT EXISTS market (            -- 大盤
   date TEXT PRIMARY KEY, taiex REAL, taiex_chg REAL, taiex_chg_pct REAL,
   foreign_amt INTEGER, trust_amt INTEGER, dealer_amt INTEGER, total_amt INTEGER, src TEXT
 );
+CREATE TABLE IF NOT EXISTS holders (           -- 集保股權分散（週）；level 1–15 為持股分級，17 為合計
+  date TEXT NOT NULL, code TEXT NOT NULL, level INTEGER NOT NULL, people INTEGER, shares INTEGER, pct REAL,
+  src TEXT, PRIMARY KEY (date, code, level)
+);
 CREATE TABLE IF NOT EXISTS runs (              -- 每個交易日的抓取狀態
   date TEXT PRIMARY KEY, status TEXT NOT NULL, steps TEXT NOT NULL DEFAULT '{}',
   attempts INTEGER DEFAULT 0, started_at TEXT, finished_at TEXT, message TEXT DEFAULT ''
@@ -49,6 +53,7 @@ CREATE TABLE IF NOT EXISTS events (            -- 系統紀錄（UI 顯示）
 CREATE INDEX IF NOT EXISTS idx_quotes_code ON quotes(code, date);
 CREATE INDEX IF NOT EXISTS idx_inst_code ON inst(code, date);
 CREATE INDEX IF NOT EXISTS idx_margin_code ON margin(code, date);
+CREATE INDEX IF NOT EXISTS idx_holders_code ON holders(code, date);
 """
 
 _lock = threading.RLock()
@@ -94,22 +99,6 @@ class DB:
         with self.tx() as c:
             c.execute("INSERT INTO events(level,message) VALUES(?,?)", (level, message))
             c.execute("DELETE FROM events WHERE id < (SELECT MAX(id) - 2000 FROM events)")
-
-    # ---------- watchlist ----------
-    def watchlist(self) -> list[dict]:
-        return [dict(r) for r in self.q("SELECT * FROM stocks ORDER BY sort_order, code")]
-
-    def upsert_stock(self, s: dict) -> None:
-        with self.tx() as c:
-            c.execute("""INSERT INTO stocks(code,name,market,grp,note,key_level,sort_order)
-                VALUES(:code,:name,:market,:grp,:note,:key_level,:sort_order)
-                ON CONFLICT(code) DO UPDATE SET name=excluded.name, market=excluded.market, grp=excluded.grp,
-                note=excluded.note, key_level=excluded.key_level, sort_order=excluded.sort_order""",
-                      {"grp": "", "note": "", "key_level": None, "sort_order": 999, "market": "TWSE", **s})
-
-    def delete_stock(self, code: str) -> None:
-        with self.tx() as c:
-            c.execute("DELETE FROM stocks WHERE code=?", (code,))
 
     # ---------- runs ----------
     def get_run(self, date: str) -> dict | None:
@@ -157,6 +146,16 @@ class DB:
             c.executemany("""INSERT OR REPLACE INTO margin(date,code,margin_prev,margin_bal,short_prev,short_bal,src)
               VALUES(:date,:code,:margin_prev,:margin_bal,:short_prev,:short_bal,:src)""", rows)
         return len(rows)
+
+    def put_holders(self, rows: list[dict]) -> int:
+        with self.tx() as c:
+            c.executemany("""INSERT OR REPLACE INTO holders(date,code,level,people,shares,pct,src)
+              VALUES(:date,:code,:level,:people,:shares,:pct,:src)""", rows)
+        return len(rows)
+
+    def holders_latest(self) -> str | None:
+        r = self.one("SELECT MAX(date) AS d FROM holders")
+        return r["d"] if r else None
 
     def put_market(self, row: dict) -> None:
         with self.tx() as c:

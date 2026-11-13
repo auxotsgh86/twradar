@@ -4,6 +4,8 @@ services:
     restart: unless-stopped
     ports: ["8765:8765"]
     volumes: ["./data:/data"]
+    # 連線資訊（含初始管理密碼）：docker compose exec twradar python -m twradar info
     # environment:
-    #   TWRADAR_TOKEN: "自訂 token（不填會自動產生，存在 data/config.json）"
+    #   TWRADAR_TOKEN: "自訂唯讀 token（不填會自動產生，存在 data/config.json）"
+    #   TWRADAR_ADMIN_TOKEN: "自訂管理 token"
     #   TWRADAR_FINMIND_TOKEN: ""
