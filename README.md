@@ -176,12 +176,33 @@ API 全部需要 token，請不要公開分享含 token 的網址。
 ---
 
 ## 四、判定規則
-與 claude.ai 上的「右側加碼雷達」相同：法人、主力、散戶、價量四項；
-🟢 價量確認＋至少兩項籌碼支持且無扣分；🔴 跌破月線（含容許誤差）、籌碼背離或爆量長黑；其餘 🟡。門檻可在網頁調整。
+完整說明見 [docs/STRATEGY.md](docs/STRATEGY.md)（v0.3，已經專家審閱）。摘要：
+- 進場面：未持有看「上車」（回測月線有守＋帶量紅K＋法人轉買），持有中看「加碼」（底倉獲利 ≥ 3%＋帶量突破前高＋法人買超）；
+  否決條件（跌破月線、爆量長黑、籌碼背離、融資追價、投信賣外資買…）任一成立為「不宜加碼」；大盤跌破下彎月線時降為觀察。
+- 持有面：停損（破下彎月線、破月線＋法人賣、跌破關鍵價、保本線、硬停損 10%）、獲利出場、出貨警訊、獲利保護。
+- 規則、參數都在 `settings.json`，可在網頁調整。
+
+## 回溯分析
+
+用歷史資料重播規則，檢查訊號出現後的實際走勢。
+
+```bash
+cd ~/twradar-app
+TWRADAR_HOME=~/twradar-data .venv/bin/python -m twradar backfill --days 560    # 先補約兩年全市場資料（約 8～12 小時，可中斷後續跑）
+TWRADAR_HOME=~/twradar-data .venv/bin/python -m twradar backtest              # 產生報表
+TWRADAR_HOME=~/twradar-data .venv/bin/python -m twradar backtest --grid profitTargetPct=8,10,15 --grid stopLossPct=8,10,12
+```
+
+- 結果在 `~/twradar-data/backtest/時間/`：`report.html`（用瀏覽器開）、`result.json`、`trades.csv`。
+- 股票池預設 `auto`：每季依「當時」前 60 日成交金額排名（上市前 50＝大型、51～150＝中型、上櫃前 50＝上櫃）＋觀察清單，
+  避免用今天的成份股回測過去。也可用 `--universe watchlist` 或 `--universe 檔案.csv`（每行：代號,組別）。
+- 依大盤環境（多頭／盤整／空頭）、股票組、樣本內／樣本外、每半年分別統計；`--split` 指定樣本外起始日（預設後三分之一）。
+- 訊號隔日開盤成交、扣費稅、使用還原股價。集保週資料沒有歷史，相關條件在回溯期間多為資料不足。
 
 ## 五、已知限制
 - 證交所四項、櫃買中心三項來源皆已在實機確認可依日期抓取（2026/11）。程式會分辨「網站回傳較新日期（參數不對）」與「當日尚未公布」兩種情況，前者立即改用 FinMind 備援。
 - 主力分點、買賣家數差沒有官方全市場資料，目前不抓，判定時該項顯示「?」。
+- 集保股權分散表只提供最新一週，大戶／散戶週增減從安裝當週開始累積。
 - 休市判斷：平日 17:00 後證交所仍無當日資料就視為休市。
 - FinMind 免費額度有限；量大時可到 finmindtrade.com 申請 token，填入 `settings.json` 的 `sources.options.finmind.token`。
 
@@ -196,7 +217,10 @@ twradar/
   config.py     系統設定 config.json
   net.py        HTTP 抓取：請求間隔、重試、封鎖偵測
   jobs.py       抓取流程、歷史補抓、背景工作佇列、每日排程
-  analysis.py   指標計算（MA20/MA60、均量、連續買賣）與訊號判定
+  analysis.py   指標計算（還原股價、均線、量能、法人與融資）與每日判定
+  conditions.py 內建條件（上車、加碼、否決、停損、出貨警訊…）
+  rules.py      規則引擎、預設規則、規則驗證與升級
+  backtest.py   回溯分析；backtest_report.py 報表
   server.py     Web API 與靜態網頁
   db.py         SQLite 結構與存取
   web/          網頁 UI（原生 JS、SVG 圖表，無外部相依）

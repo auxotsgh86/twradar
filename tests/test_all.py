@@ -63,7 +63,16 @@ class FakeExchange:
                     p = round(base * (1 + 0.002 * i) + (5 if i % 2 else -3), 1)
                 self.px[(code, d)] = (prev, p, 10_000_000 + i * 100_000)
 
+    taiex: dict = {}      # 加權指數（預設固定 44,257.15）
+    flows: dict = {}      # {(代號, 日期): (外資, 投信)} 買賣超股數；預設固定模式
     tdcc_date = None      # 集保資料日（預設最後一天）
+
+    def set_path(self, code, closes, vol=10_000_000):
+        """指定某檔的收盤路徑（開盤＝前收、最高＝收＋10、最低＝收－10）。"""
+        prev = closes[0]
+        for d, p in zip(self.days, closes):
+            self.px[(code, d)] = (prev, p, vol)
+            prev = p
     tdcc_whale = 80.0     # 千張以上大戶持股比例
     tdcc_retail = 1000    # 1–999 股的人數（散戶人數用）
 
@@ -125,7 +134,7 @@ class FakeExchange:
                              c(abs(p - prev), 2), c(p, 2), "1", c(p, 2), "1", "20.00"])
             tables = [{"title": f"{d} 價格指數(臺灣證券交易所)", "fields": IDX_FIELDS,
                        "data": [["寶島股價指數", "50,000.00", "<p style= color:red>+</p>", "100.00", "0.20", ""],
-                                ["發行量加權股價指數", "44,257.15", "<p style= color:red>+</p>", "1,545.23", "3.62", ""]]}]
+                                ["發行量加權股價指數", c(self.taiex.get(d, 44257.15), 2), "<p style= color:red>+</p>", "1,545.23", "3.62", ""]]}]
             tables += [{"title": "大盤統計資訊", "fields": ["成交統計", "成交金額(元)", "成交股數(股)", "成交筆數"], "data": []}]
             tables += [{"title": f"{d} 每日收盤行情(全部(不含權證、牛熊證、可展延牛熊證))", "fields": QUOTE_FIELDS, "data": rows}]
             return 200, json.dumps({"tables": tables, "stat": "OK", "date": d}).encode()
@@ -134,8 +143,7 @@ class FakeExchange:
             for code, (name, mkt, _) in self.stocks.items():
                 if mkt != "TWSE":
                     continue
-                f = 1_000_000 if i % 3 else -500_000
-                t = 200_000
+                f, t = self.flows.get((code, d), (1_000_000 if i % 3 else -500_000, 200_000))
                 rows.append([code, name, "0", "0", c(f), "0", "0", "0", "0", "0", c(t), c(50_000), "0", "0", "0", "0", "0", "0", c(f + t + 50_000)])
             return 200, json.dumps({"stat": "OK", "date": d, "fields": T86_FIELDS, "data": rows}).encode()
         if path.endswith("/MI_MARGN"):
@@ -206,6 +214,7 @@ def setup_env(opts, codes=("2330", "2454", "6488"), home=None):
     os.environ["TWRADAR_HOME"] = home or tempfile.mkdtemp()
     from twradar.cli import open_all
     cfg = load_config()
+    cfg.home = os.environ["TWRADAR_HOME"]  # 測試用：記下資料夾
     cfg.request_interval = 0
     db, st = open_all(cfg)
 
@@ -1038,6 +1047,115 @@ class V3RulesTests(unittest.TestCase):
         self.assertEqual(sig["light"], "wait")          # 上車：等第 2 天確認
         self.assertEqual(sig["pending"], "go")
         self.assertEqual(sig["hold"]["light"], "exit")  # 停損：當日執行
+
+
+class BacktestTests(unittest.TestCase):
+    """回溯分析：不偷看未來、股票池、交易模擬、報表。"""
+
+    @classmethod
+    def setUpClass(cls):
+        from twradar.jobs import Crawler
+        cls.days = weekdays(150)
+        fx = FakeExchange(cls.days)
+        # 2330：前 100 天在 100 附近，之後漲到 110 以上，再跌到 90 以下
+        path = [100 + (i % 3) for i in range(100)] + [106 + i * 0.5 for i in range(20)] + [90 - i * 0.2 for i in range(30)]
+        fx.set_path("2330", path)
+        fx.taiex = {d: 20000 + i * 10 for i, d in enumerate(cls.days)}
+        _, opts = start_fake(fx)
+        cls.cfg, cls.db, cls.st = setup_env(opts)
+        cr = Crawler(cls.db, cls.cfg, cls.st, transport=Fetcher(0, "test"))
+        for d in cls.days:
+            cr.crawl_day(d, final=True, analyze=False)
+        cls.dates = [r["date"] for r in cls.db.q("SELECT date FROM market WHERE taiex IS NOT NULL ORDER BY date")]
+
+    def test_no_lookahead(self):
+        """回溯時的指標，必須等於當天實際用資料庫算出的指標（只用當天以前的資料）。"""
+        from twradar.analysis import indicators_many
+        from twradar.backtest import History
+        h = History(self.db, ["2330", "6488"], self.dates[-1])
+        for d in (self.dates[70], self.dates[110], self.dates[-1]):
+            live = indicators_many(self.db, ["2330", "6488"], d)
+            for c in ("2330", "6488"):
+                bt = h.rec(c, d, DEFAULT_RULES)
+                for k, v in live[c].items():
+                    if k in ("source", "holdersDate", "whaleLots", "whalePct", "retailLots", "retailPeople", "holdersTotal",
+                             "totalShares", "capAmt"):
+                        continue
+                    self.assertEqual(bt.get(k), v, (c, d, k))
+
+    def test_universe_point_in_time(self):
+        from twradar.backtest import BTConfig, rank_universe
+        u = rank_universe(self.db, self.dates[100], BTConfig("", "", "", top_large=1, top_mid=2))
+        self.assertEqual(u["6488"], {"上櫃"})
+        self.assertEqual(sorted(x for c in ("2330", "2454") for x in u[c]), ["中型", "大型"])
+
+    def test_trade_simulation(self):
+        """自訂規則：收盤 > 105 上車、收盤 < 95 停損，檢查成交日與報酬（隔日開盤成交、扣費稅）。"""
+        from twradar import backtest as B
+        S = self.st.get()
+        S["conditions"] = [{"id": "cUp", "label": "上", "left": {"field": "close"}, "op": ">", "right": 105},
+                           {"id": "cDn", "label": "下", "left": {"field": "close"}, "op": "<", "right": 95}]
+        S["playbooks"] = {"entry": [{"light": "add", "label": "上車", "when": {"all": ["notHolding", "cUp"]}},
+                                    {"light": "watch", "default": True}],
+                          "hold": [{"light": "exit", "label": "停損", "when": "cDn"}, {"light": "keep", "default": True}]}
+        S["watchlist"] = [w for w in S["watchlist"] if w["code"] == "2330"]
+        conf = B.BTConfig(start=self.dates[80], end=self.dates[-1], split=self.dates[120], universe="watchlist")
+        res = B.run(self.db, S, conf)
+        trades = res["results"][0]["tradeList"]
+        self.assertEqual(len(trades), 1)
+        t = trades[0]
+        self.assertEqual((t["entry"], t["exit"], t["reason"]), (self.dates[101], self.dates[121], "停損"))
+        # 買在 106（第 101 天開盤＝第 100 天收盤），賣在 90（第 121 天開盤＝第 120 天收盤）
+        fee, tax = 0.001425, 0.003
+        self.assertAlmostEqual(t["ret"], ((90 * (1 - fee - tax)) / (106 * (1 + fee)) - 1) * 100, 2)
+        ev = {(e["kind"], e["tag"], e["regime"], e["sample"]): e for e in res["results"][0]["events"]}
+        self.assertEqual(ev[("退場：停損", "全部", "全部", "全期")]["f5"]["n"], 1)
+
+    def test_cli_and_report(self):
+        import contextlib
+        from types import SimpleNamespace
+        from twradar.cli import run_backtest
+        out = Path(tempfile.mkdtemp())
+        os.environ["TWRADAR_HOME"] = self.cfg.home
+        try:
+            args = SimpleNamespace(start=None, end=None, split=None, universe="auto", grid=["profitTargetPct=8,12"],
+                                   max_adds=2, out=str(out))
+            with contextlib.redirect_stdout(io.StringIO()) as buf:
+                code = run_backtest(self.cfg, args)
+        finally:
+            os.environ["TWRADAR_HOME"] = TMP
+        self.assertEqual(code, 0, buf.getvalue())
+        html_ = (out / "report.html").read_text(encoding="utf-8")
+        for k in ("回溯分析", "進場訊號", "參數組合比較", "profitTargetPct=8", "注意事項"):
+            self.assertIn(k, html_)
+        res = json.loads((out / "result.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(res["results"]), 3)
+        self.assertTrue((out / "trades.csv").exists())
+
+    def test_grid_validation(self):
+        from twradar import backtest as B
+        self.assertEqual(len(B.parse_grid(["a=1,2", "b=3,4"])), 5)
+        with self.assertRaises(ValueError):
+            B.parse_grid(["a=" + ",".join(map(str, range(61)))])
+        conf = B.BTConfig(start=self.dates[80], end=self.dates[-1], split=self.dates[120],
+                          variants=[("x", {"pullbackDays": 5})])
+        with self.assertRaises(ValueError):
+            B.run(self.db, self.st.get(), conf)
+
+    def test_not_enough_data(self):
+        import contextlib
+        from types import SimpleNamespace
+        from twradar.cli import run_backtest
+        cfg, _, _ = setup_env({})
+        os.environ["TWRADAR_HOME"] = cfg.home
+        try:
+            with contextlib.redirect_stdout(io.StringIO()) as buf:
+                code = run_backtest(cfg, SimpleNamespace(start=None, end=None, split=None, universe="auto", grid=[],
+                                                         max_adds=2, out=None))
+        finally:
+            os.environ["TWRADAR_HOME"] = TMP
+        self.assertEqual(code, 1)
+        self.assertIn("backfill", buf.getvalue())
 
 
 if __name__ == "__main__":

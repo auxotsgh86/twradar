@@ -1,6 +1,6 @@
 [project]
 name = "twradar"
-version = "0.2.0.dev5"
+version = "0.2.0.dev6"
 description = "台股右側加碼雷達：盤後籌碼爬取、SQLite 儲存、訊號分析、Web API 與 UI"
 requires-python = ">=3.10"
 license = { text = "MIT" }
