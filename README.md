@@ -130,7 +130,7 @@ API 全部需要 token，請不要公開分享含 token 的網址。
 | GET | `/api/v1/days/{YYYY-MM-DD}` | 指定日；`?format=csv`、`radar`（可匯入 claude.ai 雷達工具）、`status`（只回狀態） |
 | GET | `/api/v1/stocks/{code}/history?days=120` | 個股歷史（含 MA20/MA60、法人、融資）；`&format=csv` |
 | GET | `/api/v1/dates` | 所有日期與狀態 |
-| GET | `/api/v1/status` | 系統狀態、排程、補抓進度 |
+| GET | `/api/v1/status` | 系統狀態、排程、補抓進度、最近的警告與錯誤、集保抓取紀錄、最新一次回溯分析摘要 |
 | GET/POST/DELETE | `/api/v1/watchlist` | 觀察清單（POST 為管理；JSON：`code,name,market,group,note,keyLevel,holding,cost,shares`） |
 | GET/PUT | `/api/v1/rules` | 判定門檻（PUT 為管理） |
 | POST | `/api/v1/crawl` `/api/v1/analyze` `/api/v1/backfill` | 手動觸發（管理） |

@@ -623,6 +623,14 @@ class AuthApiTests(unittest.TestCase):
         cookie = (h.get("Set-Cookie") or "").split(";")[0]
         return st, {"Cookie": cookie} if cookie else {}
 
+    def test_status_has_issues(self):
+        self.db.log("warn", "集保股權分散表抓取失敗：測試")
+        st, js, _ = self.call("/api/v1/status", headers={"Authorization": "Bearer " + self.cfg.read_token})
+        self.assertEqual(st, 200)
+        self.assertIn("集保", js["recentIssues"][0]["message"])
+        self.assertIn("集保", js["holdersLog"][0]["message"])
+        self.assertIsNone(js["backtest"])
+
     def test_roles(self):
         R = {"Authorization": "Bearer " + self.cfg.read_token}
         A = {"Authorization": "Bearer " + self.cfg.admin_token}
@@ -1115,15 +1123,20 @@ class BacktestTests(unittest.TestCase):
         import contextlib
         from types import SimpleNamespace
         from twradar.cli import run_backtest
-        out = Path(tempfile.mkdtemp())
+        from twradar.server import latest_backtest
+        out = Path(self.cfg.home) / "backtest" / "20261114-010000"
         os.environ["TWRADAR_HOME"] = self.cfg.home
         try:
             args = SimpleNamespace(start=None, end=None, split=None, universe="auto", grid=["profitTargetPct=8,12"],
                                    max_adds=2, out=str(out))
             with contextlib.redirect_stdout(io.StringIO()) as buf:
                 code = run_backtest(self.cfg, args)
+            summary = latest_backtest()  # 狀態 API 會附上最新一次回溯摘要
         finally:
             os.environ["TWRADAR_HOME"] = TMP
+        self.assertEqual(summary["run"], "20261114-010000")
+        self.assertEqual(len(summary["variants"]), 3)
+        self.assertIn("全期", summary["trades"])
         self.assertEqual(code, 0, buf.getvalue())
         html_ = (out / "report.html").read_text(encoding="utf-8")
         for k in ("回溯分析", "進場訊號", "參數組合比較", "profitTargetPct=8", "注意事項"):

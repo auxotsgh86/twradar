@@ -184,7 +184,46 @@ class App:
                 "maxWatchlist": self.cfg.max_watchlist, "finmindFallback": bool(self.settings.source_plan()[1]),
                 "sources": {"primary": self.crawler.step_ids, "fallback": [p.id for p in self.crawler.fallback]},
                 "settingsError": self.settings.last_error, "holdersDate": self.db.holders_latest(),
-                "recentRuns": runs}
+                "recentRuns": runs,
+                # 讓外部（例如 Claude）只用這一個網址就能掌握狀況
+                "recentIssues": [dict(r) for r in self.db.q(
+                    "SELECT * FROM events WHERE level IN ('warn','error') ORDER BY id DESC LIMIT 20")],
+                "holdersLog": [dict(r) for r in self.db.q(
+                    "SELECT * FROM events WHERE message LIKE '%集保%' ORDER BY id DESC LIMIT 5")],
+                "backtest": latest_backtest()}
+
+
+def latest_backtest() -> dict | None:
+    """最新一次回溯分析的摘要（~/twradar-data/backtest/*/result.json）。"""
+    from .config import home_dir
+    root = home_dir() / "backtest"
+    files = sorted(root.glob("*/result.json")) if root.exists() else []
+    if not files:
+        return None
+    try:
+        res = json.loads(files[-1].read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        return {"file": str(files[-1]), "error": repr(e)}
+    r0 = res["results"][0]
+    pick = {(e["kind"], e["tag"], e["regime"], e["sample"]): e for e in r0.get("events", [])}
+    kinds = sorted({e["kind"] for e in r0.get("events", [])})
+    signals = {}
+    for k in kinds:
+        row = {}
+        for reg in ("全部", "多頭", "盤整", "空頭"):
+            for smp in ("樣本內", "樣本外"):
+                e = pick.get((k, "全部", reg, smp))
+                if e and e.get("f20", {}).get("n"):
+                    row[f"{reg}/{smp}"] = {h: e.get(h) for h in ("f5", "f10", "f20")}
+        signals[k] = row
+    by_tag = {tag: {smp: [pick[(k, tag, "全部", smp)]["f20"] for k in ("上車", "加碼") if (k, tag, "全部", smp) in pick]
+                    for smp in ("樣本內", "樣本外")} for tag in ("大型", "中型", "上櫃", "觀察清單")}
+    return {"run": files[-1].parent.name, "config": res.get("config"), "coverage": res.get("coverage"),
+            "trades": r0.get("trades"), "byTag": r0.get("byTag"), "byReason": r0.get("byReason"),
+            "byHalfYear": r0.get("byHalfYear"), "signals": signals, "entryByTag": by_tag,
+            "buyHold": res.get("buyHold"),
+            "variants": [{"name": r["name"], "inSample": r["trades"]["樣本內"], "outSample": r["trades"]["樣本外"]}
+                         for r in res["results"]]}
 
 
 def make_handler(app: App):
