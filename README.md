@@ -28,7 +28,7 @@
 ## 快速開始（開發者）
 
 ```bash
-git clone https://github.com/<你的帳號>/twradar.git
+git clone https://github.com/auxotsgh86/twradar.git
 cd twradar
 python3 -m twradar serve          # 不需要安裝任何套件；預設 http://localhost:8765
 python3 -m twradar info           # 顯示網址與 token
@@ -49,7 +49,7 @@ python3 -m twradar doctor         # 測試資料來源是否正常
 
 **Linux**
 ```bash
-git clone https://github.com/<你的帳號>/twradar.git && cd twradar && bash deploy/install.sh
+git clone https://github.com/auxotsgh86/twradar.git && cd twradar && bash deploy/install.sh
 ```
 
 **之後請保持：** 電腦開機、接上電源、不要進入睡眠（Mac：系統設定 → 電池／能源 → 開啟「防止自動進入睡眠」）。
