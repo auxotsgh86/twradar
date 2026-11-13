@@ -8,7 +8,7 @@ const fmtS = (v, d = 0) => isNum(v) ? (v > 0 ? "+" : "") + fmt(v, d) : "—";
 const fmtP = v => isNum(v) ? (v > 0 ? "+" : "") + v.toFixed(2) + "%" : "—";
 const pd = v => isNum(v) ? (v < 200 ? 2 : (v % 1 ? 1 : 0)) : 0;
 const cls = v => isNum(v) ? (v > 0 ? "up" : v < 0 ? "down" : "") : "";
-const LIGHT = {go: "加碼訊號", wait: "觀察中", stop: "不宜加碼", na: "資料不足", keep: "續抱", reduce: "減碼", exit: "退場"};
+const LIGHT = {go: "上車／加碼", wait: "觀察中", stop: "不宜加碼", na: "資料不足", keep: "續抱", reduce: "減碼", exit: "退場"};
 const holdLine = h => [
   [h.rule && h.rule !== LIGHT[h.light] ? h.rule : "", ...(h.reasons || [])].filter(Boolean).join("、"),
   h.weak && h.weak.length ? "留意：" + h.weak.join("、") : "",
@@ -84,7 +84,7 @@ const ck = (label, st, why) => `<span class="ck ${st}" title="${esc(why || "")}"
 function cardHTML(s) {
   const r = s.data, g = s.signal;
   return `<article class="card ${g.light}" data-code="${esc(s.code)}" tabindex="0">
-   <div class="row between"><div><b>${esc(s.code)} ${esc(s.name)}</b><div class="small muted">${esc(s.group || "")}・${s.market === "TPEx" ? "上櫃" : "上市"}</div></div>${badge(g.light)}</div>
+   <div class="row between"><div><b>${esc(s.code)} ${esc(s.name)}</b><div class="small muted">${esc(s.group || "")}・${s.market === "TPEx" ? "上櫃" : "上市"}</div></div>${badge(g.light, g.lightLabel)}</div>
    <div class="price"><span class="c ${cls(r.chgPct)}">${fmt(r.close, pd(r.close))}</span><span class="num ${cls(r.chgPct)}">${fmtP(r.chgPct)}</span>
      <span class="small muted num">量 ${fmt(r.vol)}${isNum(g.volRatio) ? "・" + g.volRatio.toFixed(2) + "x" : ""}</span></div>
    <div class="metrics">
@@ -98,7 +98,8 @@ function cardHTML(s) {
        <div><span class="k">散戶人數週增</span><span class="v ${cls(-(r.retailChg || 0))}">${isNum(r.retailChg) ? fmtS(r.retailChg) : "—"}</span></div>` : ""}</div>
    <div class="checks">${ck("法人", g.checks.inst, g.instWhy)}${ck("主力", g.checks.main)}${ck("散戶", g.checks.retail)}${ck("價量", g.checks.priceVolume)}${g.warnings.map(w => `<span class="ck warn">! ${esc(w)}</span>`).join("")}</div>
    ${g.light === "wait" && g.needs.length ? `<div class="need"><b>還差：</b>${esc(g.needs.join("；"))}</div>` : ""}
-   ${g.light === "go" ? `<div class="need"><b>依據：</b>${esc([g.instWhy, g.checks.retail === "pass" ? "融資減且上漲" : "", g.checks.main === "pass" ? "主力集中" : "", "價量確認"].filter(Boolean).join("、"))}；觀察價位 月線 ${fmt(r.ma20, 2)}${isNum(r.prevHigh) ? "、前高 " + fmt(r.prevHigh, pd(r.prevHigh)) : ""}</div>` : ""}
+   ${g.light === "wait" && g.rule && g.rule !== "觀察" ? `<div class="need"><b>${esc(g.rule)}：</b>${esc(g.warnings.join("；"))}</div>` : ""}
+   ${g.light === "go" ? `<div class="need"><b>依據：</b>${esc(g.lightLabel || "")}・${esc([g.instWhy, g.checks.retail === "pass" ? "融資健康" : "", g.checks.main === "pass" ? "主力集中" : "", "價量確認"].filter(Boolean).join("、"))}；觀察價位 月線 ${fmt(r.ma20, 2)}${isNum(r.prevHigh) ? "、前高 " + fmt(r.prevHigh, pd(r.prevHigh)) : ""}</div>` : ""}
    ${g.light === "stop" ? `<div class="need"><b>原因：</b>${esc(g.warnings.join("；"))}</div>` : ""}
    ${g.hold ? `<div class="need row" style="gap:6px;align-items:baseline"><b>持有：</b>${badge(g.hold.light)}<span>${esc(holdLine(g.hold))}</span></div>` : ""}
    ${g.keyLevelNote ? `<div class="note">${esc(g.keyLevelNote)}</div>` : ""}${s.note ? `<div class="note">${esc(s.note)}</div>` : ""}
@@ -107,7 +108,7 @@ function cardHTML(s) {
 function tableHTML(stocks) {
   return `<div class="tablewrap"><table><thead><tr><th class="l">代號</th><th class="l">名稱</th><th>收盤</th><th>漲跌%</th><th>外資</th><th>投信</th><th>融資增減</th><th>量比</th><th>月線位置</th><th class="l">燈號</th></tr></thead><tbody>
   ${stocks.map(s => { const r = s.data, g = s.signal; const pos = g.belowMa20 === null || g.belowMa20 === undefined ? "—" : g.belowMa20 ? "月線下" : g.maDistPct < 0 ? "貼近月線" : "月線上";
-    return `<tr><td class="l num">${esc(s.code)}</td><td class="l">${esc(s.name)}</td><td class="num">${fmt(r.close, pd(r.close))}</td><td class="num ${cls(r.chgPct)}">${fmtP(r.chgPct)}</td><td class="num ${cls(r.foreign)}">${fmtS(r.foreign)}</td><td class="num ${cls(r.trust)}">${fmtS(r.trust)}</td><td class="num">${fmtS(r.marginChg)}</td><td class="num">${isNum(g.volRatio) ? g.volRatio.toFixed(2) + "x" : "—"}</td><td>${pos} <span class="muted num">${isNum(g.maDistPct) ? "(" + fmtS(g.maDistPct, 1) + "%)" : ""}</span></td><td class="l">${badge(g.light)}</td></tr>`; }).join("")}
+    return `<tr><td class="l num">${esc(s.code)}</td><td class="l">${esc(s.name)}</td><td class="num">${fmt(r.close, pd(r.close))}</td><td class="num ${cls(r.chgPct)}">${fmtP(r.chgPct)}</td><td class="num ${cls(r.foreign)}">${fmtS(r.foreign)}</td><td class="num ${cls(r.trust)}">${fmtS(r.trust)}</td><td class="num">${fmtS(r.marginChg)}</td><td class="num">${isNum(g.volRatio) ? g.volRatio.toFixed(2) + "x" : "—"}</td><td>${pos} <span class="muted num">${isNum(g.maDistPct) ? "(" + fmtS(g.maDistPct, 1) + "%)" : ""}</span></td><td class="l">${badge(g.light, g.lightLabel)}</td></tr>`; }).join("")}
   </tbody></table></div>`;
 }
 
@@ -222,8 +223,8 @@ async function viewReport(date) {
   const withMA = st.filter(s => isNum(s.signal.maDistPct)).map(s => ({label: s.code + " " + s.name, v: s.signal.maDistPct, light: s.signal.light}));
   const sec = (k, title) => { const list = st.filter(s => s.signal.light === k); if (!list.length) return "";
     return `<div class="sec"><h2 style="color:var(--${k === "na" ? "na" : k})">${title}（${list.length}）</h2>${list.map(s => { const r = s.data, g = s.signal;
-      const line = k === "go" ? "依據：" + [g.instWhy, g.checks.retail === "pass" ? "融資減且上漲" : "", g.checks.main === "pass" ? "主力集中" : "", "價量確認"].filter(Boolean).join("、") + `；觀察價位 月線 ${fmt(r.ma20, 2)}${isNum(r.prevHigh) ? "、前高 " + fmt(r.prevHigh, pd(r.prevHigh)) : ""}`
-        : k === "wait" ? "還差：" + (g.needs.join("；") || "—") : k === "stop" ? "原因：" + g.warnings.join("；") : "未取得：" + g.missing.join("、");
+      const line = k === "go" ? (g.lightLabel || "") + "：" + [g.instWhy, g.checks.retail === "pass" ? "融資健康" : "", g.checks.main === "pass" ? "主力集中" : "", "價量確認"].filter(Boolean).join("、") + `；觀察價位 月線 ${fmt(r.ma20, 2)}${isNum(r.prevHigh) ? "、前高 " + fmt(r.prevHigh, pd(r.prevHigh)) : ""}`
+        : k === "wait" ? (g.rule && g.rule !== "觀察" ? g.rule + "；" : "") + "還差：" + (g.needs.join("；") || "—") : k === "stop" ? "原因：" + g.warnings.join("；") : "未取得：" + g.missing.join("、");
       return `<p style="margin:8px 0"><b>${esc(s.code)} ${esc(s.name)}</b>　收 ${fmt(r.close, pd(r.close))}（<span class="${cls(r.chgPct)}">${fmtP(r.chgPct)}</span>）　外資 ${fmtS(r.foreign)}　投信 ${fmtS(r.trust)}　融資 ${fmtS(r.marginChg)}<br><span class="muted">${esc(line)}${g.keyLevelNote ? "；" + esc(g.keyLevelNote) : ""}</span></p>`; }).join("")}</div>`; };
   $("#view").innerHTML = `
    <div class="row between noprint"><div class="row"><select id="dsel" aria-label="資料日">${dateOptions(d)}</select>${e.ready ? "" : badge(e.status, e.statusText)}</div>
@@ -234,12 +235,12 @@ async function viewReport(date) {
     <div class="tiles">${["go", "wait", "stop"].map(k => `<div class="tile ${k}"><span class="n">${e.summary[k]}</span><span class="l">${LIGHT[k]}</span></div>`).join("")}</div>
     <div class="sec"><h2>訊號矩陣</h2><div class="tablewrap"><table class="matrix"><thead><tr><th class="l">個股</th><th>法人</th><th>主力</th><th>散戶</th><th>價量</th><th>燈號</th>${st.some(s => s.signal.hold) ? "<th>持有面</th>" : ""}</tr></thead><tbody>
      ${st.map(s => { const c = s.signal.checks, mk = v => `<span class="mx ${v}">${{pass: "✓", fail: "✕", na: "?"}[v]}</span>`;
-       return `<tr><td class="l"><b class="num">${esc(s.code)}</b> ${esc(s.name)}</td><td>${mk(c.inst)}</td><td>${mk(c.main)}</td><td>${mk(c.retail)}</td><td>${mk(c.priceVolume)}</td><td>${badge(s.signal.light)}</td>${st.some(x => x.signal.hold) ? `<td>${s.signal.hold ? badge(s.signal.hold.light) : ""}</td>` : ""}</tr>`; }).join("")}
+       return `<tr><td class="l"><b class="num">${esc(s.code)}</b> ${esc(s.name)}</td><td>${mk(c.inst)}</td><td>${mk(c.main)}</td><td>${mk(c.retail)}</td><td>${mk(c.priceVolume)}</td><td>${badge(s.signal.light, s.signal.lightLabel)}</td>${st.some(x => x.signal.hold) ? `<td>${s.signal.hold ? badge(s.signal.hold.light) : ""}</td>` : ""}</tr>`; }).join("")}
     </tbody></table></div></div>
     <div class="sec"><h2>收盤與月線乖離（%）</h2><div class="small muted">0 線為月線，右側＝站上月線；長條顏色為燈號</div>${hBars(withMA, {color: lightColor, unit: "%"})}</div>
     <div class="sec"><h2>外資／投信 當日買賣超（張）</h2><div class="legend"><span><i style="background:var(--c-foreign)"></i>外資</span><span><i style="background:var(--c-trust)"></i>投信</span></div>
      ${divBars(st.map(s => s.code), [{values: st.map(s => s.data.foreign ?? null), color: "var(--c-foreign)"}, {values: st.map(s => s.data.trust ?? null), color: "var(--c-trust)"}], {h: 220, lab: d => d, every: 1})}</div>
-    ${holdSec(st)}${sec("go", "加碼訊號")}${sec("wait", "觀察中")}${sec("stop", "轉弱／不宜加碼")}${sec("na", "資料不足")}
+    ${holdSec(st)}${sec("go", "上車／加碼訊號")}${sec("wait", "觀察中")}${sec("stop", "轉弱／不宜加碼")}${sec("na", "資料不足")}
     <div class="sec"><h2>精簡表</h2>${tableHTML(st)}</div>
     <div class="small muted">資料來源：證交所、櫃買中心${st.some(s => (s.data.source || "").includes("FinMind")) ? "、FinMind" : ""}。以上為籌碼訊號整理，非投資建議。</div>
    </article>`;
@@ -302,6 +303,7 @@ async function viewSettings() {
       <div class="field"><label for="a-hold">持有中</label><select id="a-hold"><option value="0">否</option><option value="1">是</option></select></div>
       <div class="field"><label for="a-cost">成本價（選填）</label><input id="a-cost" inputmode="decimal"></div>
       <div class="field"><label for="a-shares">股數（選填）</label><input id="a-shares" inputmode="numeric"></div>
+      <div class="field"><label for="a-buy">買進日期（選填，保本線用）</label><input id="a-buy" type="date"></div>
       <div class="field" style="justify-content:flex-end"><button class="primary">加入／更新</button></div></form>
      <div class="tablewrap"><table><thead><tr><th class="l">代號</th><th class="l">名稱</th><th class="l">市場</th><th class="l">分組</th><th>關鍵價</th><th class="l">持有</th><th class="l">觀察重點</th><th></th></tr></thead><tbody>
       ${wl.map(w => `<tr><td class="l num">${esc(w.code)}</td><td class="l">${esc(w.name)}</td><td class="l">${w.market === "TPEx" ? "上櫃" : "上市"}</td><td class="l">${esc(w.group)}</td><td class="num">${fmt(w.keyLevel)}</td><td class="l">${w.holding ? "是" + (isNum(w.cost) ? "（成本 " + fmt(w.cost, 2) + "）" : "") : ""}</td><td class="l" style="white-space:normal">${esc(w.note)}</td>
@@ -327,11 +329,12 @@ GET/PUT /api/v1/settings        全部設定（管理）；/settings/history、/
   $("#bfBtn").onclick = () => act("/backfill", {}, "已排入歷史補抓");
   $("#addForm").addEventListener("submit", async ev => { ev.preventDefault();
     const b = {code: $("#a-code").value.trim(), name: $("#a-name").value.trim(), market: $("#a-mkt").value, group: $("#a-grp").value.trim(), note: $("#a-note").value.trim(), keyLevel: $("#a-key").value ? Number($("#a-key").value) : null,
-      holding: $("#a-hold").value === "1", cost: $("#a-cost").value ? Number($("#a-cost").value) : null, shares: $("#a-shares").value ? parseInt($("#a-shares").value, 10) : null};
+      holding: $("#a-hold").value === "1", cost: $("#a-cost").value ? Number($("#a-cost").value) : null, shares: $("#a-shares").value ? parseInt($("#a-shares").value, 10) : null,
+      buyDate: $("#a-buy").value || null};
     try { await api("/watchlist", {method: "POST", body: JSON.stringify(b)}); toast("已儲存 " + b.code + "，歷史資料會在背景補齊"); viewSettings(); } catch (err) { toast(err.message); } });
   document.querySelectorAll("[data-edit]").forEach(btn => btn.onclick = () => { const w = JSON.parse(btn.dataset.edit);
     $("#a-code").value = w.code; $("#a-name").value = w.name; $("#a-mkt").value = w.market; $("#a-grp").value = w.group || ""; $("#a-note").value = w.note || ""; $("#a-key").value = w.keyLevel ?? "";
-    $("#a-hold").value = w.holding ? "1" : "0"; $("#a-cost").value = w.cost ?? ""; $("#a-shares").value = w.shares ?? ""; $("#a-code").focus(); });
+    $("#a-hold").value = w.holding ? "1" : "0"; $("#a-cost").value = w.cost ?? ""; $("#a-shares").value = w.shares ?? ""; $("#a-buy").value = w.buyDate ? w.buyDate.replace(/^(\d{4})-?(\d{2})-?(\d{2})$/, "$1-$2-$3") : ""; $("#a-code").focus(); });
   document.querySelectorAll("[data-del]").forEach(btn => btn.onclick = () => sheet(`<h2>移除 ${esc(btn.dataset.del)}？</h2><div class="small muted">已抓取的歷史資料會保留。</div><div class="row" style="justify-content:flex-end"><button data-close>取消</button><button class="danger" id="yes">移除</button></div>`,
     s => s.querySelector("#yes").onclick = async () => { await api("/watchlist/" + btn.dataset.del, {method: "DELETE"}); $("#layer").innerHTML = ""; toast("已移除"); viewSettings(); }));
   $("#rulesForm").addEventListener("submit", async ev => { ev.preventDefault(); const b = {}; rules.params.forEach(p => { const v = Number(ev.target[p.id].value); if (isFinite(v)) b[p.id] = v; });

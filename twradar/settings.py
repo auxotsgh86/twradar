@@ -53,7 +53,7 @@ BUILTIN_PARAMS = [
     {"id": "blowoff", "label": "爆量倍數 ≥", "value": 1.5, "unit": "倍", "min": 1, "max": 20, "note": ""},
 ]
 
-from .rules import ENGINE_PARAMS, default_playbooks, validate_rules  # noqa: E402
+from .rules import ENGINE_PARAMS, RULES_VERSION, default_playbooks, upgrade, validate_rules  # noqa: E402
 
 BUILTIN_PARAMS += ENGINE_PARAMS
 
@@ -85,13 +85,14 @@ def default_settings() -> dict:
         "conditions": [],
         "playbooks": default_playbooks(),
         "confirmDays": 1,
+        "rulesVersion": RULES_VERSION,
     }
 
 
 def stock(**kw) -> dict:
     """觀察清單一筆（補齊欄位）。"""
     base = {"code": "", "name": "", "market": "TWSE", "group": "", "note": "", "keyLevel": None,
-            "holding": False, "cost": None, "shares": None, "whaleLots": None}
+            "holding": False, "cost": None, "shares": None, "buyDate": None, "whaleLots": None}
     base.update({k: v for k, v in kw.items() if k in base})
     return base
 
@@ -209,6 +210,9 @@ def validate(s: dict, max_watchlist: int = 50, providers: dict | None = None) ->
                 v = w.get(k)
                 if v is not None and (not isinstance(v, int) or isinstance(v, bool) or v <= 0):
                     e(f"{p}.{k}", "必須是正整數或 null")
+            bd = w.get("buyDate")
+            if bd is not None and (not isinstance(bd, str) or not re.fullmatch(r"\d{4}-?\d{2}-?\d{2}", bd)):
+                e(f"{p}.buyDate", "日期格式必須是 YYYY-MM-DD")
             if not isinstance(w.get("holding", False), bool):
                 e(f"{p}.holding", "必須是 true 或 false")
             for k in w:
@@ -259,6 +263,9 @@ def validate(s: dict, max_watchlist: int = 50, providers: dict | None = None) ->
     if not isinstance(pb, dict) or not all(isinstance(pb.get(k), list) for k in ("entry", "hold")):
         e("playbooks", "必須包含 entry 與 hold 兩個陣列")
     validate_rules(s, e)
+    rv = s.get("rulesVersion")
+    if not isinstance(rv, int) or isinstance(rv, bool):
+        e("rulesVersion", "必須是整數")
     cd = s.get("confirmDays")
     if not isinstance(cd, int) or isinstance(cd, bool) or not 1 <= cd <= 5:
         e("confirmDays", "必須是 1～5 的整數")
@@ -274,7 +281,7 @@ def normalize(s: dict) -> dict:
     s = copy.deepcopy(s)
     dflt = default_settings()
     for k, v in dflt.items():
-        if k not in s:
+        if k not in s and k != "rulesVersion":
             s[k] = copy.deepcopy(v) if k != "watchlist" else []
     if isinstance(s.get("display"), dict):
         s["display"].setdefault("preset", "tw")
@@ -290,6 +297,7 @@ def normalize(s: dict) -> dict:
         for k, v in default_playbooks().items():
             if not s["playbooks"].get(k):
                 s["playbooks"][k] = v
+    s = upgrade(s)  # 舊預設規則／參數升級到目前版本（使用者改過的不動）
     if isinstance(s.get("params"), list):
         have = {p.get("id") for p in s["params"] if isinstance(p, dict)}
         s["params"] += [copy.deepcopy(b) for b in BUILTIN_PARAMS if b["id"] not in have]

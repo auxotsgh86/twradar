@@ -59,7 +59,8 @@ class FakeExchange:
             p = base
             for i, d in enumerate(days):
                 prev = p
-                p = round(base * (1 + 0.002 * i) + (5 if i % 2 else -3), 1)
+                if d not in self.holiday:  # 休市日價格不變（漲跌是相對前一個交易日）
+                    p = round(base * (1 + 0.002 * i) + (5 if i % 2 else -3), 1)
                 self.px[(code, d)] = (prev, p, 10_000_000 + i * 100_000)
 
     tdcc_date = None      # 集保資料日（預設最後一天）
@@ -234,42 +235,50 @@ class ParserTests(unittest.TestCase):
 
 def _v013_settings():
     """v0.1.3 的規則（沒有「法人對作」），用於對照。"""
-    from twradar.rules import default_playbooks
-    pb = default_playbooks()
+    from twradar.rules import p3_playbooks
+    pb = p3_playbooks()
     pb["entry"][1]["when"]["any"].remove("instConflict")
     return {"playbooks": pb, "conditions": []}
 
 
+def _p3_settings():
+    from twradar.rules import p3_playbooks
+    return {"playbooks": p3_playbooks(), "conditions": []}
+
+
 V013 = _v013_settings()
+P3 = _p3_settings()
+P3_RULES = {**DEFAULT_RULES, "conflictMinAmt": 1000, "profitTargetPct": 20, "limitNearPct": 9, "whaleAmount": 0}
 
 
 class EngineTests(unittest.TestCase):
+    """v0.2 P3 規則（v0.1.3 判定＋法人對作）的行為；v0.3 規則見 V3RulesTests。"""
     """用 2026/11/11 實際數字，結果需與晨報一致。"""
 
     def light(self, rec, stock=None):
-        return evaluate(rec, stock or {}, DEFAULT_RULES)["light"]
+        return evaluate(rec, stock or {}, P3_RULES, P3)["light"]
 
     def test_tsmc_wait_volume(self):
         r = {"close": 2395, "chgPct": 4.81, "vol": 30370, "vol5": 58445.6, "ma20": 2362.75, "prevHigh": 2540,
              "foreign": 6038, "trust": 2385, "foreignStreak": 1, "trustStreak": 5}
-        e = evaluate(r, {}, DEFAULT_RULES)
+        e = evaluate(r, {}, P3_RULES, P3)
         self.assertEqual(e["light"], "wait")
         self.assertIn("量能", e["needs"][0])
 
     def test_mediatek_near_ma_not_red(self):
         r = {"close": 3990, "chgPct": 4.18, "vol": 10733.6, "vol5": 16606.8, "ma20": 3991.5, "foreign": -426,
              "trust": 112, "foreignStreak": -6, "trustStreak": 6}
-        e = evaluate(r, {"keyLevel": 4000}, DEFAULT_RULES, V013)
+        e = evaluate(r, {"keyLevel": 4000}, P3_RULES, V013)
         self.assertEqual(e["light"], "wait")
         self.assertIn("尚未站上", e["keyLevelNote"])
         # v0.2 新增「法人對作」：外資賣 426、投信買 112 張（約 4.5 億）→ 不宜加碼
-        e = evaluate(r, {"keyLevel": 4000}, DEFAULT_RULES)
+        e = evaluate(r, {"keyLevel": 4000}, P3_RULES, P3)
         self.assertEqual(e["light"], "stop")
         self.assertIn("法人對作", e["warnings"][0])
 
     def test_divergence_red(self):
         r = {"close": 4500, "chgPct": 3.09, "vol": 3933, "vol5": 5544, "ma20": 4772.5, "foreign": -1078, "trust": 55, "marginChg": 245}
-        e = evaluate(r, {}, DEFAULT_RULES)
+        e = evaluate(r, {}, P3_RULES, P3)
         self.assertEqual(e["light"], "stop")
         self.assertTrue(any("背離" in w for w in e["warnings"]))
 
@@ -723,54 +732,59 @@ class RulesEngineTests(unittest.TestCase):
         self.assertEqual(ev({"none": ["f", "f"]}), "pass")
         self.assertEqual(ev({"not": "n"}), "na")
 
-    HOLD = {"close": 120.0, "chgPct": 1.0, "vol": 100, "vol5": 100, "ma20": 110.0, "foreign": 10, "trust": 0,
-            "instStreak": 1, "marginChg": 0, "marginStreak": 0, "marginPos60": 50, "highPct": 1, "upperShadowPct": 10,
-            "high": 121, "low": 118, "open": 119}
+    HOLD = {"close": 120.0, "open": 119.0, "chgPct": 1.0, "vol": 100, "vol5": 100, "ma20": 110.0, "ma20Prev": 109.0,
+            "foreign": 10, "trust": 0, "instNet": 10, "instStreak": 1, "marginChg": 0, "marginStreak": 0,
+            "marginPos60": 50, "marginRange60": 5000, "highPct": 1, "upperShadowPct": 10, "high": 121, "low": 118,
+            "candle": 1, "prevFromHigh20": -1}
 
     def hold(self, rec=None, **stock):
         st = {"holding": True, **stock}
         return evaluate({**self.HOLD, **(rec or {})}, st, DEFAULT_RULES)["hold"]
 
-    def test_hold_layers(self):
+    def test_hold_layers_v3(self):
         self.assertEqual(self.hold(cost=100)["light"], "keep")
-        # 停損：虧損 10% 以上（含費稅）
-        h = self.hold(cost=135)
-        self.assertEqual((h["light"], h["rule"]), ("exit", "停損"))
-        self.assertLess(h["profitPct"], -10)
-        # 停損：跌破月線＋法人連賣，即使獲利
-        h = self.hold({"close": 100, "instStreak": -3}, cost=80)
-        self.assertEqual((h["light"], h["rule"]), ("exit", "停損"))
+        # 停損：虧損 ≥ 10%（最後保險）
+        self.assertEqual(self.hold(cost=135)["rule"], "停損")
+        # 有效跌破下彎月線 1.5%：不用等法人
+        self.assertEqual(self.hold({"close": 108, "ma20Prev": 111}, cost=100)["rule"], "停損")
+        # 跌破月線 0.5% ＋ 當日法人賣超（不必連賣 2 日）
+        self.assertEqual(self.hold({"close": 109.3, "instNet": -50}, cost=100)["rule"], "停損")
+        self.assertEqual(self.hold({"close": 109.3, "instNet": 50}, cost=100)["light"], "keep")
         # 跌破關鍵價
         self.assertEqual(self.hold(keyLevel=125)["light"], "exit")
-        # 獲利 ≥ 20% ＋ 籌碼轉弱 2 項 → 減碼；3 項 → 退場
+        # 保本線：最高曾獲利 ≥ 10%，回吐到 ≤ 2%
+        h = self.hold({"close": 101.5, "ma20": 100, "ma20Prev": 99, "peakClose": 115}, cost=100, buyDate="2026-10-01")
+        self.assertEqual((h["light"], h["rule"]), ("exit", "停損"))
+        self.assertTrue(any("保本" in x for x in h["reasons"]))
+        # 獲利 ≥ 10% ＋ 籌碼轉弱 2 項 → 獲利保護；3 項 → 獲利出場
         two = {"marginStreak": 3, "marginPos60": 90}
-        h = self.hold(two, cost=95)
-        self.assertEqual((h["light"], h["rule"]), ("reduce", "獲利保護"))
-        self.assertEqual(len(h["reasons"]), 3)  # 獲利 + 兩項轉弱
-        h = self.hold({**two, "instStreak": -2}, cost=95)
-        self.assertEqual((h["light"], h["rule"]), ("exit", "獲利出場"))
-        # 獲利不到 20%：籌碼轉弱只提示，不減碼
-        h = self.hold(two, cost=110)
-        self.assertEqual(h["light"], "keep")
-        self.assertEqual(len(h["weak"]), 2)
-        # 過熱：乖離 ≥ 15%、衝高未鎖、爆量開板
-        self.assertEqual(self.hold({"close": 127, "high": 128}, cost=100)["rule"], "過熱")
-        self.assertEqual(self.hold({"highPct": 9.6, "high": 126, "upperShadowPct": 70, "vol": 80}, cost=100)["rule"], "過熱")
-        self.assertEqual(self.hold({"highPct": 9.8, "high": 126, "vol": 250}, cost=100)["rule"], "過熱")
-        # 鎖漲停（收盤＝最高）且量縮：不出場
+        self.assertEqual(self.hold(two, cost=105)["rule"], "獲利保護")
+        self.assertEqual(self.hold({**two, "instStreak": -2}, cost=105)["rule"], "獲利出場")
+        self.assertEqual(self.hold(two, cost=115)["light"], "keep")  # 獲利不到 10%
+        # 融資偏高防呆：60 日融資變化太小不算
+        self.assertEqual(self.hold({**two, "marginRange60": 5}, cost=105)["light"], "keep")
+        # 出貨警訊：高檔留長上影且出量（不再要求量縮）
+        self.assertEqual(self.hold({"highPct": 7.5, "high": 128, "upperShadowPct": 70, "vol": 160}, cost=100)["rule"], "出貨警訊")
+        self.assertEqual(self.hold({"highPct": 7.5, "high": 128, "upperShadowPct": 70, "vol": 80}, cost=100)["light"], "keep")
+        # 乖離過大：紅 K 創高不減碼，收黑才減碼
+        self.assertEqual(self.hold({"close": 127, "high": 128, "open": 125}, cost=100)["light"], "keep")
+        self.assertEqual(self.hold({"close": 127, "high": 128, "open": 128, "candle": -1}, cost=100)["rule"], "出貨警訊")
+        # 大型股乖離門檻 10%
+        self.assertEqual(self.hold({"close": 122, "open": 123, "candle": -1, "capAmt": 5000}, cost=100)["rule"], "出貨警訊")
+        # 高檔爆量長黑＋法人賣
+        h = self.hold({"chgPct": -3.5, "vol": 200, "instNet": -30, "candle": -1, "open": 124}, cost=100)
+        self.assertEqual(h["rule"], "出貨警訊")
+        # 鎖漲停：不出場
         self.assertEqual(self.hold({"highPct": 9.9, "high": 120, "upperShadowPct": 0, "vol": 50}, cost=100)["light"], "keep")
-        # 沒填成本：停損與獲利條件為資料不足，其他照常
-        self.assertEqual(self.hold()["light"], "keep")
-        self.assertEqual(self.hold(keyLevel=125)["light"], "exit")
         # 沒持有：沒有持有面
         self.assertNotIn("hold", evaluate(self.HOLD, {"cost": 100}, DEFAULT_RULES))
 
     def test_conflict_amount_threshold(self):
         r = {"close": 100.0, "chgPct": 1, "vol": 300, "vol5": 100, "ma20": 90, "foreign": 400, "trust": -200,
              "foreignStreak": 3, "marginChg": -1}
-        self.assertEqual(evaluate(r, {}, DEFAULT_RULES)["light"], "stop")    # 投信賣 200 張 × 100 元 = 2,000 萬
+        self.assertEqual(evaluate(r, {}, P3_RULES, P3)["light"], "stop")    # 投信賣 200 張 × 100 元 = 2,000 萬
         r.update(close=10.0, ma20=9.0)
-        self.assertEqual(evaluate(r, {}, DEFAULT_RULES)["light"], "go")      # 200 萬元：雜訊，不算對作
+        self.assertEqual(evaluate(r, {}, P3_RULES, P3)["light"], "go")      # 200 萬元：雜訊，不算對作
 
     def test_custom_condition_in_playbook(self):
         from twradar.settings import default_settings
@@ -848,8 +862,8 @@ class HoldersTests(unittest.TestCase):
 
     def test_levels(self):
         from twradar.analysis import retail_levels, whale_level
-        P = dict(DEFAULT_RULES)
-        self.assertEqual(whale_level(P, {}, 2340), (15, 1000))                 # 預設千張
+        P = {**DEFAULT_RULES, "whaleAmount": 0}
+        self.assertEqual(whale_level(P, {}, 2340), (15, 1000))                 # 固定千張
         self.assertEqual(whale_level(P, {"whaleLots": 400}, 2340), (12, 400))  # 個股另設
         P["whaleAmount"] = 10000                                                # 1 億元
         self.assertEqual(whale_level(P, {}, 2340), (8, 40))                    # 約 43 張 → 40 張級距
@@ -873,14 +887,15 @@ class HoldersTests(unittest.TestCase):
         d2 = days[-1]
         fx.tdcc_date, fx.tdcc_whale, fx.tdcc_retail = d2, 78.5, 1300
         self.assertEqual(cr.crawl_weekly(d2), d2)
-        rec = indicators_many(db, ["2330"], d2)["2330"]
+        rec = indicators_many(db, ["2330"], d2, {"whaleAmount": 0})["2330"]
         self.assertEqual((rec["holdersDate"], rec["whaleLots"], rec["whalePct"], rec["whaleChg"]), (d2, 1000, 78.5, -1.5))
+        self.assertEqual(rec["holdersChgPct"], 12.5)  # 2,400 → 2,700 人
         self.assertEqual(rec["retailChg"], 300)
         # 持有面：獲利達標＋大戶減碼＋散戶增加 → 獲利保護減碼
         rec.update(close=150.0, ma20=140.0, vol=100, vol5=100, chgPct=1)
         h = evaluate(rec, {"holding": True, "cost": 100}, DEFAULT_RULES)["hold"]
         self.assertEqual((h["light"], h["rule"]), ("reduce", "獲利保護"))
-        self.assertTrue(any("大戶" in x for x in h["reasons"]) and any("散戶" in x for x in h["reasons"]))
+        self.assertTrue(any("大戶" in x for x in h["reasons"]) and any("股東人數" in x for x in h["reasons"]))
         # 集保資料還沒更新：不重複寫入、不報錯
         fx.tdcc_date = d2
         from datetime import timedelta
@@ -897,6 +912,132 @@ class HoldersTests(unittest.TestCase):
         with self.assertRaises(SettingsError) as cm:
             st.save(s)
         self.assertEqual(cm.exception.errors[0]["path"], "sources.weekly[0]")
+
+
+class V3RulesTests(unittest.TestCase):
+    """v0.3 規則（2026-11-13 專家審閱後）。"""
+    # 未持有、回測月線有守後出帶量紅 K、法人由賣轉買
+    BASE = {"close": 105.0, "open": 101.0, "high": 106, "low": 100.5, "chgPct": 3.0, "candle": 1, "vol": 150, "vol5": 100,
+            "ma5": 102.0, "ma20": 100.0, "ma20Prev": 99.8, "prevHigh": 110.0, "pbLowMinPct": 0.5, "pbCloseMinPct": -0.8,
+            "foreign": 300, "trust": 20, "instNet": 320, "foreignStreak": 1, "trustStreak": 1, "instTurn": True,
+            "foreign5d": 100, "trust5d": 0, "marginChg": 50, "amt5": 50000, "upperShadowPct": 10, "prevFromHigh20": -5}
+
+    def ev(self, rec=None, **stock):
+        return evaluate({**self.BASE, **(rec or {})}, stock, DEFAULT_RULES)
+
+    def test_first_entry(self):
+        e = self.ev()
+        self.assertEqual((e["light"], e["lightLabel"], e["rule"]), ("go", "上車訊號", "上車"))
+        # 月線下彎（空頭反彈第一天）→ 不上車
+        e = self.ev({"ma20Prev": 100.5, "ma5": 99})
+        self.assertEqual(e["light"], "wait")
+        self.assertTrue(any("月線止跌翻揚" in n for n in e["needs"]))
+        # 回測期間曾有效跌破月線 → 沒守住
+        self.assertEqual(self.ev({"pbCloseMinPct": -3})["light"], "wait")
+        # 黑 K 不上車
+        self.assertEqual(self.ev({"candle": -1, "open": 106})["light"], "wait")
+
+    def test_add_requires_profit_and_breakout(self):
+        brk = {"close": 112.0, "high": 113, "foreignStreak": 3, "instTurn": False}
+        e = self.ev(brk, holding=True, cost=100)
+        self.assertEqual((e["light"], e["lightLabel"]), ("go", "加碼訊號"))
+        # 底倉沒賺 3% → 不加碼（不攤平），還差裡要寫出原因
+        e = self.ev(brk, holding=True, cost=110)
+        self.assertEqual(e["light"], "wait")
+        self.assertTrue(any("不攤平" in n for n in e["needs"]))
+        # 沒填成本：資料不足以判斷加碼
+        self.assertEqual(self.ev(brk, holding=True)["light"], "wait")
+        # 持有但沒突破前高 → 不加碼（上車條件不適用於持有中）
+        self.assertEqual(self.ev(holding=True, cost=90)["light"], "wait")
+
+    def test_margin_rules(self):
+        # 融資增加 < 法人買超 30%：健康；融資 > 法人買超：追價過熱 → 否決
+        self.assertEqual(self.ev()["checks"]["retail"], "pass")
+        e = self.ev({"marginChg": 400})
+        self.assertEqual(e["light"], "stop")
+        self.assertIn("融資追價", e["warnings"][0])
+        # 收黑、法人賣、融資增 → 否決
+        e = self.ev({"candle": -1, "open": 107, "foreign": -100, "trust": 0, "instNet": -100, "chgPct": -1})
+        self.assertEqual(e["light"], "stop")
+
+    def test_conflicts_asymmetric(self):
+        # 外資買、投信賣（投信賣 ≥ 25% 且金額 ≥ 5 日均額 3%）→ 否決
+        e = self.ev({"foreign": 400, "trust": -150, "instNet": 250})
+        self.assertEqual(e["light"], "stop")
+        self.assertIn("投信賣、外資買", e["warnings"][0])
+        # 投信買、外資賣 → 觀察（可能是投信認養）
+        e = self.ev({"foreign": -150, "trust": 400, "instNet": 250})
+        self.assertEqual((e["light"], e["rule"]), ("wait", "投信買、外資賣"))
+        # 金額太小（< 5 日均成交金額 3%）不算對作
+        self.assertEqual(self.ev({"foreign": 400, "trust": -150, "instNet": 250, "amt5": 1_000_000})["light"], "go")
+
+    def test_amplify_v3(self):
+        base = {"foreignStreak": 1, "trustStreak": 0, "instTurn": False, "trust": 0, "trust5d": 0}
+        # 前 4 日淨賣、今天大買：不算放大
+        self.assertEqual(self.ev({**base, "foreign": 300, "foreign5d": -500})["checks"]["inst"], "fail")
+        # 前 4 日淨買 100（平均 25）、今天 300 張 × 105 元 = 3,150 萬 → 放大
+        self.assertEqual(self.ev({**base, "foreign": 300, "foreign5d": 400})["checks"]["inst"], "pass")
+        # 小量雜訊：今天 16 張（佔量 < 10%、金額 < 3,000 萬）→ 不算
+        self.assertEqual(self.ev({**base, "foreign": 16, "foreign5d": 46, "vol": 1000})["checks"]["inst"], "fail")
+
+    def test_market_filter(self):
+        e = self.ev({"mktClose": 20000, "mktMa20": 21000, "mktMa20Prev": 21100})
+        self.assertEqual((e["light"], e["rule"]), ("wait", "大盤逆風"))
+        self.assertTrue(any("大盤逆風" in w for w in e["warnings"]))
+        self.assertEqual(self.ev({"mktClose": 20000, "mktMa20": 21000, "mktMa20Prev": 20900})["light"], "go")
+
+    def test_ex_rights_adjustment(self):
+        from twradar.analysis import _indicators, adjust_prices
+        days = sorted(D.weekdays_back("20261111", 25), reverse=True)
+        # 前 24 天收 100；今天除息 5 元（參考價 95），收 96、漲 +1
+        q = [{"date": d, "open": 100, "high": 101, "low": 99, "close": 100.0, "change": 0.0, "volume": 1000, "value": 1e8}
+             for d in days]
+        q[0].update(open=95, high=97, low=95, close=96.0, change=1.0)
+        adj, ev = adjust_prices(q)
+        self.assertEqual(ev, [days[0]])
+        self.assertAlmostEqual(adj[1]["close"], 95.0)
+        rec = _indicators(q, [], None, None, days[0])
+        self.assertAlmostEqual(rec["ma20"], 95.05, 2)        # 未還原會是 99.8
+        self.assertEqual(rec["prevHigh"], 95.0)
+        # 中間缺了一個交易日（資料缺漏）：不調整
+        trading = sorted(days)
+        q2 = [q[0]] + q[2:]
+        self.assertEqual(adjust_prices(q2, trading)[1], [])
+
+    def test_upgrade_old_defaults(self):
+        from twradar.rules import default_playbooks, p3_playbooks
+        from twradar.settings import SettingsStore
+        path = Path(tempfile.mkdtemp()) / "settings.json"
+        st = SettingsStore(path, 50)
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data.pop("rulesVersion")
+        data["playbooks"] = p3_playbooks()
+        for p_ in data["params"]:
+            if p_["id"] == "profitTargetPct":
+                p_["value"] = 20      # 舊預設 → 升級為 10
+            if p_["id"] == "limitNearPct":
+                p_["value"] = 8.5     # 使用者自己改過 → 不動
+        path.write_text(json.dumps(data), encoding="utf-8")
+        s = SettingsStore(path, 50).get()
+        self.assertEqual(s["playbooks"], default_playbooks())
+        vals = {p_["id"]: p_["value"] for p_ in s["params"]}
+        self.assertEqual((vals["profitTargetPct"], vals["limitNearPct"], vals["whaleAmount"]), (10, 8.5, 10000))
+        # 使用者改過的規則不覆蓋
+        data["playbooks"]["entry"].insert(1, {"light": "noAdd", "label": "自訂", "when": "blowoffBlack"})
+        path.write_text(json.dumps(data), encoding="utf-8")
+        s = SettingsStore(path, 50).get()
+        self.assertEqual(s["playbooks"]["entry"][1]["label"], "自訂")
+        self.assertEqual(s["rulesVersion"], 3)
+
+    def test_per_rule_confirm(self):
+        from twradar.analysis import _apply_confirm
+        prev = [{"light": "wait", "rawLight": "wait", "hold": {"light": "keep", "rawLight": "keep"}}]
+        sig = {"light": "go", "lightLabel": "上車訊號", "confirm": None,
+               "hold": {"light": "exit", "lightLabel": "退場", "confirm": 1}}
+        _apply_confirm(sig, prev, 2)
+        self.assertEqual(sig["light"], "wait")          # 上車：等第 2 天確認
+        self.assertEqual(sig["pending"], "go")
+        self.assertEqual(sig["hold"]["light"], "exit")  # 停損：當日執行
 
 
 if __name__ == "__main__":

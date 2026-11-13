@@ -28,8 +28,42 @@ LIGHT_LABEL = {"go": "加碼訊號", "wait": "觀察中", "stop": "不宜加碼"
 CHIP_CONDS = ("inst", "main", "retail")
 
 
+RULES_VERSION = 3
+
+
 def default_playbooks() -> dict:
-    """預設規則。加碼面與 v0.1.3 結果相同，另加「法人對作」；持有面依 STRATEGY.md 第 5 節。"""
+    """預設規則 v0.3（2026-11-13 依專家審閱修改，見 docs/STRATEGY.md）。"""
+    weak = ["whaleDown", "retailUp", "marginHigh", "instSellStreak"]
+    return {
+        "entry": [
+            {"light": "na", "label": "資料不足", "when": "noData"},
+            {"light": "noAdd", "label": "否決", "when": {"any": [
+                "divergence", "marginDump", "marginExcess", "belowMa20", "blowoffBlack", "trustSellConflict"]}},
+            {"light": "watch", "label": "大盤逆風", "when": "marketWeak"},
+            {"light": "watch", "label": "投信買、外資賣", "when": "trustBuyConflict"},
+            {"light": "add", "label": "加碼", "lightLabel": "加碼訊號",
+             "when": {"all": ["isHolding", "addProfitOk", "pvBreakout", "instBuy"]}},
+            {"light": "add", "label": "上車", "lightLabel": "上車訊號",
+             "when": {"all": ["notHolding", "trendUp", "pullbackHeld", "redVolK", "aboveMa5And20",
+                              {"any": ["instTurn", "instBuy"]}]}},
+            {"light": "watch", "label": "觀察", "default": True},
+        ],
+        "hold": [
+            {"light": "na", "label": "資料不足", "when": "noData"},
+            {"light": "exit", "label": "停損", "confirm": 1, "when": {"any": [
+                "stopLoss", "belowKeyLevel", "breakMa20Hard", {"all": ["belowMa20", "instNetSell"]}, "giveback"]}},
+            {"light": "exit", "label": "獲利出場", "confirm": 1,
+             "when": {"all": ["profitTarget", {"any": ["belowMa20", {"atLeast": {"n": 3, "of": weak}}]}]}},
+            {"light": "reduce", "label": "出貨警訊", "confirm": 1,
+             "when": {"any": ["highBlowoffBlack", "failedHigh", "limitUpOpenBlowoff", "biasTurn"]}},
+            {"light": "reduce", "label": "獲利保護", "when": {"all": ["profitTarget", {"atLeast": {"n": 2, "of": weak}}]}},
+            {"light": "keep", "label": "續抱", "default": True},
+        ],
+    }
+
+
+def p3_playbooks() -> dict:
+    """v0.2 P3 的預設規則（加碼面與 v0.1.3 相同＋法人對作）。保留供升級比對與對照測試。"""
     weak = ["whaleDown", "retailUp", "marginHigh", "instSellStreak"]
     return {
         "entry": [
@@ -52,27 +86,70 @@ def default_playbooks() -> dict:
 # 規則引擎用到的參數（加在 settings 的內建參數清單）
 ENGINE_PARAMS = [
     {"id": "conflictRatio", "label": "法人對作：較小一方 ≥ 較大一方的", "value": 25, "unit": "%", "min": 0, "max": 100, "note": "外資與投信一買一賣"},
-    {"id": "conflictMinAmt", "label": "法人對作：較小一方金額 ≥", "value": 1000, "unit": "萬元", "min": 0, "max": None, "note": "避免小量雜訊"},
-    {"id": "stopLossPct", "label": "停損：虧損 ≥", "value": 10, "unit": "%", "min": 0, "max": 100, "note": "以成本計，含費稅"},
-    {"id": "profitTargetPct", "label": "獲利保護啟動：獲利 ≥", "value": 20, "unit": "%", "min": 0, "max": 1000, "note": ""},
+    {"id": "conflictValuePct", "label": "法人對作：較小一方金額 ≥ 5 日均成交金額的", "value": 3, "unit": "%", "min": 0, "max": 100, "note": ""},
+    {"id": "conflictMinAmt", "label": "法人對作：較小一方金額 ≥（無均額時）", "value": 3000, "unit": "萬元", "min": 0, "max": None, "note": "避免小量雜訊"},
+    {"id": "amplifyVolPct", "label": "買超放大：當日買超佔成交量 ≥", "value": 10, "unit": "%", "min": 0, "max": 100, "note": "或金額達下一項"},
+    {"id": "amplifyMinAmt", "label": "買超放大：當日買超金額 ≥", "value": 3000, "unit": "萬元", "min": 0, "max": None, "note": ""},
+    {"id": "marginInstRatio", "label": "融資健康：融資增加 < 法人買超的", "value": 30, "unit": "%", "min": 0, "max": 1000, "note": ""},
+    {"id": "addMinProfit", "label": "加碼前提：底倉獲利 ≥", "value": 3, "unit": "%", "min": 0, "max": 100, "note": "不攤平"},
+    {"id": "pullbackDays", "label": "上車：回測觀察天數", "value": 10, "unit": "日", "min": 1, "max": 40, "note": ""},
+    {"id": "pullbackPct", "label": "上車：回測時最低價距月線 ≤", "value": 2, "unit": "%", "min": -20, "max": 20, "note": "曾回到月線附近"},
+    {"id": "pullbackBreakPct", "label": "上車：回測期間收盤跌破月線不超過", "value": 1.5, "unit": "%", "min": 0, "max": 20, "note": "有守"},
+    {"id": "stopLossPct", "label": "停損：虧損 ≥", "value": 10, "unit": "%", "min": 0, "max": 100, "note": "最後保險；以成本計，含費稅"},
+    {"id": "breakMaPct", "label": "停損：跌破下彎月線超過", "value": 1.5, "unit": "%", "min": 0, "max": 20, "note": ""},
+    {"id": "givebackPeak", "label": "保本線：最高獲利曾達", "value": 10, "unit": "%", "min": 0, "max": 1000, "note": "需填成本與買進日"},
+    {"id": "givebackFloor", "label": "保本線：回吐到獲利 ≤", "value": 2, "unit": "%", "min": -100, "max": 100, "note": ""},
+    {"id": "profitTargetPct", "label": "獲利保護啟動：獲利 ≥", "value": 10, "unit": "%", "min": 0, "max": 1000, "note": ""},
     {"id": "sellStreakDays", "label": "法人合計連賣天數 ≥", "value": 2, "unit": "日", "min": 1, "max": 20, "note": ""},
     {"id": "marginUpDays", "label": "融資連增天數 ≥", "value": 2, "unit": "日", "min": 1, "max": 20, "note": ""},
     {"id": "marginHighPct", "label": "融資偏高：60 日區間位置 ≥", "value": 80, "unit": "%", "min": 0, "max": 100, "note": ""},
-    {"id": "limitNearPct", "label": "接近漲停：盤中漲幅 ≥", "value": 9, "unit": "%", "min": 0, "max": 10, "note": ""},
+    {"id": "retailUpPct", "label": "散戶增加：股東人數週增 ≥", "value": 1, "unit": "%", "min": 0, "max": 100, "note": "集保總股東人數"},
+    {"id": "marginRangeMin", "label": "融資偏高防呆：60 日融資變化 ≥", "value": 1000, "unit": "張", "min": 0, "max": None, "note": "或下一項"},
+    {"id": "marginRangePct", "label": "融資偏高防呆：60 日融資變化 ≥ 股本的", "value": 1, "unit": "%", "min": 0, "max": 100, "note": ""},
+    {"id": "limitNearPct", "label": "高檔長上影：盤中漲幅 ≥", "value": 7, "unit": "%", "min": 0, "max": 10, "note": ""},
+    {"id": "failedVol", "label": "高檔長上影：量比 ≥", "value": 1.5, "unit": "倍", "min": 0, "max": 20, "note": ""},
     {"id": "limitTouchPct", "label": "觸及漲停：盤中漲幅 ≥", "value": 9.5, "unit": "%", "min": 0, "max": 10, "note": ""},
     {"id": "shadowPct", "label": "長上影：上影線佔振幅 ≥", "value": 50, "unit": "%", "min": 0, "max": 100, "note": ""},
     {"id": "openBlowoff", "label": "爆量開板：量比 ≥", "value": 2, "unit": "倍", "min": 1, "max": 20, "note": ""},
     {"id": "biasHighPct", "label": "月線乖離過大 ≥", "value": 15, "unit": "%", "min": 0, "max": 100, "note": ""},
-    {"id": "whaleLots", "label": "大戶門檻：持股 ≥", "value": 1000, "unit": "張", "min": 1, "max": 1000,
-     "note": "千張大戶；個股可在觀察清單另設。取最接近的集保分級"},
-    {"id": "whaleAmount", "label": "大戶門檻改用市值：持股 ≥", "value": 0, "unit": "萬元", "min": 0, "max": None,
-     "note": "0 = 不使用；設 10000（1 億）則依 60 日均價換算張數，個股另設的張數優先"},
+    {"id": "biasHighLargePct", "label": "月線乖離過大（大型股）≥", "value": 10, "unit": "%", "min": 0, "max": 100, "note": ""},
+    {"id": "largeCapAmt", "label": "大型股：市值 ≥", "value": 1000, "unit": "億元", "min": 0, "max": None, "note": "以集保總股數 × 收盤估算"},
+    {"id": "highZonePct", "label": "高檔：昨收距近 20 日最高 ≤", "value": 5, "unit": "%", "min": 0, "max": 50, "note": ""},
+    {"id": "highBlackPct", "label": "高檔爆量長黑：跌幅 ≥", "value": 3, "unit": "%", "min": 0, "max": 10, "note": ""},
+    {"id": "highBlackVol", "label": "高檔爆量長黑：量比 ≥", "value": 1.8, "unit": "倍", "min": 0, "max": 20, "note": ""},
+    {"id": "whaleLots", "label": "大戶門檻（固定張數）：持股 ≥", "value": 1000, "unit": "張", "min": 1, "max": 1000,
+     "note": "市值門檻設 0 時使用；個股可在觀察清單另設"},
+    {"id": "whaleAmount", "label": "大戶門檻：持股市值 ≥", "value": 10000, "unit": "萬元", "min": 0, "max": None,
+     "note": "依 60 日均價換算張數、對到最接近的集保分級；0 = 改用固定張數；個股另設的張數優先"},
     {"id": "retailMaxLots", "label": "散戶：持股 ≤", "value": 50, "unit": "張", "min": 1, "max": 1000, "note": "取最接近的集保分級"},
     {"id": "whaleDropPts", "label": "大戶減碼：持股比例週減 ≥", "value": 0, "unit": "百分點", "min": 0, "max": 100,
      "note": "0 = 只要減少就算"},
     {"id": "feePct", "label": "手續費率", "value": 0.1425, "unit": "%", "min": 0, "max": 1, "note": "含折扣請自行調整"},
     {"id": "taxPct", "label": "證交稅率", "value": 0.3, "unit": "%", "min": 0, "max": 1, "note": "ETF 為 0.1"},
 ]
+
+
+# v0.2 → v0.3 改變的參數預設值：使用者沒改過（仍是舊預設）才更新
+PARAM_DEFAULT_CHANGES = {"profitTargetPct": (20, 10), "limitNearPct": (9, 7), "whaleAmount": (0, 10000),
+                         "conflictMinAmt": (1000, 3000)}
+
+
+def upgrade(s: dict) -> dict:
+    """設定升級到 RULES_VERSION：舊預設規則換成新預設、沒改過的參數換成新預設值。使用者自訂的規則與參數不動。"""
+    v = s.get("rulesVersion", 0)
+    if v >= RULES_VERSION:
+        return s
+    pb = s.get("playbooks")
+    if isinstance(pb, dict):
+        old = p3_playbooks()
+        for k in ("entry", "hold"):
+            if not pb.get(k) or pb.get(k) == old[k]:
+                pb[k] = default_playbooks()[k]
+    for p in s.get("params", []):
+        if isinstance(p, dict) and p.get("id") in PARAM_DEFAULT_CHANGES and p.get("value") == PARAM_DEFAULT_CHANGES[p["id"]][0]:
+            p["value"] = PARAM_DEFAULT_CHANGES[p["id"]][1]
+    s["rulesVersion"] = RULES_VERSION
+    return s
 
 
 # ---------------- 求值 ----------------
@@ -164,9 +241,10 @@ class Engine:
     def run(self, playbook: list[dict], ctx: Ctx) -> dict:
         for rule in playbook:
             if rule.get("default") or self.ev(rule["when"], ctx) == PASS:
-                return {"light": rule["light"], "rule": rule.get("label", rule["light"]),
+                return {"light": rule["light"], "rule": rule.get("label", rule["light"]), "lightLabel": rule.get("lightLabel"),
+                        "confirm": rule.get("confirm"),
                         "reasons": [] if rule.get("default") else self.reasons(rule["when"], ctx)}
-        return {"light": "na", "rule": "", "reasons": []}
+        return {"light": "na", "rule": "", "reasons": [], "lightLabel": None, "confirm": None}
 
     def trace(self, ctx: Ctx) -> list[dict]:
         return [{"id": k, "label": self.label(k), "state": r.state, "text": r.text or r.need}
@@ -220,8 +298,14 @@ def evaluate(rec: dict, stock: dict, P: dict, settings: dict | None = None) -> d
     pb = (settings or {}).get("playbooks") or default_playbooks()
     eng = Engine((settings or {}).get("conditions") or [])
     ctx = Ctx(rec, stock, P)
-    entry = eng.run(pb.get("entry") or default_playbooks()["entry"], ctx)
+    entry_pb = pb.get("entry") or default_playbooks()["entry"]
+    entry = eng.run(entry_pb, ctx)
     light = ENTRY_LIGHTS.get(entry["light"], entry["light"])
+    # 顯示用的四項檢查：新規則用 v0.3 條件，舊規則用 v0.1 條件
+    used = {x for r in entry_pb if not r.get("default") for x in refs(r["when"])}
+    v3 = "instBuy" in used or "pvTrend" in used or "pvBreakout" in used
+    ck_ids = {"inst": "instBuy" if v3 else "inst", "main": "main", "retail": "retailHealthy" if v3 else "retail",
+              "priceVolume": "pvTrend" if v3 else "pvConfirm"}
 
     # 與 v0.1 相同的欄位
     if light == "stop":
@@ -230,11 +314,13 @@ def evaluate(rec: dict, stock: dict, P: dict, settings: dict | None = None) -> d
         veto = [r for r in (pb.get("entry") or []) if r.get("light") == "noAdd" and not r.get("default")]
         warns = eng.reasons(veto[0]["when"], ctx) if veto else []
     needs: list[str] = []
-    add_rules = [r for r in (pb.get("entry") or []) if r.get("light") == "add" and not r.get("default")]
+    gates = ("isHolding", "notHolding")
+    add_rules = [r for r in entry_pb if r.get("light") == "add" and not r.get("default")
+                 and not any(eng.leaf(gid, ctx).state == FAIL for gid in refs(r["when"]) if gid in gates)]
     if add_rules:
-        needs = eng.needs(add_rules[0]["when"], ctx, summary=(light == "wait"))
-    chk = {k: eng.leaf(k, ctx).state for k in (*CHIP_CONDS, "pvConfirm")}
-    chips = sum(1 for k in CHIP_CONDS if chk[k] == PASS)
+        needs = [n for n in eng.needs(add_rules[0]["when"], ctx, summary=(light == "wait")) if not n.startswith("（")]
+    chk = {k: eng.leaf(cid, ctx).state for k, cid in ck_ids.items()}
+    chips = sum(1 for k in ("inst", "main", "retail") if chk[k] == PASS)
     close, ma20 = rec.get("close"), rec.get("ma20")
     has_pv = close is not None and ma20 is not None
     vr = ctx.vol_r
@@ -246,18 +332,20 @@ def evaluate(rec: dict, stock: dict, P: dict, settings: dict | None = None) -> d
         key_note = f"關鍵價 {fmt(kl)}：" + ("已站上" if above else f"尚未站上（差 {fmt(kl - close, 2)}）")
         if above and vr is not None:
             key_note += "，量能確認" if vr > P["volRatio"] else "，但量能不足"
-    out = {"light": light, "lightLabel": LIGHT_LABEL.get(light, light),
-           "checks": {"inst": chk["inst"], "main": chk["main"], "retail": chk["retail"], "priceVolume": chk["pvConfirm"]},
-           "instWhy": eng.leaf("inst", ctx).text, "chipsPassed": chips, "needs": needs, "warnings": warns,
+    out = {"light": light, "lightLabel": entry["lightLabel"] or LIGHT_LABEL.get(light, light),
+           "checks": chk, "instWhy": eng.leaf(ck_ids["inst"], ctx).text, "chipsPassed": chips, "needs": needs, "warnings": warns,
            "missing": missing_of(rec), "volRatio": None if vr is None else round(vr, 3),
            "maDistPct": None if not has_pv else round((close / ma20 - 1) * 100, 2),
-           "belowMa20": below, "keyLevelNote": key_note, "rule": entry["rule"]}
+           "belowMa20": below, "keyLevelNote": key_note, "rule": entry["rule"], "confirm": entry["confirm"]}
+    if light == "wait" and entry["rule"] not in ("觀察", "") and entry["reasons"]:
+        out["warnings"] = out["warnings"] + [x for x in entry["reasons"] if x not in out["warnings"]]
     if stock.get("holding"):
         h = eng.run(pb.get("hold") or default_playbooks()["hold"], ctx)
         prof = ctx.profit_pct
         warn = [eng.leaf(k, ctx).text for k in ("whaleDown", "retailUp", "marginHigh", "instSellStreak", "belowMa20")
                 if eng.leaf(k, ctx).state == PASS]
-        out["hold"] = {"light": h["light"], "lightLabel": LIGHT_LABEL.get(h["light"], h["light"]), "rule": h["rule"],
+        out["hold"] = {"light": h["light"], "lightLabel": h["lightLabel"] or LIGHT_LABEL.get(h["light"], h["light"]),
+                       "rule": h["rule"], "confirm": h["confirm"],
                        "reasons": h["reasons"], "weak": [w for w in warn if w not in h["reasons"]],
                        "profitPct": None if prof is None else round(prof, 2)}
     out["trace"] = eng.trace(ctx)
@@ -317,8 +405,12 @@ def validate_rules(s: dict, e) -> None:
                 e(f"{p}.when", "缺少條件")
             else:
                 _check_node(r["when"], f"{p}.when", known, e)
+            if "confirm" in r and (not isinstance(r["confirm"], int) or isinstance(r["confirm"], bool) or not 1 <= r["confirm"] <= 5):
+                e(f"{p}.confirm", "必須是 1～5 的整數")
+            if "lightLabel" in r and not isinstance(r["lightLabel"], str):
+                e(f"{p}.lightLabel", "必須是文字")
             for k in r:
-                if k not in ("light", "label", "when", "default", "note"):
+                if k not in ("light", "label", "lightLabel", "when", "default", "note", "confirm"):
                     e(f"{p}.{k}", "未知的欄位")
         if not rules[-1].get("default"):
             e(f"playbooks.{side}", "最後一條必須是預設規則（\"default\": true）")
