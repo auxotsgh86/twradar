@@ -184,7 +184,16 @@ API 全部需要 token，請不要公開分享含 token 的網址。
 
 ## 回溯分析
 
-用歷史資料重播規則，檢查訊號出現後的實際走勢。
+用歷史資料重播規則，檢查訊號出現後的實際走勢。最簡單的方式是在 repo 資料夾執行：
+
+```bash
+./deploy/backtest.sh                  # 補約兩年資料（第一次約 8～12 小時，可中斷續跑）→ 回溯分析 → 打開報表
+./deploy/backtest.sh --skip-backfill  # 資料已補好，只重跑分析
+./deploy/backtest.sh -- --grid stopLossPct=8,10,12   # 「--」之後的參數交給 twradar backtest
+```
+
+資料放在 `~/twradar-backtest`（不影響正在運作的雷達）；第一次會複製 `~/twradar-data/settings.json` 的觀察清單與規則。
+也可以直接用指令：
 
 ```bash
 cd ~/twradar-app

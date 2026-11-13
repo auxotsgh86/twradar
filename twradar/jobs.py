@@ -231,16 +231,24 @@ class Crawler:
         self.db.set_setting("backfill", state)
         self.db.log("info", f"開始補抓歷史資料，目標 {target} 個交易日")
         d, tries, streak_fail = start, 0, 0
+        t0, fetched = time.monotonic(), 0
         while state["done"] < target and tries < int(target * 1.6) + 10:
             tries += 1
             run = self.db.get_run(d)
-            if not run or run["status"] not in ("complete", "partial", "holiday"):
+            cached = bool(run and run["status"] in ("complete", "partial", "holiday"))
+            if not cached:
                 state["current"] = d
                 self.db.set_setting("backfill", state)
                 run = self.crawl_day(d, final=True, analyze=False, fallback=False)
+                fetched += 1
             if run["status"] in ("complete", "partial"):
                 state["done"] += 1
                 streak_fail = 0
+            if not cached:
+                left = target - state["done"]
+                eta = (time.monotonic() - t0) / fetched * left * 1.05 / 60 if fetched else 0
+                log.info("補抓 %s：%s（%d/%d，預估還要 %d 分鐘）", d, STATUS_TEXT.get(run["status"], run["status"]),
+                         state["done"], target, round(eta))
             elif run["status"] == "failed":
                 streak_fail += 1
                 if streak_fail >= 3:
