@@ -77,7 +77,7 @@ def default_settings() -> dict:
     return {
         "schemaVersion": SCHEMA_VERSION,
         "display": {"preset": "tw", "colors": dict(COLOR_PRESETS["tw"])},
-        "sources": {"primary": ["twse", "tpex"], "fallback": ["finmind"], "options": {}},
+        "sources": {"primary": ["twse", "tpex"], "fallback": ["finmind"], "weekly": ["tdcc"], "options": {}},
         "schedule": ["17:40", "21:50", "23:40", "06:40"],
         "watchlist": [stock(code=c, name=n, market=m, group=g, keyLevel=k, note=note)
                       for c, n, m, g, k, note in SEED_WATCHLIST],
@@ -146,7 +146,7 @@ def validate(s: dict, max_watchlist: int = 50, providers: dict | None = None) ->
     if not isinstance(src, dict):
         e("sources", "必須是物件")
     else:
-        for key, scope in (("primary", "market"), ("fallback", "stock")):
+        for key, scope in (("primary", "market"), ("fallback", "stock"), ("weekly", "weekly")):
             ids = src.get(key)
             if not isinstance(ids, list) or not all(isinstance(x, str) for x in ids):
                 e(f"sources.{key}", "必須是字串陣列")
@@ -285,6 +285,7 @@ def normalize(s: dict) -> dict:
                 colors.setdefault(k, base[k])
     if isinstance(s.get("sources"), dict):
         s["sources"].setdefault("options", {})
+        s["sources"].setdefault("weekly", ["tdcc"])
     if isinstance(s.get("playbooks"), dict):  # v0.2 P2 以前沒有規則：補上預設規則
         for k, v in default_playbooks().items():
             if not s["playbooks"].get(k):
@@ -400,6 +401,9 @@ class SettingsStore:
 
     def schedule(self) -> list[str]:
         return self.get()["schedule"]
+
+    def weekly_sources(self) -> list[str]:
+        return list(self.get()["sources"].get("weekly", []))
 
     def source_plan(self, env: dict | None = None) -> tuple[list[str], list[str], dict]:
         src = self.get()["sources"]

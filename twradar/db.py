@@ -31,6 +31,10 @@ CREATE TABLE IF NOT EXISTS market (            -- 大盤
   date TEXT PRIMARY KEY, taiex REAL, taiex_chg REAL, taiex_chg_pct REAL,
   foreign_amt INTEGER, trust_amt INTEGER, dealer_amt INTEGER, total_amt INTEGER, src TEXT
 );
+CREATE TABLE IF NOT EXISTS holders (           -- 集保股權分散（週）；level 1–15 為持股分級，17 為合計
+  date TEXT NOT NULL, code TEXT NOT NULL, level INTEGER NOT NULL, people INTEGER, shares INTEGER, pct REAL,
+  src TEXT, PRIMARY KEY (date, code, level)
+);
 CREATE TABLE IF NOT EXISTS runs (              -- 每個交易日的抓取狀態
   date TEXT PRIMARY KEY, status TEXT NOT NULL, steps TEXT NOT NULL DEFAULT '{}',
   attempts INTEGER DEFAULT 0, started_at TEXT, finished_at TEXT, message TEXT DEFAULT ''
@@ -49,6 +53,7 @@ CREATE TABLE IF NOT EXISTS events (            -- 系統紀錄（UI 顯示）
 CREATE INDEX IF NOT EXISTS idx_quotes_code ON quotes(code, date);
 CREATE INDEX IF NOT EXISTS idx_inst_code ON inst(code, date);
 CREATE INDEX IF NOT EXISTS idx_margin_code ON margin(code, date);
+CREATE INDEX IF NOT EXISTS idx_holders_code ON holders(code, date);
 """
 
 _lock = threading.RLock()
@@ -141,6 +146,16 @@ class DB:
             c.executemany("""INSERT OR REPLACE INTO margin(date,code,margin_prev,margin_bal,short_prev,short_bal,src)
               VALUES(:date,:code,:margin_prev,:margin_bal,:short_prev,:short_bal,:src)""", rows)
         return len(rows)
+
+    def put_holders(self, rows: list[dict]) -> int:
+        with self.tx() as c:
+            c.executemany("""INSERT OR REPLACE INTO holders(date,code,level,people,shares,pct,src)
+              VALUES(:date,:code,:level,:people,:shares,:pct,:src)""", rows)
+        return len(rows)
+
+    def holders_latest(self) -> str | None:
+        r = self.one("SELECT MAX(date) AS d FROM holders")
+        return r["d"] if r else None
 
     def put_market(self, row: dict) -> None:
         with self.tx() as c:

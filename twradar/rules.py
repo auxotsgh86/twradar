@@ -63,6 +63,13 @@ ENGINE_PARAMS = [
     {"id": "shadowPct", "label": "長上影：上影線佔振幅 ≥", "value": 50, "unit": "%", "min": 0, "max": 100, "note": ""},
     {"id": "openBlowoff", "label": "爆量開板：量比 ≥", "value": 2, "unit": "倍", "min": 1, "max": 20, "note": ""},
     {"id": "biasHighPct", "label": "月線乖離過大 ≥", "value": 15, "unit": "%", "min": 0, "max": 100, "note": ""},
+    {"id": "whaleLots", "label": "大戶門檻：持股 ≥", "value": 1000, "unit": "張", "min": 1, "max": 1000,
+     "note": "千張大戶；個股可在觀察清單另設。取最接近的集保分級"},
+    {"id": "whaleAmount", "label": "大戶門檻改用市值：持股 ≥", "value": 0, "unit": "萬元", "min": 0, "max": None,
+     "note": "0 = 不使用；設 10000（1 億）則依 60 日均價換算張數，個股另設的張數優先"},
+    {"id": "retailMaxLots", "label": "散戶：持股 ≤", "value": 50, "unit": "張", "min": 1, "max": 1000, "note": "取最接近的集保分級"},
+    {"id": "whaleDropPts", "label": "大戶減碼：持股比例週減 ≥", "value": 0, "unit": "百分點", "min": 0, "max": 100,
+     "note": "0 = 只要減少就算"},
     {"id": "feePct", "label": "手續費率", "value": 0.1425, "unit": "%", "min": 0, "max": 1, "note": "含折扣請自行調整"},
     {"id": "taxPct", "label": "證交稅率", "value": 0.3, "unit": "%", "min": 0, "max": 1, "note": "ETF 為 0.1"},
 ]

@@ -62,7 +62,28 @@ class FakeExchange:
                 p = round(base * (1 + 0.002 * i) + (5 if i % 2 else -3), 1)
                 self.px[(code, d)] = (prev, p, 10_000_000 + i * 100_000)
 
+    tdcc_date = None      # 集保資料日（預設最後一天）
+    tdcc_whale = 80.0     # 千張以上大戶持股比例
+    tdcc_retail = 1000    # 1–999 股的人數（散戶人數用）
+
+    def tdcc_csv(self):
+        d = self.tdcc_date or self.days[-1]
+        lines = ["資料日期,證券代號,持股分級,人數,股數,占集保庫存數比例%"]
+        total = 1_000_000_000
+        for code in self.stocks:
+            rest = (100 - self.tdcc_whale) / 14
+            for lv in range(1, 16):
+                pct = self.tdcc_whale if lv == 15 else rest
+                people = self.tdcc_retail if lv == 1 else 100
+                lines.append(f"{d},{code},{lv},{people},{int(total * pct / 100)},{pct:.2f}")
+            lines.append(f"{d},{code},16,0,0,0.00")
+            lines.append(f"{d},{code},17,{self.tdcc_retail + 1400},{total},100.00")
+        lines.append(f"{d},9999,1,1,1,100.00")  # 不在觀察清單：不應存入
+        return "\n".join(lines).encode("utf-8-sig")
+
     def handle(self, path, qs):
+        if "/tdcc/" in path:
+            return 200, self.tdcc_csv()
         if "finmind" in path:
             ds = qs["dataset"][0]
             sid = qs["data_id"][0]
@@ -175,7 +196,8 @@ def start_fake(fx: FakeExchange):
     srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{srv.server_address[1]}"
-    return srv, {"twse": {"base": base + "/twse"}, "tpex": {"base": base + "/tpex"}, "finmind": {"base": base + "/finmind"}}
+    return srv, {"twse": {"base": base + "/twse"}, "tpex": {"base": base + "/tpex"}, "finmind": {"base": base + "/finmind"},
+                 "tdcc": {"base": base + "/tdcc"}}
 
 
 def setup_env(opts, codes=("2330", "2454", "6488"), home=None):
@@ -188,7 +210,8 @@ def setup_env(opts, codes=("2330", "2454", "6488"), home=None):
 
     def fn(x):
         x["watchlist"] = [w for w in x["watchlist"] if w["code"] in codes]
-        x["sources"] = {"primary": ["twse", "tpex"], "fallback": ["finmind"], "options": opts}
+        x["sources"] = {"primary": ["twse", "tpex"], "fallback": ["finmind"],
+                        "weekly": ["tdcc"] if "tdcc" in opts else [], "options": opts}
     st.update(fn)
     os.environ["TWRADAR_HOME"] = TMP
     return cfg, db, st
@@ -810,6 +833,70 @@ class RulesEngineTests(unittest.TestCase):
         self.assertEqual(rec["marginPos60"], 100.0)
         self.assertEqual(rec["highPct"], 10.0)                    # 110 / 100 − 1
         self.assertAlmostEqual(rec["upperShadowPct"], 72.7, 1)    # (110 − 102) / (110 − 99)
+
+
+class HoldersTests(unittest.TestCase):
+    """P4 集保股權分散表。"""
+
+    def test_parse_csv_encodings_and_levels(self):
+        from twradar.providers.tdcc import decode, parse_csv
+        text = "資料日期,證券代號,持股分級,人數,股數,占集保庫存數比例%\n20261113,2330,1,10,999,0.10\n20261113,2330,16,0,0,0\n20261113,2330,17,10,999,100\n20261113,1101,1,5,5,1\n"
+        for raw in (text.encode("utf-8-sig"), text.encode("cp950")):
+            rows = parse_csv(decode(raw), {"2330"})
+            self.assertEqual([r["level"] for r in rows], [1, 17])
+            self.assertEqual(rows[0]["date"], "20261113")
+
+    def test_levels(self):
+        from twradar.analysis import retail_levels, whale_level
+        P = dict(DEFAULT_RULES)
+        self.assertEqual(whale_level(P, {}, 2340), (15, 1000))                 # 預設千張
+        self.assertEqual(whale_level(P, {"whaleLots": 400}, 2340), (12, 400))  # 個股另設
+        P["whaleAmount"] = 10000                                                # 1 億元
+        self.assertEqual(whale_level(P, {}, 2340), (8, 40))                    # 約 43 張 → 40 張級距
+        self.assertEqual(whale_level(P, {}, 71.9), (15, 1000))                 # 約 1,391 張 → 上限 1000
+        self.assertEqual(whale_level(P, {"whaleLots": 800}, 71.9), (14, 800))  # 個股設定優先
+        self.assertEqual(retail_levels(P), (8, 50))                            # 50 張以下 = 第 1–8 級
+
+    def test_weekly_crawl_and_whale_signal(self):
+        from twradar.analysis import indicators_many
+        from twradar.jobs import Crawler
+        days = weekdays(30)
+        fx = FakeExchange(days)
+        _, opts = start_fake(fx)
+        cfg, db, st = setup_env(opts)
+        cr = Crawler(db, cfg, st, transport=Fetcher(0, "test"))
+        d1 = days[-6]
+        fx.tdcc_date = d1
+        self.assertEqual(cr.crawl_weekly(d1), d1)
+        self.assertEqual({r["code"] for r in db.q("SELECT DISTINCT code FROM holders")}, {"2330", "2454", "6488"})
+        self.assertIsNone(cr.crawl_weekly(days[-5]))  # 未滿 7 天不再抓
+        d2 = days[-1]
+        fx.tdcc_date, fx.tdcc_whale, fx.tdcc_retail = d2, 78.5, 1300
+        self.assertEqual(cr.crawl_weekly(d2), d2)
+        rec = indicators_many(db, ["2330"], d2)["2330"]
+        self.assertEqual((rec["holdersDate"], rec["whaleLots"], rec["whalePct"], rec["whaleChg"]), (d2, 1000, 78.5, -1.5))
+        self.assertEqual(rec["retailChg"], 300)
+        # 持有面：獲利達標＋大戶減碼＋散戶增加 → 獲利保護減碼
+        rec.update(close=150.0, ma20=140.0, vol=100, vol5=100, chgPct=1)
+        h = evaluate(rec, {"holding": True, "cost": 100}, DEFAULT_RULES)["hold"]
+        self.assertEqual((h["light"], h["rule"]), ("reduce", "獲利保護"))
+        self.assertTrue(any("大戶" in x for x in h["reasons"]) and any("散戶" in x for x in h["reasons"]))
+        # 集保資料還沒更新：不重複寫入、不報錯
+        fx.tdcc_date = d2
+        from datetime import timedelta
+        d3 = (D.to_date(d2) + timedelta(days=8)).strftime("%Y%m%d")
+        n = db.one("SELECT COUNT(*) AS n FROM holders")["n"]
+        self.assertIsNone(cr.crawl_weekly(d3))
+        self.assertEqual(db.one("SELECT COUNT(*) AS n FROM holders")["n"], n)
+
+    def test_weekly_source_validation(self):
+        from twradar.settings import SettingsError, SettingsStore
+        st = SettingsStore(Path(tempfile.mkdtemp()) / "settings.json", 50)
+        s = st.get()
+        s["sources"]["weekly"] = ["twse"]
+        with self.assertRaises(SettingsError) as cm:
+            st.save(s)
+        self.assertEqual(cm.exception.errors[0]["path"], "sources.weekly[0]")
 
 
 if __name__ == "__main__":

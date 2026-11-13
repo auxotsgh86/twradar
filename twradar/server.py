@@ -105,7 +105,7 @@ class App:
         R = rules_of(self.settings)
         out = []
         watch = S["watchlist"]
-        late = indicators_many(self.db, [w["code"] for w in watch if w["code"] not in sigs], d)
+        late = indicators_many(self.db, [w["code"] for w in watch if w["code"] not in sigs], d, R, {w["code"]: w for w in watch})
         for w in watch:
             p = sigs.get(w["code"])
             if not p:  # 分析之後才加入的個股：即時計算
@@ -183,7 +183,7 @@ class App:
                 "tradingDaysStored": n_days, "watchlistSize": len(self.settings.watchlist()),
                 "maxWatchlist": self.cfg.max_watchlist, "finmindFallback": bool(self.settings.source_plan()[1]),
                 "sources": {"primary": self.crawler.step_ids, "fallback": [p.id for p in self.crawler.fallback]},
-                "settingsError": self.settings.last_error,
+                "settingsError": self.settings.last_error, "holdersDate": self.db.holders_latest(),
                 "recentRuns": runs}
 
 

@@ -98,5 +98,3 @@ def evaluate(rec: dict, stock: dict, R: dict) -> dict:
             "missing": missing, "volRatio": None if vol_r is None else round(vol_r, 3),
             "maDistPct": None if not has_pv else round((close / ma20 - 1) * 100, 2),
             "belowMa20": below, "keyLevelNote": key_note}
-
-

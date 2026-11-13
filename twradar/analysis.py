@@ -49,9 +49,13 @@ def _latest_rows(db: DB, table: str, cols: str, codes: list[str], d: str, n: int
     return out
 
 
-def indicators_many(db: DB, codes: list[str], d: str) -> dict[str, dict]:
-    """整份清單的當日指標（欄位名稱與網頁工具相同；缺的欄位不放）。每張表只查一次。"""
+def indicators_many(db: DB, codes: list[str], d: str, P: dict | None = None,
+                    stocks: dict[str, dict] | None = None) -> dict[str, dict]:
+    """整份清單的當日指標（欄位名稱與網頁工具相同；缺的欄位不放）。每張表只查一次。
+    P、stocks（觀察清單 {code: 設定}）用於集保大戶／散戶門檻；省略時用預設值。"""
     codes = list(dict.fromkeys(codes))
+    P = {**DEFAULT_RULES, **(P or {})}
+    stocks = stocks or {}
     Q = _latest_rows(db, "quotes", "code, date, open, high, low, close, change, volume", codes, d, 61)
     I = _latest_rows(db, "inst", "code, date, foreign_net, trust_net, dealer_net", codes, d, 30)
     MH = _latest_rows(db, "margin", "code, date, margin_prev, margin_bal, short_prev, short_bal", codes, d, 60)
@@ -63,7 +67,87 @@ def indicators_many(db: DB, codes: list[str], d: str) -> dict[str, dict]:
             for r in db.q(f"SELECT code, src FROM {t} WHERE date=? AND code IN ({ph})", (d, *codes)):
                 if r["src"]:
                     SRC.setdefault(r["code"], set()).add(r["src"])
-    return {c: _indicators(Q[c], I[c], M.get(c), SRC.get(c), d, MH.get(c) or []) for c in codes}
+    H = _holders_rows(db, codes, d)
+    out = {}
+    for c in codes:
+        rec = _indicators(Q[c], I[c], M.get(c), SRC.get(c), d, MH.get(c) or [])
+        if H.get(c):
+            closes = [r["close"] for r in Q[c] if r["close"] is not None]
+            rec.update(_holders(H[c], P, stocks.get(c, {}), sum(closes) / len(closes) if closes else None))
+        out[c] = rec
+    return out
+
+
+def _holders_rows(db: DB, codes: list[str], d: str) -> dict[str, list[dict]]:
+    """每檔最近兩週（≤ d）的集保分級資料：{code: [本週 {level: row}, 上週 {level: row}]}。"""
+    if not codes:
+        return {}
+    ph = ",".join("?" * len(codes))
+    dates = db.q(f"SELECT code, date FROM (SELECT DISTINCT code, date FROM holders WHERE code IN ({ph}) AND date<=?) "
+                 f"ORDER BY code, date DESC", (*codes, d))
+    want: dict[str, list[str]] = {}
+    for r in dates:
+        if len(want.setdefault(r["code"], [])) < 2:
+            want[r["code"]].append(r["date"])
+    if not want:
+        return {}
+    alld = sorted({x for v in want.values() for x in v})
+    ph2 = ",".join("?" * len(alld))
+    by: dict[tuple, dict] = {}
+    for r in db.q(f"SELECT * FROM holders WHERE code IN ({ph}) AND date IN ({ph2})", (*codes, *alld)):
+        by.setdefault((r["code"], r["date"]), {})[r["level"]] = dict(r)
+    return {c: [by[(c, x)] for x in ds if (c, x) in by] for c, ds in want.items()}
+
+
+def whale_level(P: dict, stock: dict, avg_price: float | None) -> tuple[int, int]:
+    """大戶門檻 → (集保分級編號, 實際張數)。個股設定 > 市值模式 > 全域張數；取最接近的分級下限。"""
+    from .providers.tdcc import LEVEL_MIN_LOTS
+    lots = stock.get("whaleLots")
+    if not lots and P.get("whaleAmount") and avg_price:
+        lots = P["whaleAmount"] * 1e4 / (avg_price * 1000)
+    lots = lots or P.get("whaleLots", 1000)
+    i = min(range(1, len(LEVEL_MIN_LOTS)), key=lambda k: (abs(LEVEL_MIN_LOTS[k] - lots), k))
+    return i + 1, LEVEL_MIN_LOTS[i]
+
+
+def retail_levels(P: dict) -> tuple[int, int]:
+    """散戶：持股 ≤ retailMaxLots 張 → (最高分級編號, 實際張數上限)。"""
+    from .providers.tdcc import LEVEL_MIN_LOTS
+    m = P.get("retailMaxLots", 50)
+    uppers = LEVEL_MIN_LOTS[1:]  # 第 k 級（1-based）的上限 = 第 k+1 級下限
+    k = min(range(len(uppers)), key=lambda i: (abs(uppers[i] - m), i))
+    return k + 1, uppers[k]
+
+
+def _holders(weeks: list[dict], P: dict, stock: dict, avg_price: float | None) -> dict:
+    lvl, lots = whale_level(P, stock, avg_price)
+    rmax, rlots = retail_levels(P)
+
+    def whale_pct(w):
+        tot = (w.get(17) or {}).get("shares")
+        s = 0.0
+        for k in range(lvl, 16):
+            row = w.get(k)
+            if not row:
+                continue
+            if row["pct"] is not None:
+                s += row["pct"]
+            elif tot:
+                s += (row["shares"] or 0) / tot * 100
+        return round(s, 2)
+
+    def retail(w):
+        return sum((w.get(k) or {}).get("people") or 0 for k in range(1, rmax + 1))
+    cur = weeks[0]
+    date = next(iter(cur.values()))["date"]
+    out = {"holdersDate": date, "whaleLots": lots, "whalePct": whale_pct(cur), "retailLots": rlots, "retailPeople": retail(cur)}
+    if len(weeks) > 1:
+        prev_date = next(iter(weeks[1].values()))["date"]
+        from .dates import to_date
+        if (to_date(date) - to_date(prev_date)).days <= 14:  # 只比較相鄰週
+            out["whaleChg"] = round(out["whalePct"] - whale_pct(weeks[1]), 2)
+            out["retailChg"] = out["retailPeople"] - retail(weeks[1])
+    return out
 
 
 def indicators(db: DB, code: str, d: str) -> dict:
@@ -201,7 +285,7 @@ def run_analysis(db: DB, d: str, settings: SettingsStore) -> dict:
     with db.tx() as c:
         c.execute("DELETE FROM signals WHERE date=?", (d,))
         watch = S["watchlist"]
-        recs = indicators_many(db, [s["code"] for s in watch], d)
+        recs = indicators_many(db, [s["code"] for s in watch], d, R, {s["code"]: s for s in watch})
         prev = _previous(db, [s["code"] for s in watch], d, max(0, n_confirm - 1))
         for s in watch:
             rec = recs[s["code"]]

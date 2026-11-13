@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 from .analysis import run_analysis
 from .config import TW, Config, now_tw
-from .dates import is_weekend, prev_weekday
+from .dates import is_weekend, prev_weekday, to_date
 from .db import DB
 from .net import FetchError, Fetcher
 from .providers import DATASET_TABLE, Batch, Provider, Transport, build
@@ -37,13 +37,14 @@ class Crawler:
     """依設定的資料源順序抓取。HTTP（transport）與資料源皆可注入。"""
 
     def __init__(self, db: DB, cfg: Config, settings: SettingsStore, transport: Transport | None = None,
-                 primary: list[Provider] | None = None, fallback: list[Provider] | None = None):
+                 primary: list[Provider] | None = None, fallback: list[Provider] | None = None,
+                 weekly: list[Provider] | None = None):
         self.db = db
         self.cfg = cfg
         self.settings = settings
         self._plan = None
-        self._custom = primary is not None or fallback is not None
-        self._primary, self._fallback_p = primary, fallback
+        self._custom = primary is not None or fallback is not None or weekly is not None
+        self._primary, self._fallback_p, self._weekly_p = primary, fallback, weekly
         self.f = transport or Fetcher(cfg.request_interval, cfg.user_agent)
 
     # transport 換掉時重建資料源（資料源持有 transport）
@@ -63,13 +64,15 @@ class Crawler:
             if self._plan is not None:
                 return
             self.primary, self.fallback = self._primary or [], self._fallback_p or []
+            self.weekly = self._weekly_p or []
             self._plan = "custom"
         else:
-            plan = self.settings.source_plan(self.cfg.env)
+            plan = (*self.settings.source_plan(self.cfg.env), tuple(self.settings.weekly_sources()))
             if plan == self._plan:
                 return
-            p, fb, opts = plan
+            p, fb, opts, _ = plan
             self.primary, self.fallback = build(p, self._f, opts), build(fb, self._f, opts)
+            self.weekly = build(self.settings.weekly_sources(), self._f, opts)
             self._plan = plan
         self.steps = [(f"{pv.id}_{ds}", pv, ds) for pv in self.primary for ds in pv.datasets]
         self.step_ids = [s for s, _, _ in self.steps]
@@ -130,6 +133,7 @@ class Crawler:
 
         if fallback:
             self._fallback(d, run, final)
+        self.crawl_weekly(d)
         ok = [s for s in self.step_ids if run["steps"][s]["status"] in DONE]
         missing = [s for s in self.step_ids if s not in ok]
         label = self.step_labels
@@ -149,6 +153,33 @@ class Crawler:
         if analyze:
             run_analysis(self.db, d, self.settings)
         return run
+
+    def crawl_weekly(self, d: str) -> str | None:
+        """集保股權分散表：上次資料距今滿 7 天才抓（每週一次）；失敗只記錄，不影響當日狀態。"""
+        if not self.weekly:
+            return None
+        last = self.db.holders_latest()
+        if last and (to_date(d) - to_date(last)).days < 7:
+            return None
+        codes = {w["code"] for w in self.settings.watchlist()}
+        for pv in self.weekly:
+            try:
+                rows = pv.fetch_week(codes)["holders"]
+            except FetchError as e:
+                self.db.log("warn", f"{pv.label}股權分散表抓取失敗：{e}")
+                continue
+            except Exception as e:  # 格式改版
+                log.exception("weekly %s", pv.id)
+                self.db.log("warn", f"{pv.label}股權分散表格式無法解析：{e!r}")
+                continue
+            got = max((r["date"] for r in rows), default=None)
+            if not got or (last and got <= last):
+                self.db.log("info", f"{pv.label}股權分散表尚未更新（最新 {got or '—'}），下次再試")
+                return None
+            self.db.put_holders(rows)
+            self.db.log("info", f"已取得 {got} 集保股權分散表（{len({r['code'] for r in rows})} 檔）")
+            return got
+        return None
 
     def _past_publish(self, d: str) -> bool:
         n = now_tw()

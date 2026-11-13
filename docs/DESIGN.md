@@ -1,6 +1,6 @@
 # twradar 設計文件（v0.2 草案）
 
-> 狀態：**設計定案，實作中（P1、P2、P3 完成）**。本文件記錄設計決策與理由，實作以本文件為準；有變更時先改這裡。
+> 狀態：**設計定案，實作中（P1～P4 完成）**。本文件記錄設計決策與理由，實作以本文件為準；有變更時先改這裡。
 > 最後更新：2026-11-13
 > 給非技術審閱者的操作邏輯說明：[STRATEGY.md](STRATEGY.md)
 
@@ -208,7 +208,15 @@ class Provider:
 | 融資偏高 | 融資使用率（餘額／限額），或融資餘額相對 60 日區間位置 | 融資券 | 日 |
 | 沒鎖漲停 | 最高價接近漲停價，但收盤 < 最高價、上影線長 | 收盤行情 | 日 |
 
-### 5.6 大戶門檻（D9）
+### 5.6 大戶門檻（D9；P4 已實作）
+
+實作摘要：
+- `providers/tdcc.py`：scope="weekly" 的資料源，讀集保開放資料 CSV（`id=1-5`，只有最新一週），只存觀察清單個股；設定 `sources.weekly`。
+- 抓取：每次每日抓取後檢查，上次集保資料距今滿 7 天才下載；尚未更新就下次再試；失敗只記錄，不影響當日狀態。
+- 資料表 `holders(date, code, level, people, shares, pct)`；指標 `whalePct`、`whaleChg`（百分點）、`whaleLots`、`retailPeople`、`retailChg`、`holdersDate`。
+- 參數：`whaleLots`（1000）、`whaleAmount`（萬元，0 = 不用市值模式）、`retailMaxLots`（50）、`whaleDropPts`（0）；觀察清單 `whaleLots` 可個股覆寫。
+- 條件：`whaleDown`（持有面籌碼轉弱）、`whaleUp`（不在預設規則，可自行加入）、`retailUp` 改用集保散戶人數，融資連增為日資料近似。
+- 歷史回補：集保官網可查單檔一年，但需要網頁表單驗證，暫不實作；從接入當週開始累積。
 
 - **預設千張大戶**（參數 `whaleMode = "lots"`、`whaleLots = 1000`），與市場慣例一致。
 - **個股覆寫**：觀察清單欄位 `whaleLots`，例如高價股設 400 或 800 張。

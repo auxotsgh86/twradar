@@ -231,12 +231,27 @@ def inst_sell(c: Ctx) -> Res:
     return Res(PASS, f"法人合計連 {-s} 賣") if s <= -n else Res(FAIL)
 
 
-@condition("whaleDown", "大戶減碼", "hold", (), ("whaleChg",), "大戶持股比例較上週減少（集保，P4 接入）")
+@condition("whaleDown", "大戶減碼", "hold", ("whaleLots", "whaleAmount", "whaleDropPts"), ("whaleChg", "whalePct"),
+           "大戶持股比例較上週減少（集保股權分散表）")
 def whale_down(c: Ctx) -> Res:
     w = c.g("whaleChg")
     if w is None:
         return Res(NA)
-    return Res(PASS, f"大戶持股比例 {w:+.2f} 個百分點") if w < 0 else Res(FAIL)
+    lots = c.g("whaleLots")
+    if w < 0 and -w >= c.P.get("whaleDropPts", 0):
+        return Res(PASS, f"{fmt(lots)} 張以上大戶持股 {w:+.2f} 個百分點（{c.g('whalePct'):.2f}%）")
+    return Res(FAIL)
+
+
+@condition("whaleUp", "大戶增加", "any", ("whaleLots", "whaleAmount"), ("whaleChg", "whalePct"),
+           "大戶持股比例較上週增加（未放入預設規則，可自行加入加碼條件）")
+def whale_up(c: Ctx) -> Res:
+    w = c.g("whaleChg")
+    if w is None:
+        return Res(NA)
+    if w > 0:
+        return Res(PASS, f"{fmt(c.g('whaleLots'))} 張以上大戶持股 {w:+.2f} 個百分點")
+    return Res(FAIL, need="大戶持股比例週增")
 
 
 @condition("retailUp", "散戶增加", "hold", ("marginUpDays",), ("retailChg", "marginStreak"),
@@ -246,7 +261,7 @@ def retail_up(c: Ctx) -> Res:
     if r is None and ms is None:
         return Res(NA)
     if r is not None and r > 0:
-        return Res(PASS, f"散戶人數 +{r:,}")
+        return Res(PASS, f"{fmt(c.g('retailLots'))} 張以下散戶人數 +{r:,}")
     if ms is not None and ms >= c.P["marginUpDays"]:
         return Res(PASS, f"融資連 {ms} 日增加")
     return Res(FAIL)
@@ -300,6 +315,7 @@ COMPARE_FIELDS = {
     "foreignStreak": "外資連買（負為連賣）", "trustStreak": "投信連買（負為連賣）", "instStreak": "法人合計連買（負為連賣）",
     "foreign5d": "外資 5 日合計（張）", "trust5d": "投信 5 日合計（張）",
     "marginChg": "融資增減（張）", "shortChg": "融券增減（張）", "marginStreak": "融資連增天數", "marginPos60": "融資 60 日位置%",
+    "whalePct": "大戶持股比例%", "whaleChg": "大戶持股週增減（百分點）", "retailPeople": "散戶人數", "retailChg": "散戶人數週增減",
     "keyLevel": "關鍵價", "cost": "成本價", "profitPct": "持有報酬%",
 }
 OPS = {">": lambda a, b: a > b, ">=": lambda a, b: a >= b, "<": lambda a, b: a < b,

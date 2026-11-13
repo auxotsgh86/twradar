@@ -93,7 +93,9 @@ function cardHTML(s) {
      <div><span class="k">融資</span><span class="v">${fmtS(r.marginChg)}</span></div>
      <div><span class="k">月線</span><span class="v">${fmt(r.ma20, 2)}</span></div>
      <div><span class="k">乖離</span><span class="v">${isNum(g.maDistPct) ? fmtS(g.maDistPct, 1) + "%" : "—"}</span></div>
-     <div><span class="k">外/投 連續</span><span class="v">${isNum(r.foreignStreak) ? fmtS(r.foreignStreak) : "—"} / ${isNum(r.trustStreak) ? fmtS(r.trustStreak) : "—"}</span></div></div>
+     <div><span class="k">外/投 連續</span><span class="v">${isNum(r.foreignStreak) ? fmtS(r.foreignStreak) : "—"} / ${isNum(r.trustStreak) ? fmtS(r.trustStreak) : "—"}</span></div>
+     ${isNum(r.whalePct) ? `<div><span class="k">${fmt(r.whaleLots)} 張大戶</span><span class="v">${r.whalePct.toFixed(1)}%${isNum(r.whaleChg) ? ` <span class="${cls(r.whaleChg)}">${fmtS(r.whaleChg, 2)}</span>` : ""}</span></div>
+       <div><span class="k">散戶人數週增</span><span class="v ${cls(-(r.retailChg || 0))}">${isNum(r.retailChg) ? fmtS(r.retailChg) : "—"}</span></div>` : ""}</div>
    <div class="checks">${ck("法人", g.checks.inst, g.instWhy)}${ck("主力", g.checks.main)}${ck("散戶", g.checks.retail)}${ck("價量", g.checks.priceVolume)}${g.warnings.map(w => `<span class="ck warn">! ${esc(w)}</span>`).join("")}</div>
    ${g.light === "wait" && g.needs.length ? `<div class="need"><b>還差：</b>${esc(g.needs.join("；"))}</div>` : ""}
    ${g.light === "go" ? `<div class="need"><b>依據：</b>${esc([g.instWhy, g.checks.retail === "pass" ? "融資減且上漲" : "", g.checks.main === "pass" ? "主力集中" : "", "價量確認"].filter(Boolean).join("、"))}；觀察價位 月線 ${fmt(r.ma20, 2)}${isNum(r.prevHigh) ? "、前高 " + fmt(r.prevHigh, pd(r.prevHigh)) : ""}</div>` : ""}

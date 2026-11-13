@@ -14,6 +14,7 @@
 兩種範圍：
 - scope="market"：一次抓某交易所某天的全市場資料（證交所、櫃買中心）。
 - scope="stock"：逐檔抓一段期間（FinMind），用於備援與補歷史。
+- scope="weekly"：每週資料（集保股權分散表），fetch_week() 回傳最新一週。
 
 HTTP 由外部注入（Transport），測試時可換成假的。
 """
@@ -35,7 +36,7 @@ class Transport(Protocol):
 class Provider:
     id: str = ""
     label: str = ""
-    scope: str = "market"            # "market" | "stock"
+    scope: str = "market"            # "market" | "stock" | "weekly"
     markets: tuple[str, ...] = ()    # 涵蓋的市場（"TWSE"、"TPEx"）；空 = 不分市場
     datasets: tuple[str, ...] = ()   # 依抓取順序排列
     base: str = ""
@@ -59,6 +60,10 @@ class Provider:
     # ---- scope="stock" ----
     def fetch_stock(self, code: str, market: str, start: str, end: str,
                     datasets: tuple[str, ...] | None = None) -> Batch:
+        raise NotImplementedError
+
+    # ---- scope="weekly" ----
+    def fetch_week(self, codes: set[str] | None = None) -> Batch:
         raise NotImplementedError
 
     # ---- 診斷（twradar doctor） ----
