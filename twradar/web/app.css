@@ -96,7 +96,11 @@ td.l,th.l{text-align:left} tbody tr:last-child td{border-bottom:0}
   body{background:#fff}.topbar,.noprint,.foot{display:none!important}
   main{padding:0}.wrap{max-width:none;padding:0}
   .report{border:0;padding:0;border-radius:0}
-  .report .tablewrap{overflow:visible;border:0}
+  .report .tablewrap{overflow:visible;border:0;border-radius:0;background:none}
+  .report table{font-size:11px;page-break-inside:auto}.report th,.report td{padding:5px 6px}
+  .report thead{display:table-header-group}
+  .report tr,.report .tile,.report .sec>p,.report svg{break-inside:avoid;page-break-inside:avoid}
+  .report h2{break-after:avoid;page-break-after:avoid}
   *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
 }
 @media (max-width:560px){.tile{flex-direction:column;gap:0;padding:10px}.cards{grid-template-columns:1fr}.report{padding:16px}}
