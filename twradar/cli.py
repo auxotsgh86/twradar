@@ -130,6 +130,24 @@ def probe(cfg, date: str | None = None) -> None:
         print()
 
 
+def run_track(cfg, args) -> int:
+    from . import tracking
+    from .dates import norm_date
+    db, st = open_all(cfg)
+    if args.since:
+        since = norm_date(args.since)
+        dates = [r["date"] for r in db.q("SELECT date FROM market WHERE taiex IS NOT NULL AND date>=? ORDER BY date", (since,))]
+        print(f"補建 {len(dates)} 個交易日的追蹤紀錄（{since} 起）…", flush=True)
+        step = max(1, len(dates) // 20)
+        n = tracking.record(db, st.get(), dates,
+                            lambda i, t, d: print(f"  {i}/{t}（{d}）", flush=True) if i % step == 0 or i == t else None)
+        print(f"  寫入 {n} 筆", flush=True)
+    print(f"回填報酬：{tracking.update_forward(db)} 筆", flush=True)
+    s = tracking.refresh(db)
+    print(f"模型狀態：{s['status']}。{s['text']}")
+    return 0
+
+
 def run_backtest(cfg, args) -> int:
     import csv
     from datetime import datetime
@@ -193,6 +211,8 @@ def main(argv=None) -> None:
     sub.add_parser("watchlist")
     im = sub.add_parser("import"); im.add_argument("file")
     sub.add_parser("version")
+    tk = sub.add_parser("track", help="模型追蹤：補建過去的紀錄並更新摘要")
+    tk.add_argument("--since", help="從這天（YYYYMMDD）起補建，預設只更新報酬與摘要")
     bt = sub.add_parser("backtest", help="回溯分析")
     bt.add_argument("--start", help="開始日（預設：資料庫最後一天往前約兩年，至少保留 61 天暖身）")
     bt.add_argument("--end", help="結束日（預設：資料庫最後一天）")
@@ -260,6 +280,8 @@ def main(argv=None) -> None:
         print(f"已匯入 {len(items)} 檔")
     elif args.cmd == "backtest":
         sys.exit(run_backtest(cfg, args))
+    elif args.cmd == "track":
+        sys.exit(run_track(cfg, args))
     elif args.cmd == "admin":
         from .auth import AuthError, TokenPasswordAuthenticator
         open_all(cfg)

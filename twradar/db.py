@@ -50,6 +50,11 @@ CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS events (            -- 系統紀錄（UI 顯示）
   id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT DEFAULT (datetime('now')), level TEXT, message TEXT
 );
+CREATE TABLE IF NOT EXISTS track (             -- 上線後追蹤（影子組合）：每天股票池每檔的進場判定與之後的報酬
+  date TEXT NOT NULL, code TEXT NOT NULL, grp TEXT NOT NULL, tags TEXT, kind TEXT NOT NULL, rule TEXT, version TEXT,
+  f5 REAL, f10 REAL, f20 REAL, PRIMARY KEY (date, code)
+);
+CREATE INDEX IF NOT EXISTS idx_track_kind ON track(kind, date);
 CREATE INDEX IF NOT EXISTS idx_quotes_code ON quotes(code, date);
 CREATE INDEX IF NOT EXISTS idx_inst_code ON inst(code, date);
 CREATE INDEX IF NOT EXISTS idx_margin_code ON margin(code, date);

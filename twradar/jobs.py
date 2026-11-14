@@ -152,7 +152,18 @@ class Crawler:
         self.db.log("warn" if missing else "info", f"{d} {STATUS_TEXT[run['status']]}。{run['message']}")
         if analyze:
             run_analysis(self.db, d, self.settings)
+            if run["status"] in ("complete", "partial"):
+                self.track(d)
         return run
+
+    def track(self, d: str) -> None:
+        """上線後追蹤：失敗只記錄，不影響晨報。"""
+        from . import tracking
+        try:
+            tracking.daily(self.db, self.settings.get(), d)
+        except Exception as e:  # noqa: BLE001
+            log.exception("追蹤 %s 失敗", d)
+            self.db.log("warn", f"{d} 模型追蹤失敗：{e!r}")
 
     def crawl_weekly(self, d: str) -> str | None:
         """集保股權分散表：上次資料距今滿 7 天才抓（每週一次）；失敗只記錄，不影響當日狀態。"""

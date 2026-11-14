@@ -123,7 +123,16 @@ class App:
         for s in stocks:
             summary[s["signal"]["light"]] += 1
         return {"apiVersion": 1, **st, "generatedAt": now_tw().isoformat(timespec="seconds"),
-                "rules": rules_of(self.settings), "market": self.market_of(d), "summary": summary, "stocks": stocks}
+                "rules": rules_of(self.settings), "market": self.market_of(d), "summary": summary, "stocks": stocks,
+                "model": self.model_brief()}
+
+    def model_brief(self) -> dict | None:
+        from . import tracking
+        try:
+            return tracking.brief(self.db)
+        except Exception:  # noqa: BLE001
+            log.exception("讀取模型追蹤摘要失敗")
+            return None
 
     def latest_date(self, ready_only: bool = False) -> str | None:
         rows = self.db.q("SELECT date, status FROM runs WHERE status!='holiday' ORDER BY date DESC LIMIT 30")
@@ -190,7 +199,16 @@ class App:
                     "SELECT * FROM events WHERE level IN ('warn','error') ORDER BY id DESC LIMIT 20")],
                 "holdersLog": [dict(r) for r in self.db.q(
                     "SELECT * FROM events WHERE message LIKE '%集保%' ORDER BY id DESC LIMIT 5")],
-                "backtest": latest_backtest()}
+                "backtest": latest_backtest(),
+                "tracking": self.tracking()}
+
+    def tracking(self) -> dict | None:
+        from . import tracking
+        try:
+            return tracking.cached(self.db)
+        except Exception as e:  # noqa: BLE001
+            log.exception("讀取模型追蹤失敗")
+            return {"status": "錯誤", "text": repr(e)}
 
 
 def latest_backtest() -> dict | None:

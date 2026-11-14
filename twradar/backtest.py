@@ -113,26 +113,30 @@ def build_universe(db: DB, dates: list[str], cfg: BTConfig, watchlist: list[dict
 # ---------------- 歷史資料（一次載入記憶體） ----------------
 
 class History:
-    def __init__(self, db: DB, codes: list[str], until: str):
+    def __init__(self, db: DB, codes: list[str], until: str, since: str = ""):
+        """載入 codes 在 since～until（含）之間的資料；since 留空＝從頭載入。"""
         self.q: dict[str, list[dict]] = {c: [] for c in codes}
         self.ins: dict[str, list[dict]] = {c: [] for c in codes}
         self.mh: dict[str, list[dict]] = {c: [] for c in codes}
         ph = ",".join("?" * len(codes)) or "''"
+        rng = (since, until)
         for r in db.q(f"SELECT code, date, open, high, low, close, change, volume, value, src FROM quotes "
-                      f"WHERE code IN ({ph}) AND date<=? ORDER BY code, date", (*codes, until)):
+                      f"WHERE code IN ({ph}) AND date>=? AND date<=? ORDER BY code, date", (*codes, *rng)):
             self.q[r["code"]].append(dict(r))
-        for r in db.q(f"SELECT code, date, foreign_net, trust_net, dealer_net FROM inst WHERE code IN ({ph}) AND date<=? "
-                      f"ORDER BY code, date", (*codes, until)):
+        for r in db.q(f"SELECT code, date, foreign_net, trust_net, dealer_net FROM inst WHERE code IN ({ph}) AND date>=? "
+                      f"AND date<=? ORDER BY code, date", (*codes, *rng)):
             self.ins[r["code"]].append(dict(r))
         for r in db.q(f"SELECT code, date, margin_prev, margin_bal, short_prev, short_bal FROM margin WHERE code IN ({ph}) "
-                      f"AND date<=? ORDER BY code, date", (*codes, until)):
+                      f"AND date>=? AND date<=? ORDER BY code, date", (*codes, *rng)):
             self.mh[r["code"]].append(dict(r))
         self.qd = {c: [r["date"] for r in v] for c, v in self.q.items()}
         self.raw = {c: {r["date"]: r for r in v} for c, v in self.q.items()}
         self.id_ = {c: [r["date"] for r in v] for c, v in self.ins.items()}
         self.md = {c: [r["date"] for r in v] for c, v in self.mh.items()}
-        self.trading = [r["date"] for r in db.q("SELECT date FROM market WHERE taiex IS NOT NULL AND date<=? ORDER BY date", (until,))]
-        self.taiex = {r["date"]: r["taiex"] for r in db.q("SELECT date, taiex FROM market WHERE taiex IS NOT NULL AND date<=?", (until,))}
+        self.trading = [r["date"] for r in db.q("SELECT date FROM market WHERE taiex IS NOT NULL AND date>=? AND date<=? "
+                                                "ORDER BY date", rng)]
+        self.taiex = {r["date"]: r["taiex"] for r in db.q("SELECT date, taiex FROM market WHERE taiex IS NOT NULL "
+                                                          "AND date>=? AND date<=?", rng)}
         # 全期間還原價（只供計算報酬；指標仍用「當時」的資料計算）
         self.adj: dict[str, dict[str, dict]] = {}
         for c, rows in self.q.items():

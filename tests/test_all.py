@@ -630,6 +630,7 @@ class AuthApiTests(unittest.TestCase):
         self.assertIn("集保", js["recentIssues"][0]["message"])
         self.assertIn("集保", js["holdersLog"][0]["message"])
         self.assertIsNone(js["backtest"])
+        self.assertIn(js["tracking"]["status"], ("未啟用", "樣本不足", "累積中", "正常", "偏離"))
 
     def test_roles(self):
         R = {"Authorization": "Bearer " + self.cfg.read_token}
@@ -1143,6 +1144,40 @@ class BacktestTests(unittest.TestCase):
                 c.execute("UPDATE quotes SET open=?, high=?, low=?, close=?, change=? WHERE date=? AND code='2330'",
                           (*tuple(old), d))
 
+    def test_tracking_record_and_forward(self):
+        """模型追蹤：判定與報酬定義都和回溯分析一致；未滿期的報酬之後會回填；收盤分析後自動記錄。"""
+        from twradar import tracking
+        from twradar.backtest import History
+        from twradar.jobs import Crawler
+        S = self.st.get()
+        ds = self.dates[90:130]
+        try:
+            self.assertGreater(tracking.record(self.db, S, ds), 0)
+            h = History(self.db, ["2330"], self.dates[-1])
+            P = {**DEFAULT_RULES, **{p["id"]: p["value"] for p in S["params"]}}
+            for d in (ds[5], ds[20]):
+                r = self.db.one("SELECT * FROM track WHERE date=? AND code='2330'", (d,))
+                self.assertEqual(r["kind"], tracking.kind_of(evaluate(h.rec("2330", d, P), {"code": "2330"}, P, S)))
+                self.assertAlmostEqual(r["f5"], h.fwd("2330", d)[5], 3)
+                self.assertEqual(r["version"], tracking.rules_version(S))
+            last = self.db.one("SELECT f5, f20 FROM track WHERE date=? AND code='2330'", (ds[-1],))
+            self.assertIsNone(last["f20"])  # 記錄當時還沒有之後的資料
+            self.assertGreater(tracking.update_forward(self.db, self.dates[-1]), 0)
+            last = self.db.one("SELECT f20 FROM track WHERE date=? AND code='2330'", (ds[-1],))
+            self.assertAlmostEqual(last["f20"], h.fwd("2330", ds[-1])[20], 3)
+            s = tracking.refresh(self.db)
+            self.assertIn(s["status"], ("樣本不足", "累積中", "正常", "偏離"))
+            self.assertEqual(s["latest"], ds[-1])
+            # 收盤分析後自動記錄
+            cr = Crawler(self.db, self.cfg, self.st, transport=Fetcher(0, "test"))
+            cr.crawl_day(self.dates[-1], final=True, analyze=True)
+            self.assertTrue(self.db.one("SELECT COUNT(*) AS n FROM track WHERE date=?", (self.dates[-1],))["n"])
+            self.assertEqual(tracking.cached(self.db)["latest"], self.dates[-1])
+        finally:
+            with self.db.tx() as c:
+                c.execute("DELETE FROM track")
+            self.db.set_setting("tracking", None)
+
     def test_cli_and_report(self):
         import contextlib
         from types import SimpleNamespace
@@ -1194,6 +1229,38 @@ class BacktestTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("backfill", buf.getvalue())
 
+
+
+class TrackingSummaryTests(unittest.TestCase):
+    """模型追蹤摘要：近期上車超額報酬明顯低於過去 → 偏離。"""
+
+    def _db(self, n_days, recent):
+        from twradar.db import DB
+        db = DB(Path(tempfile.mkdtemp()) / "t.sqlite3")
+        rows = []
+        for i, d in enumerate(weekdays(n_days)):
+            base = recent if i >= n_days - 20 else 1.0
+            noise = 0.3 * ((i % 3) - 1)
+            for j in range(4):
+                f = base + noise + (j - 1.5) * 0.2
+                rows.append((d, f"G{j}", "大型", "大型", "上車", "", "v1", f, f, f))
+            for j in range(6):
+                rows.append((d, f"W{j}", "大型", "大型", "觀察", "", "v1", 0.0, 0.0, 0.0))
+        with db.tx() as c:
+            c.executemany("INSERT INTO track VALUES(?,?,?,?,?,?,?,?,?,?)", rows)
+        return db
+
+    def test_status(self):
+        from twradar import tracking
+        self.assertEqual(tracking.summary(self._db(70, 1.0))["status"], "正常")
+        s = tracking.summary(self._db(70, -3.0))
+        self.assertEqual(s["status"], "偏離")
+        self.assertLess(s["kinds"]["上車"]["recent"]["f5"]["excess"], 0)
+        self.assertEqual(s["kinds"]["上車"]["recent"]["f5"]["days"], 20)
+        self.assertEqual(tracking.summary(self._db(30, 1.0))["status"], "累積中")
+        self.assertEqual(tracking.summary(self._db(5, 1.0))["status"], "樣本不足")
+        from twradar.db import DB
+        self.assertEqual(tracking.summary(DB(Path(tempfile.mkdtemp()) / "e.sqlite3"))["status"], "未啟用")
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

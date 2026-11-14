@@ -242,6 +242,7 @@ async function viewReport(date) {
      ${divBars(st.map(s => s.code), [{values: st.map(s => s.data.foreign ?? null), color: "var(--c-foreign)"}, {values: st.map(s => s.data.trust ?? null), color: "var(--c-trust)"}], {h: 220, lab: d => d, every: 1})}</div>
     ${holdSec(st)}${sec("go", "上車／加碼訊號")}${sec("wait", "觀察中")}${sec("stop", "轉弱／不宜加碼")}${sec("na", "資料不足")}
     <div class="sec"><h2>精簡表</h2>${tableHTML(st)}</div>
+    ${e.model ? `<div class="small ${e.model.status === "偏離" ? "" : "muted"}" style="margin:8px 0">${e.model.status === "偏離" ? "⚠ " : ""}模型追蹤：${esc(e.model.status)}。${esc(e.model.text)}</div>` : ""}
     <div class="small muted">資料來源：證交所、櫃買中心${st.some(s => (s.data.source || "").includes("FinMind")) ? "、FinMind" : ""}。以上為籌碼訊號整理，非投資建議。</div>
    </article>`;
   $("#dsel").addEventListener("change", ev => location.hash = "#/report/" + ev.target.value);
