@@ -14,6 +14,10 @@
 - **盤後自動爬取**：證交所、櫃買中心官方全市場資料（收盤行情、三大法人、融資融券、法人金額），每次請求間隔 8 秒以上；官方來源失敗時改用 FinMind 逐檔備援。
 - **SQLite 儲存**：全市場每日資料都存下來，新增觀察個股時月線、季線立刻算得出來。
 - **右側加碼判定**：法人、主力、散戶、價量四項檢查，產生 🟢 加碼訊號／🟡 觀察中／🔴 不宜加碼，並列出「還差什麼」。門檻可調。
+- **持有面建議**：填入持有、成本後，另外判定停損、獲利出場、出貨警訊、獲利保護（減碼／出場）。
+- **集保股權分散表**：每週抓取，以市值換算大戶門檻（約 1 億元），追蹤大戶與散戶的週增減。
+- **回溯分析**：用兩年全市場資料重播規則，依大盤環境、股票組、樣本內／樣本外分別統計，並比較不同參數。
+- **模型追蹤**：每天記錄整個股票池的判定，之後回填報酬，近期表現明顯比過去差時在狀態頁與晨報示警。
 - **有狀態的 Web API**：每個回應都標明抓取與分析是否完成（`status`、`ready`），方便排程或其他程式接手。
 - **網頁 UI**：總覽、個股圖表（收盤／月線／季線、法人、融資）、A4 報表（列印成 PDF）、觀察清單與門檻設定、系統狀態。
 - **匯出**：JSON、CSV（Excel 可直接開啟）、整個 SQLite 資料庫。
@@ -130,7 +134,7 @@ API 全部需要 token，請不要公開分享含 token 的網址。
 | GET | `/api/v1/days/{YYYY-MM-DD}` | 指定日；`?format=csv`、`radar`（可匯入 claude.ai 雷達工具）、`status`（只回狀態） |
 | GET | `/api/v1/stocks/{code}/history?days=120` | 個股歷史（含 MA20/MA60、法人、融資）；`&format=csv` |
 | GET | `/api/v1/dates` | 所有日期與狀態 |
-| GET | `/api/v1/status` | 系統狀態、排程、補抓進度、最近的警告與錯誤、集保抓取紀錄、最新一次回溯分析摘要 |
+| GET | `/api/v1/status` | 系統狀態、排程、補抓進度、最近的警告與錯誤、集保抓取紀錄、最新一次回溯分析摘要（`backtest`）、模型追蹤（`tracking`） |
 | GET/POST/DELETE | `/api/v1/watchlist` | 觀察清單（POST 為管理；JSON：`code,name,market,group,note,keyLevel,holding,cost,shares`） |
 | GET/PUT | `/api/v1/rules` | 判定門檻（PUT 為管理） |
 | POST | `/api/v1/crawl` `/api/v1/analyze` `/api/v1/backfill` | 手動觸發（管理） |
@@ -211,6 +215,29 @@ TWRADAR_HOME=~/twradar-data .venv/bin/python -m twradar backtest --grid profitTa
   避免用今天的成份股回測過去。也可用 `--universe watchlist` 或 `--universe 檔案.csv`（每行：代號,組別）。
 - 依大盤環境（多頭／盤整／空頭）、股票組、樣本內／樣本外、每半年分別統計；`--split` 指定樣本外起始日（預設後三分之一）。
 - 訊號隔日開盤成交、扣費稅、使用還原股價。集保週資料沒有歷史，相關條件在回溯期間多為資料不足。
+- 在遠端伺服器上跑，請放到背景，SSH 斷線才不會中斷：
+  `nohup ./deploy/backtest.sh --skip-backfill > ~/backtest.log 2>&1 &`，用 `tail -f ~/backtest.log` 看進度。
+- 最新一次的摘要也會出現在狀態 API 的 `backtest`。
+
+## 模型追蹤
+
+回溯只能證明規則「過去有效」。模型追蹤每天收盤分析後，用目前的規則判定回溯用的整個股票池（約 200 檔，一律以未持有判定），
+記下燈號，之後回填 5／10／20 日報酬，用來及早發現規則失準。
+
+- **超額報酬**：個股報酬 − 同日同組別（大型／中型／上櫃／觀察清單）所有股票的平均；先算每天的平均，再比較。
+- **狀態**：近 20 個交易日的「上車」5 日超額報酬，比過去所有紀錄低超過 2 個標準誤 →「偏離」；
+  樣本太少為「樣本不足」，過去紀錄不到 20 天為「累積中」，沒有紀錄為「未啟用」。
+- **規則版本**：參數或規則一改，紀錄就標成新版本，看得出變化來自規則還是盤勢。
+- **在哪裡看**：晨報最底下一行；狀態 API 的 `tracking`（各種類近期與過去的超額報酬、每週訊號數、規則版本）；`/api/v1/latest` 的 `model`。
+- **第一次啟用**：用現有資料補建過去的紀錄（只做一次，不會向交易所發請求），馬上就有比較基準：
+
+```bash
+cd ~/twradar-app
+TWRADAR_HOME=~/twradar-data .venv/bin/python -m twradar track --since 20260312   # 從這天起補建
+TWRADAR_HOME=~/twradar-data .venv/bin/python -m twradar track                    # 只回填報酬、更新摘要
+```
+
+設計細節見 [docs/DESIGN.md](docs/DESIGN.md) 9.2 節。
 
 ## 五、已知限制
 - 證交所四項、櫃買中心三項來源皆已在實機確認可依日期抓取（2026/11）。程式會分辨「網站回傳較新日期（參數不對）」與「當日尚未公布」兩種情況，前者立即改用 FinMind 備援。
@@ -223,7 +250,7 @@ TWRADAR_HOME=~/twradar-data .venv/bin/python -m twradar backtest --grid profitTa
 
 ```
 twradar/
-  providers/    資料源（可替換）：base.py 介面、twse.py 證交所、tpex.py 櫃買中心、finmind.py 逐檔備援
+  providers/    資料源（可替換）：base.py 介面、twse.py 證交所、tpex.py 櫃買中心、finmind.py 逐檔備援、tdcc.py 集保（週）
   dates.py      日期工具
   settings.py   使用者設定 settings.json：驗證、版本、遷移
   auth.py       權限：唯讀／管理者、密碼、session、Authenticator 介面
@@ -234,10 +261,12 @@ twradar/
   conditions.py 內建條件（上車、加碼、否決、停損、出貨警訊…）
   rules.py      規則引擎、預設規則、規則驗證與升級
   backtest.py   回溯分析；backtest_report.py 報表
+  tracking.py   模型追蹤（影子組合、近期與過去比較）
   server.py     Web API 與靜態網頁
   db.py         SQLite 結構與存取
   web/          網頁 UI（原生 JS、SVG 圖表，無外部相依）
-deploy/         一鍵安裝／移除腳本（macOS launchd、Linux systemd）
+deploy/         一鍵安裝／移除腳本（macOS launchd、Linux systemd）、backtest.sh 回溯一鍵執行
+docs/           DESIGN.md 設計文件、STRATEGY.md 操作邏輯（給專家審閱）
 tests/          單元與端到端測試（內含模擬交易所伺服器）
 ```
 
