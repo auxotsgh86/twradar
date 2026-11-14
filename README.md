@@ -14,6 +14,7 @@
 - **盤後自動爬取**：證交所、櫃買中心官方全市場資料（收盤行情、三大法人、融資融券、法人金額），每次請求間隔 8 秒以上；官方來源失敗時改用 FinMind 逐檔備援。
 - **SQLite 儲存**：全市場每日資料都存下來，新增觀察個股時月線、季線立刻算得出來。
 - **右側加碼判定**：法人、主力、散戶、價量四項檢查，產生 🟢 加碼訊號／🟡 觀察中／🔴 不宜加碼，並列出「還差什麼」。門檻可調。
+- **觀察清單與標籤**：新增標的只要輸入代號或名稱；用標籤分類與篩選，表格可排序。`策略::名稱` 標籤可以帶規則（只寫和預設不同的參數、是否加碼），套用到所有貼了它的股票。
 - **持有面建議**：填入持有、成本後，另外判定停損、獲利出場、出貨警訊、獲利保護（減碼／出場）。
 - **集保股權分散表**：每週抓取，以市值換算大戶門檻（約 1 億元），追蹤大戶與散戶的週增減。
 - **回溯分析**：用兩年全市場資料重播規則，依大盤環境、股票組、樣本內／樣本外分別統計，並比較不同參數。
@@ -134,6 +135,9 @@ API 全部需要 token，請不要公開分享含 token 的網址。
 | GET | `/api/v1/days/{YYYY-MM-DD}` | 指定日；`?format=csv`、`radar`（可匯入 claude.ai 雷達工具）、`status`（只回狀態） |
 | GET | `/api/v1/stocks/{code}/history?days=120` | 個股歷史（含 MA20/MA60、法人、融資）；`&format=csv` |
 | GET | `/api/v1/dates` | 所有日期與狀態 |
+| GET | `/api/v1/stocks/search?q=` | 用代號或名稱找股票（新增標的用） |
+| GET／PUT | `/api/v1/labels` | 標籤與策略規則（PUT 需管理者） |
+| GET | `/api/v1/watchlist/{code}/rules`、`/trial` | 這檔實際套用的參數與來源；最近交易日逐條試算 |
 | GET | `/api/v1/status` | 系統狀態、排程、補抓進度、最近的警告與錯誤、集保抓取紀錄、最新一次回溯分析摘要（`backtest`）、模型追蹤（`tracking`） |
 | GET/POST/DELETE | `/api/v1/watchlist` | 觀察清單（POST 為管理；JSON：`code,name,market,group,note,keyLevel,holding,cost,shares`） |
 | GET/PUT | `/api/v1/rules` | 判定門檻（PUT 為管理） |
@@ -262,6 +266,7 @@ twradar/
   rules.py      規則引擎、預設規則、規則驗證與升級
   backtest.py   回溯分析；backtest_report.py 報表
   tracking.py   模型追蹤（影子組合、近期與過去比較）
+  labels.py     標籤與策略標籤（範圍互斥、規則覆寫）
   server.py     Web API 與靜態網頁
   db.py         SQLite 結構與存取
   web/          網頁 UI（原生 JS、SVG 圖表，無外部相依）

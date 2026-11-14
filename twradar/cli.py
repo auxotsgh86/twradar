@@ -262,7 +262,7 @@ def main(argv=None) -> None:
         print(info_text(cfg))
     elif args.cmd == "watchlist":
         for w in open_all(cfg)[1].watchlist():
-            print(f"{w['code']}\t{w['name']}\t{w['market']}\t{w['group']}")
+            print(f"{w['code']}\t{w['name']}\t{w['market']}\t{','.join(w['labels'])}")
     elif args.cmd == "import":
         _, st = open_all(cfg)
         data = json.load(open(args.file, encoding="utf-8"))

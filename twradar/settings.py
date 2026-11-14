@@ -53,6 +53,7 @@ BUILTIN_PARAMS = [
     {"id": "blowoff", "label": "爆量倍數 ≥", "value": 1.5, "unit": "倍", "min": 1, "max": 20, "note": ""},
 ]
 
+from .labels import clean as clean_labels, new_label, validate_labels
 from .rules import ENGINE_PARAMS, RULES_VERSION, default_playbooks, upgrade, validate_rules  # noqa: E402
 
 BUILTIN_PARAMS += ENGINE_PARAMS
@@ -81,6 +82,7 @@ def default_settings() -> dict:
         "schedule": ["17:40", "21:50", "23:40", "06:40"],
         "watchlist": [stock(code=c, name=n, market=m, group=g, keyLevel=k, note=note)
                       for c, n, m, g, k, note in SEED_WATCHLIST],
+        "labels": [],
         "params": copy.deepcopy(BUILTIN_PARAMS),
         "conditions": [],
         "playbooks": default_playbooks(),
@@ -91,9 +93,13 @@ def default_settings() -> dict:
 
 def stock(**kw) -> dict:
     """觀察清單一筆（補齊欄位）。"""
-    base = {"code": "", "name": "", "market": "TWSE", "group": "", "note": "", "keyLevel": None,
+    base = {"code": "", "name": "", "market": "TWSE", "labels": [], "note": "", "keyLevel": None,
             "holding": False, "cost": None, "shares": None, "buyDate": None, "whaleLots": None}
     base.update({k: v for k, v in kw.items() if k in base})
+    if "labels" not in kw and isinstance(kw.get("group"), str) and kw["group"].strip():
+        base["labels"] = [kw["group"].strip()]   # v0.2 以前的「分組」轉成標籤
+    if isinstance(base["labels"], list) and all(isinstance(x, str) for x in base["labels"]):
+        base["labels"] = clean_labels(base["labels"])
     return base
 
 
@@ -199,7 +205,7 @@ def validate(s: dict, max_watchlist: int = 50, providers: dict | None = None) ->
                 e(f"{p}.name", "名稱不可空白")
             if w.get("market") not in ("TWSE", "TPEx"):
                 e(f"{p}.market", "必須是 TWSE（上市）或 TPEx（上櫃）")
-            for k in ("group", "note"):
+            for k in ("note",):
                 if not isinstance(w.get(k, ""), str):
                     e(f"{p}.{k}", "必須是文字")
             for k in ("keyLevel", "cost"):
@@ -273,6 +279,7 @@ def validate(s: dict, max_watchlist: int = 50, providers: dict | None = None) ->
     for k in s:
         if k not in default_settings():
             e(k, "未知的設定項目")
+    validate_labels(s, e)
     return errs
 
 
@@ -309,6 +316,15 @@ def normalize(s: dict) -> dict:
                 p.setdefault("max", None)
     if isinstance(s.get("watchlist"), list):
         s["watchlist"] = [stock(**w) if isinstance(w, dict) else w for w in s["watchlist"]]
+    if isinstance(s.get("labels"), list):  # 補齊欄位；個股用到但還沒登記的標籤自動登記
+        s["labels"] = [{**lb, **new_label(lb["name"], **{k: v for k, v in lb.items() if k != "name"})} if isinstance(lb, dict) and isinstance(lb.get("name"), str) else lb
+                       for lb in s["labels"]]
+        have = {lb["name"] for lb in s["labels"] if isinstance(lb, dict) and "name" in lb}
+        for w in s.get("watchlist") or []:
+            for x in (w.get("labels") if isinstance(w, dict) and isinstance(w.get("labels"), list) else []):
+                if isinstance(x, str) and x not in have:
+                    s["labels"].append(new_label(x))
+                    have.add(x)
     return s
 
 

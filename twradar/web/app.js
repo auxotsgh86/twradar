@@ -84,7 +84,7 @@ const ck = (label, st, why) => `<span class="ck ${st}" title="${esc(why || "")}"
 function cardHTML(s) {
   const r = s.data, g = s.signal;
   return `<article class="card ${g.light}" data-code="${esc(s.code)}" tabindex="0">
-   <div class="row between"><div><b>${esc(s.code)} ${esc(s.name)}</b><div class="small muted">${esc(s.group || "")}・${s.market === "TPEx" ? "上櫃" : "上市"}</div></div>${badge(g.light, g.lightLabel)}</div>
+   <div class="row between"><div><b>${esc(s.code)} ${esc(s.name)}</b><div class="small muted">${s.market === "TPEx" ? "上櫃" : "上市"} ${chips(s.labels)}</div></div>${badge(g.light, g.lightLabel)}</div>
    <div class="price"><span class="c ${cls(r.chgPct)}">${fmt(r.close, pd(r.close))}</span><span class="num ${cls(r.chgPct)}">${fmtP(r.chgPct)}</span>
      <span class="small muted num">量 ${fmt(r.vol)}${isNum(g.volRatio) ? "・" + g.volRatio.toFixed(2) + "x" : ""}</span></div>
    <div class="metrics">
@@ -106,9 +106,10 @@ function cardHTML(s) {
    ${g.missing.length ? `<div class="note">未取得：${esc(g.missing.join("、"))}</div>` : ""}</article>`;
 }
 function tableHTML(stocks) {
-  return `<div class="tablewrap"><table><thead><tr><th class="l">代號</th><th class="l">名稱</th><th>收盤</th><th>漲跌%</th><th>外資</th><th>投信</th><th>融資增減</th><th>量比</th><th>月線位置</th><th class="l">燈號</th></tr></thead><tbody>
+  const ord = {go: 0, wait: 1, stop: 2, na: 3};
+  return `<div class="tablewrap"><table class="sortable" data-sort="main"><thead><tr><th class="l">代號</th><th class="l">名稱</th><th>收盤</th><th>漲跌%</th><th>外資</th><th>投信</th><th>融資增減</th><th>量比</th><th>月線位置</th><th class="l">燈號</th></tr></thead><tbody>
   ${stocks.map(s => { const r = s.data, g = s.signal; const pos = g.belowMa20 === null || g.belowMa20 === undefined ? "—" : g.belowMa20 ? "月線下" : g.maDistPct < 0 ? "貼近月線" : "月線上";
-    return `<tr><td class="l num">${esc(s.code)}</td><td class="l">${esc(s.name)}</td><td class="num">${fmt(r.close, pd(r.close))}</td><td class="num ${cls(r.chgPct)}">${fmtP(r.chgPct)}</td><td class="num ${cls(r.foreign)}">${fmtS(r.foreign)}</td><td class="num ${cls(r.trust)}">${fmtS(r.trust)}</td><td class="num">${fmtS(r.marginChg)}</td><td class="num">${isNum(g.volRatio) ? g.volRatio.toFixed(2) + "x" : "—"}</td><td>${pos} <span class="muted num">${isNum(g.maDistPct) ? "(" + fmtS(g.maDistPct, 1) + "%)" : ""}</span></td><td class="l">${badge(g.light, g.lightLabel)}</td></tr>`; }).join("")}
+    return `<tr><td class="l num">${esc(s.code)}</td><td class="l">${esc(s.name)}</td><td class="num">${fmt(r.close, pd(r.close))}</td><td class="num ${cls(r.chgPct)}">${fmtP(r.chgPct)}</td><td class="num ${cls(r.foreign)}">${fmtS(r.foreign)}</td><td class="num ${cls(r.trust)}">${fmtS(r.trust)}</td><td class="num">${fmtS(r.marginChg)}</td><td class="num">${isNum(g.volRatio) ? g.volRatio.toFixed(2) + "x" : "—"}</td><td data-v="${isNum(g.maDistPct) ? g.maDistPct : ""}">${pos} <span class="muted num">${isNum(g.maDistPct) ? "(" + fmtS(g.maDistPct, 1) + "%)" : ""}</span></td><td class="l" data-v="${ord[g.light] ?? 9}">${badge(g.light, g.lightLabel)}</td></tr>`; }).join("")}
   </tbody></table></div>`;
 }
 
@@ -280,7 +281,7 @@ function bindAuthPanel() {
 }
 
 async function viewSettings() {
-  const [sys, wl, rules, ev, authHTML] = await Promise.all([api("/status"), api("/watchlist"), api("/rules"), api("/events?limit=80"), authPanel()]);
+  const [sys, wl, rules, ev, authHTML, labels] = await Promise.all([api("/status"), api("/watchlist"), api("/rules"), api("/events?limit=80"), authPanel(), loadLabels()]);
   const bf = sys.backfill;
   $("#view").innerHTML = `
    <h1>設定與狀態</h1>${authHTML}
@@ -294,22 +295,7 @@ async function viewSettings() {
      <div class="tablewrap"><table><thead><tr><th class="l">資料日</th><th class="l">狀態</th><th>次數</th><th class="l">完成時間</th><th class="l">說明</th></tr></thead><tbody>
       ${sys.recentRuns.map(r => `<tr><td class="l num"><a href="#/day/${r.date.slice(0, 4)}-${r.date.slice(4, 6)}-${r.date.slice(6)}">${r.date}</a></td><td class="l">${badge(r.status)}</td><td class="num">${r.attempts}</td><td class="l num">${esc((r.finished_at || "").replace("T", " ").slice(0, 16))}</td><td class="l" style="white-space:normal">${esc(r.message)}</td></tr>`).join("")}
      </tbody></table></div></section>
-   <section class="panel" style="display:flex;flex-direction:column;gap:10px"><div class="row between"><h2>觀察清單（${wl.length}/${sys.maxWatchlist}）</h2></div>
-     <form id="addForm" class="grid2"><div class="field"><label for="a-code">代號</label><input id="a-code" required placeholder="2330"></div>
-      <div class="field"><label for="a-name">名稱</label><input id="a-name" required placeholder="台積電"></div>
-      <div class="field"><label for="a-mkt">市場</label><select id="a-mkt"><option value="TWSE">上市</option><option value="TPEx">上櫃</option></select></div>
-      <div class="field"><label for="a-grp">分組</label><input id="a-grp"></div>
-      <div class="field"><label for="a-key">關鍵價（選填）</label><input id="a-key" inputmode="decimal"></div>
-      <div class="field"><label for="a-note">觀察重點</label><input id="a-note"></div>
-      <div class="field"><label for="a-hold">持有中</label><select id="a-hold"><option value="0">否</option><option value="1">是</option></select></div>
-      <div class="field"><label for="a-cost">成本價（選填）</label><input id="a-cost" inputmode="decimal"></div>
-      <div class="field"><label for="a-shares">股數（選填）</label><input id="a-shares" inputmode="numeric"></div>
-      <div class="field"><label for="a-buy">買進日期（選填，保本線用）</label><input id="a-buy" type="date"></div>
-      <div class="field" style="justify-content:flex-end"><button class="primary">加入／更新</button></div></form>
-     <div class="tablewrap"><table><thead><tr><th class="l">代號</th><th class="l">名稱</th><th class="l">市場</th><th class="l">分組</th><th>關鍵價</th><th class="l">持有</th><th class="l">觀察重點</th><th></th></tr></thead><tbody>
-      ${wl.map(w => `<tr><td class="l num">${esc(w.code)}</td><td class="l">${esc(w.name)}</td><td class="l">${w.market === "TPEx" ? "上櫃" : "上市"}</td><td class="l">${esc(w.group)}</td><td class="num">${fmt(w.keyLevel)}</td><td class="l">${w.holding ? "是" + (isNum(w.cost) ? "（成本 " + fmt(w.cost, 2) + "）" : "") : ""}</td><td class="l" style="white-space:normal">${esc(w.note)}</td>
-        <td><button data-edit='${esc(JSON.stringify(w))}'>編輯</button> <button class="danger" data-del="${esc(w.code)}">移除</button></td></tr>`).join("")}
-     </tbody></table></div></section>
+   ${watchPanelHTML(wl, labels, sys)}
    <section class="panel" style="display:flex;flex-direction:column;gap:10px"><h2>判定門檻</h2>
      <form id="rulesForm" class="grid2">${rules.params.map(p => `<div class="field"><label for="r-${esc(p.id)}">${esc(p.label)}${p.unit ? "（" + esc(p.unit) + "）" : ""}</label><input id="r-${esc(p.id)}" name="${esc(p.id)}" type="number" step="any" value="${p.value}"${isNum(p.min) ? ` min="${p.min}"` : ""}${isNum(p.max) ? ` max="${p.max}"` : ""}><span class="hint">${esc(p.note || "")}${p.id in rules.defaults ? "　預設 " + rules.defaults[p.id] : "　自訂參數"}</span></div>`).join("")}
       <div class="field" style="justify-content:flex-end"><button class="primary">儲存並重新分析</button></div></form></section>
@@ -319,7 +305,9 @@ async function viewSettings() {
 GET /api/v1/latest?ready=1      最新「抓取＋分析皆完成」的交易日
 GET /api/v1/days/2026-11-11     指定日；?format=csv | radar | status
 GET /api/v1/stocks/2330/history?days=120&amp;format=csv
-GET /api/v1/dates  /status  /watchlist  /rules  /events
+GET /api/v1/dates  /status  /watchlist  /rules  /events  /labels
+GET /api/v1/stocks/search?q=奇鋐   用代號或名稱找股票
+GET /api/v1/watchlist/3017/rules | trial   這檔套用的規則／試算
 GET /api/v1/export/sqlite       下載整個資料庫（管理）
 GET/PUT /api/v1/settings        全部設定（管理）；/settings/history、/restore、/reset、/export</div></section>
    <section class="panel"><h2>系統紀錄</h2><div class="log">${ev.map(e => `${esc(e.at)}  [${esc(e.level)}] ${esc(e.message)}`).join("\n")}</div></section>`;
@@ -328,18 +316,153 @@ GET/PUT /api/v1/settings        全部設定（管理）；/settings/history、/
   $("#crawlBtn").onclick = () => act("/crawl", {}, "已排入抓取");
   $("#anaBtn").onclick = () => act("/analyze", {}, "已重新分析");
   $("#bfBtn").onclick = () => act("/backfill", {}, "已排入歷史補抓");
-  $("#addForm").addEventListener("submit", async ev => { ev.preventDefault();
-    const b = {code: $("#a-code").value.trim(), name: $("#a-name").value.trim(), market: $("#a-mkt").value, group: $("#a-grp").value.trim(), note: $("#a-note").value.trim(), keyLevel: $("#a-key").value ? Number($("#a-key").value) : null,
-      holding: $("#a-hold").value === "1", cost: $("#a-cost").value ? Number($("#a-cost").value) : null, shares: $("#a-shares").value ? parseInt($("#a-shares").value, 10) : null,
-      buyDate: $("#a-buy").value || null};
-    try { await api("/watchlist", {method: "POST", body: JSON.stringify(b)}); toast("已儲存 " + b.code + "，歷史資料會在背景補齊"); viewSettings(); } catch (err) { toast(err.message); } });
-  document.querySelectorAll("[data-edit]").forEach(btn => btn.onclick = () => { const w = JSON.parse(btn.dataset.edit);
-    $("#a-code").value = w.code; $("#a-name").value = w.name; $("#a-mkt").value = w.market; $("#a-grp").value = w.group || ""; $("#a-note").value = w.note || ""; $("#a-key").value = w.keyLevel ?? "";
-    $("#a-hold").value = w.holding ? "1" : "0"; $("#a-cost").value = w.cost ?? ""; $("#a-shares").value = w.shares ?? ""; $("#a-buy").value = w.buyDate ? w.buyDate.replace(/^(\d{4})-?(\d{2})-?(\d{2})$/, "$1-$2-$3") : ""; $("#a-code").focus(); });
-  document.querySelectorAll("[data-del]").forEach(btn => btn.onclick = () => sheet(`<h2>移除 ${esc(btn.dataset.del)}？</h2><div class="small muted">已抓取的歷史資料會保留。</div><div class="row" style="justify-content:flex-end"><button data-close>取消</button><button class="danger" id="yes">移除</button></div>`,
-    s => s.querySelector("#yes").onclick = async () => { await api("/watchlist/" + btn.dataset.del, {method: "DELETE"}); $("#layer").innerHTML = ""; toast("已移除"); viewSettings(); }));
+  bindWatchPanel(wl, labels, rules);
+  applySorts();
   $("#rulesForm").addEventListener("submit", async ev => { ev.preventDefault(); const b = {}; rules.params.forEach(p => { const v = Number(ev.target[p.id].value); if (isFinite(v)) b[p.id] = v; });
     try { await api("/rules", {method: "PUT", body: JSON.stringify(b)}); toast("已儲存並重新分析"); } catch (err) { toast(err.message); } });
+}
+
+/* ---------- 標籤、排序 ---------- */
+let LABELS = {};
+async function loadLabels() { try { const ls = await api("/labels"); LABELS = Object.fromEntries(ls.map(l => [l.name, l])); return ls; } catch (e) { return []; } }
+const chip = (name, extra = "") => { const i = name.indexOf("::"), c = (LABELS[name] || {}).color || "#5c6b7a";
+  return `<span class="lbl" style="--c:${esc(c)}" data-label="${esc(name)}">${i > 0 ? `<span>${esc(name.slice(0, i))}</span><b>${esc(name.slice(i + 2))}</b>` : `<span>${esc(name)}</span>`}${extra}</span>`; };
+const chips = names => (names || []).map(n => chip(n)).join(" ");
+const sortVal = c => { const v = c.dataset.v !== undefined ? c.dataset.v : c.textContent.trim(); const t = v.replace(/[,+%x]/g, ""), n = Number(t); return t !== "" && isFinite(n) ? n : v; };
+function sortTable(tb, col, dir) {
+  const body = tb.tBodies[0]; if (!body) return;
+  const rows = [...body.rows].map(r => [sortVal(r.cells[col] || r.cells[0]), r]);
+  rows.sort(([a], [b]) => { const na = typeof a === "number", nb = typeof b === "number";
+    if (na !== nb) return na ? -1 : 1;                      // 沒有數值的排最後
+    return (na ? a - b : String(a).localeCompare(String(b), "zh-Hant")) * dir; });
+  rows.forEach(([, r]) => body.appendChild(r));
+  [...tb.tHead.rows[0].cells].forEach((th, i) => i === col ? th.setAttribute("aria-sort", dir > 0 ? "ascending" : "descending") : th.removeAttribute("aria-sort"));
+}
+function applySorts() { document.querySelectorAll("table.sortable[data-sort]").forEach(tb => { try { const s = JSON.parse(localStorage.getItem("twradar-sort-" + tb.dataset.sort) || "null"); if (s) sortTable(tb, s.col, s.dir); } catch (e) {} }); }
+document.addEventListener("click", ev => { const th = ev.target.closest("table.sortable thead th"); if (!th || th.dataset.nosort !== undefined) return;
+  const tb = th.closest("table"), col = th.cellIndex, dir = th.getAttribute("aria-sort") === "ascending" ? -1 : 1;
+  sortTable(tb, col, dir); try { localStorage.setItem("twradar-sort-" + tb.dataset.sort, JSON.stringify({col, dir})); } catch (e) {} });
+
+/* ---------- 觀察清單、標籤 ---------- */
+const mktName = m => m === "TPEx" ? "上櫃" : "上市";
+function watchPanelHTML(wl, labels, sys) {
+  return `<section class="panel" style="display:flex;flex-direction:column;gap:10px"><div class="row between"><h2>觀察清單（${wl.length}/${sys.maxWatchlist}）</h2><span class="small muted">點欄位標題可排序</span></div>
+     <div class="suggest"><input id="addQ" autocomplete="off" placeholder="新增：輸入代號或名稱，例如 3017 或 奇鋐" aria-label="新增標的"><div id="addSug" class="sugbox" hidden></div></div>
+     ${labels.length ? `<div class="row" id="lblFilter"><span class="small muted">篩選：</span>${labels.map(l => `<button type="button" class="lblbtn" data-f="${esc(l.name)}">${chip(l.name)}<span class="small muted">${l.count}</span></button>`).join("")}</div>` : ""}
+     <div class="tablewrap"><table class="sortable" data-sort="wl"><thead><tr><th class="l">代號</th><th class="l">名稱</th><th class="l">市場</th><th class="l">標籤</th><th>關鍵價</th><th class="l">持有</th><th>成本</th><th class="l">觀察重點</th><th data-nosort></th></tr></thead><tbody id="wlBody">
+      ${wl.map(w => `<tr data-labels="${esc(JSON.stringify(w.labels))}"><td class="l num">${esc(w.code)}</td><td class="l">${esc(w.name)}</td><td class="l">${mktName(w.market)}</td><td class="l" data-v="${esc(w.labels.join(" "))}">${chips(w.labels)}</td><td class="num">${fmt(w.keyLevel)}</td><td class="l" data-v="${w.holding ? 0 : 1}">${w.holding ? "是" : ""}</td><td class="num">${isNum(w.cost) ? fmt(w.cost, 2) : ""}</td><td class="l" style="white-space:normal">${esc(w.note)}</td>
+        <td><button data-edit="${esc(w.code)}">編輯</button> <button class="danger" data-del="${esc(w.code)}">移除</button></td></tr>`).join("")}
+     </tbody></table></div></section>
+   <section class="panel" style="display:flex;flex-direction:column;gap:10px"><div class="row between"><h2>標籤（${labels.length}）</h2><span class="small muted">「策略::名稱」可以帶規則；同一個範圍（:: 前面相同）一檔只能貼一個</span></div>
+     <form id="lblAdd" class="row"><input id="lblNew" style="flex:1" placeholder="新增標籤，例如 散熱 或 策略::中小飆股" maxlength="30"><button class="primary">新增</button></form>
+     ${labels.length ? `<div class="tablewrap"><table class="sortable" data-sort="labels"><thead><tr><th class="l">標籤</th><th>檔數</th><th class="l">規則</th><th class="l" data-nosort>顏色</th><th data-nosort></th></tr></thead><tbody>
+      ${labels.map(l => { const n = Object.keys(l.params || {}).length; return `<tr><td class="l" data-v="${esc(l.name)}">${chip(l.name)}</td><td class="num">${l.count}</td><td class="l">${l.strategy ? esc([n ? `覆寫 ${n} 個參數` : "", l.allowAdd === false ? "不加碼" : ""].filter(Boolean).join("、") || "與預設相同") : '<span class="muted">—</span>'}</td>
+        <td class="l"><input type="color" value="${esc(l.color)}" data-color="${esc(l.name)}" aria-label="顏色"></td>
+        <td>${l.strategy ? `<button data-strat="${esc(l.name)}">編輯規則</button> ` : ""}<button data-ren="${esc(l.name)}">改名</button> <button class="danger" data-ldel="${esc(l.name)}">刪除</button></td></tr>`; }).join("")}
+     </tbody></table></div>` : `<div class="small muted">還沒有標籤。在個股的「編輯」裡直接輸入也會自動建立。</div>`}</section>`;
+}
+function bindWatchPanel(wl, labels, rules) {
+  const reload = () => viewSettings();
+  const putLabels = async (list, renames, msg) => { try { await api("/labels", {method: "PUT", body: JSON.stringify({labels: list, renames: renames || {}})}); $("#layer").innerHTML = ""; toast(msg); reload(); } catch (err) { toast(err.message); } };
+  const plain = l => ({name: l.name, color: l.color, params: l.params || {}, allowAdd: l.allowAdd !== false});
+  const addStock = async body => { try { const j = await api("/watchlist", {method: "POST", body: JSON.stringify(body)}); toast(`已加入 ${j.stock.code} ${j.stock.name}，歷史資料會在背景補齊`); reload(); } catch (err) { toast(err.message); } };
+  /* 新增：輸入代號或名稱 */
+  const q = $("#addQ"), sug = $("#addSug"); let timer = 0, seq = 0;
+  q.addEventListener("input", () => { clearTimeout(timer); const v = q.value.trim(); if (!v) { sug.hidden = true; return; }
+    timer = setTimeout(async () => { const my = ++seq; let hits = []; try { hits = await api("/stocks/search?q=" + encodeURIComponent(v)); } catch (e) {} if (my !== seq) return;
+      sug.innerHTML = hits.length ? hits.map(h => `<button type="button" data-code="${esc(h.code)}"${h.inWatchlist ? " disabled" : ""}><b class="num">${esc(h.code)}</b> ${esc(h.name)} <span class="small muted">${mktName(h.market)}${h.inWatchlist ? "・已在清單" : ""}</span></button>`).join("")
+        : `<div class="small muted" style="padding:8px 10px">找不到「${esc(v)}」。資料庫裡沒有這檔的行情時，按 Enter 也無法加入。</div>`;
+      sug.hidden = false; }, 180); });
+  q.addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); const first = sug.querySelector("button:not([disabled])"); if (!sug.hidden && first && sug.querySelectorAll("button").length === 1) addStock({code: first.dataset.code}); else if (q.value.trim()) addStock({q: q.value.trim()}); } else if (ev.key === "Escape") sug.hidden = true; });
+  sug.addEventListener("click", ev => { const b = ev.target.closest("button[data-code]"); if (b) addStock({code: b.dataset.code}); });
+  /* 標籤篩選 */
+  const active = new Set();
+  document.querySelectorAll("#lblFilter [data-f]").forEach(b => b.onclick = () => { active.has(b.dataset.f) ? active.delete(b.dataset.f) : active.add(b.dataset.f); b.classList.toggle("on");
+    document.querySelectorAll("#wlBody tr").forEach(tr => { const ls = JSON.parse(tr.dataset.labels); tr.hidden = [...active].some(a => !ls.includes(a)); }); });
+  /* 編輯、移除 */
+  document.querySelectorAll("[data-edit]").forEach(btn => btn.onclick = () => editStock(wl.find(w => w.code === btn.dataset.edit), labels, rules, reload));
+  document.querySelectorAll("[data-del]").forEach(btn => btn.onclick = () => sheet(`<h2>移除 ${esc(btn.dataset.del)}？</h2><div class="small muted">已抓取的歷史資料會保留。</div><div class="row" style="justify-content:flex-end"><button data-close>取消</button><button class="danger" id="yes">移除</button></div>`,
+    s => s.querySelector("#yes").onclick = async () => { await api("/watchlist/" + btn.dataset.del, {method: "DELETE"}); $("#layer").innerHTML = ""; toast("已移除"); reload(); }));
+  /* 標籤管理 */
+  $("#lblAdd").addEventListener("submit", ev => { ev.preventDefault(); const name = $("#lblNew").value.trim(); if (!name) return;
+    if (labels.some(l => l.name === name)) { toast("已經有這個標籤"); return; }
+    putLabels([...labels.map(plain), {name, color: "#5c6b7a", params: {}, allowAdd: true}], null, "已新增標籤"); });
+  document.querySelectorAll("[data-color]").forEach(inp => inp.onchange = () => putLabels(labels.map(l => ({...plain(l), color: l.name === inp.dataset.color ? inp.value : l.color})), null, "已更新顏色"));
+  document.querySelectorAll("[data-ldel]").forEach(btn => btn.onclick = () => { const l = labels.find(x => x.name === btn.dataset.ldel);
+    sheet(`<h2>刪除標籤？</h2><div>${chip(l.name)}</div><div class="small muted">${l.count ? `會從 ${l.count} 檔股票拿掉這個標籤` : "目前沒有股票使用"}${l.strategy && l.count ? "，這些股票改用全域預設規則" : ""}。</div><div class="row" style="justify-content:flex-end"><button data-close>取消</button><button class="danger" id="yes">刪除</button></div>`,
+      s => s.querySelector("#yes").onclick = () => putLabels(labels.filter(x => x.name !== l.name).map(plain), null, "已刪除標籤")); });
+  document.querySelectorAll("[data-ren]").forEach(btn => btn.onclick = () => { const old = btn.dataset.ren;
+    sheet(`<h2>標籤改名</h2><form id="renForm" class="row"><input id="renName" style="flex:1" maxlength="30" value="${esc(old)}"><button class="primary">儲存</button></form><div class="small muted">已貼這個標籤的股票會一起改。</div>`,
+      s => { s.querySelector("#renName").focus(); s.querySelector("#renForm").addEventListener("submit", ev => { ev.preventDefault(); const name = s.querySelector("#renName").value.trim(); if (!name || name === old) { $("#layer").innerHTML = ""; return; }
+        if (labels.some(l => l.name === name)) { toast("已經有這個標籤"); return; }
+        putLabels(labels.map(l => ({...plain(l), name: l.name === old ? name : l.name})), {[old]: name}, "已改名"); }); }); });
+  document.querySelectorAll("[data-strat]").forEach(btn => btn.onclick = () => editStrategy(labels.find(l => l.name === btn.dataset.strat), labels, rules, putLabels, plain));
+}
+const NO_OVERRIDE = ["pullbackDays", "whaleLots", "whaleAmount", "retailMaxLots"];
+function editStrategy(l, labels, rules, putLabels, plain) {
+  const ov = {...(l.params || {})}; const ps = rules.params.filter(p => !NO_OVERRIDE.includes(p.id)); const byId = Object.fromEntries(ps.map(p => [p.id, p]));
+  sheet(`<h2>策略規則</h2><div>${chip(l.name)} <span class="small muted">影響 ${l.count} 檔</span></div>
+    <div class="small muted">只寫和全域預設不一樣的地方；沒列出的參數都跟著預設走。</div>
+    <label class="row"><input type="checkbox" id="stAdd"${l.allowAdd === false ? "" : " checked"}> 允許加碼（取消勾選＝只上車、不加碼）</label>
+    <div id="stRows" style="display:flex;flex-direction:column;gap:6px"></div>
+    <div class="row"><select id="stPick" style="flex:1"></select><button type="button" id="stPlus">加入覆寫</button></div>
+    <div class="row" style="justify-content:flex-end"><button data-close>取消</button><button class="primary" id="stSave">儲存並重新分析</button></div>`,
+    s => { const draw = () => {
+        s.querySelector("#stRows").innerHTML = Object.keys(ov).map(k => { const p = byId[k]; return p ? `<div class="row"><span style="flex:1">${esc(p.label)}${p.unit ? "（" + esc(p.unit) + "）" : ""}<span class="small muted">　預設 ${p.value}</span></span><input type="number" step="any" style="width:90px" data-ov="${esc(k)}" value="${ov[k]}"${isNum(p.min) ? ` min="${p.min}"` : ""}${isNum(p.max) ? ` max="${p.max}"` : ""}><button type="button" data-rm="${esc(k)}" aria-label="移除">✕</button></div>` : ""; }).join("") || `<div class="small muted">目前沒有覆寫任何參數。</div>`;
+        s.querySelector("#stPick").innerHTML = ps.filter(p => !(p.id in ov)).map(p => `<option value="${esc(p.id)}">${esc(p.label)}（預設 ${p.value}${esc(p.unit || "")}）</option>`).join("");
+        s.querySelectorAll("[data-ov]").forEach(i => i.oninput = () => { ov[i.dataset.ov] = Number(i.value); });
+        s.querySelectorAll("[data-rm]").forEach(b => b.onclick = () => { delete ov[b.dataset.rm]; draw(); }); };
+      draw();
+      s.querySelector("#stPlus").onclick = () => { const k = s.querySelector("#stPick").value; if (k) { ov[k] = byId[k].value; draw(); } };
+      s.querySelector("#stSave").onclick = () => { if (Object.values(ov).some(v => !isFinite(v))) { toast("覆寫的值必須是數字"); return; }
+        putLabels(labels.map(x => x.name === l.name ? {...plain(x), params: ov, allowAdd: s.querySelector("#stAdd").checked} : plain(x)), null, "已儲存策略並重新分析"); }; });
+}
+function editStock(w, labels, rules, reload) {
+  let cur = [...w.labels];
+  sheet(`<div class="row between"><h2><span class="num">${esc(w.code)}</span> ${esc(w.name)}</h2><span class="small muted">${mktName(w.market)}</span></div>
+    <div class="tabs2" role="tablist"><button type="button" role="tab" data-tab="base" class="on">基本</button><button type="button" role="tab" data-tab="rules">規則</button><button type="button" role="tab" data-tab="trial">試算</button></div>
+    <form id="pane-base" style="display:flex;flex-direction:column;gap:10px">
+      <div class="field"><label>標籤</label><div id="eLabels" class="row"></div>
+        <input id="eLabelIn" list="eLabelList" placeholder="輸入後按 Enter；策略::名稱 會套用那個策略的規則" maxlength="30"><datalist id="eLabelList">${labels.map(l => `<option value="${esc(l.name)}">`).join("")}</datalist></div>
+      <div class="field"><label for="e-note">觀察重點</label><input id="e-note" value="${esc(w.note || "")}"></div>
+      <div class="grid2"><div class="field"><label for="e-key">關鍵價（選填）</label><input id="e-key" inputmode="decimal" value="${w.keyLevel ?? ""}"></div>
+       <div class="field"><label for="e-hold">持有中</label><select id="e-hold"><option value="0">否</option><option value="1"${w.holding ? " selected" : ""}>是</option></select></div>
+       <div class="field"><label for="e-cost">成本價</label><input id="e-cost" inputmode="decimal" value="${w.cost ?? ""}"></div>
+       <div class="field"><label for="e-shares">股數</label><input id="e-shares" inputmode="numeric" value="${w.shares ?? ""}"></div>
+       <div class="field"><label for="e-buy">買進日期（保本線用）</label><input id="e-buy" type="date" value="${w.buyDate ? esc(w.buyDate.replace(/^(\d{4})-?(\d{2})-?(\d{2})$/, "$1-$2-$3")) : ""}"></div>
+       <div class="field"><label for="e-name">名稱</label><input id="e-name" value="${esc(w.name)}"></div></div>
+      <div class="small muted">持有中要填成本，停損與出場的提示才會啟動。</div>
+      <div class="row" style="justify-content:flex-end"><button type="button" data-close>取消</button><button class="primary">儲存</button></div></form>
+    <div id="pane-rules" hidden></div><div id="pane-trial" hidden></div>`,
+    s => { const q = x => s.querySelector(x);
+      const draw = () => { q("#eLabels").innerHTML = cur.map(n => chip(n, `<button type="button" class="x" data-x="${esc(n)}" aria-label="移除 ${esc(n)}">×</button>`)).join(" ") || `<span class="small muted">沒有標籤</span>`;
+        q("#eLabels").querySelectorAll("[data-x]").forEach(b => b.onclick = () => { cur = cur.filter(n => n !== b.dataset.x); draw(); }); };
+      const add = v => { v = v.trim(); if (!v) return; const i = v.indexOf("::"); if (i > 0) cur = cur.filter(n => !n.startsWith(v.slice(0, i + 2))); if (!cur.includes(v)) cur.push(v); draw(); };
+      draw();
+      q("#eLabelIn").addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); add(ev.target.value); ev.target.value = ""; } });
+      q("#eLabelIn").addEventListener("change", ev => { if (labels.some(l => l.name === ev.target.value)) { add(ev.target.value); ev.target.value = ""; } });
+      q("#pane-base").addEventListener("submit", async ev => { ev.preventDefault(); add(q("#eLabelIn").value);
+        const b = {code: w.code, name: q("#e-name").value.trim() || w.name, market: w.market, labels: cur, note: q("#e-note").value.trim(), keyLevel: q("#e-key").value ? Number(q("#e-key").value) : null,
+          holding: q("#e-hold").value === "1", cost: q("#e-cost").value ? Number(q("#e-cost").value) : null, shares: q("#e-shares").value ? parseInt(q("#e-shares").value, 10) : null, buyDate: q("#e-buy").value || null};
+        try { await api("/watchlist", {method: "POST", body: JSON.stringify(b)}); await api("/analyze", {method: "POST", body: "{}"}).catch(() => {}); $("#layer").innerHTML = ""; toast("已儲存 " + w.code); reload(); } catch (err) { toast(err.message); } });
+      const dirty = () => JSON.stringify(cur) !== JSON.stringify(w.labels) ? `<div class="banner warn small">標籤有變更但還沒儲存；這裡顯示的是儲存前的狀態。</div>` : "";
+      const st = {pass: "✓", fail: "✕", na: "?"};
+      const load = {
+        rules: async el => { const r = await api(`/watchlist/${w.code}/rules`); const ov = r.params.filter(p => p.source === "label"), rest = r.params.filter(p => p.source !== "label");
+          el.innerHTML = `${dirty()}<div>${r.strategy ? `套用 ${chip(r.strategy)} <span class="small muted">共 ${r.affected} 檔使用</span>` : `套用<b>全域預設</b> <span class="small muted">（沒有貼「策略::」標籤）</span>`}${r.allowAdd ? "" : "　<b>不加碼</b>"}</div>
+            <div class="small muted">規則跟著標籤走，個股本身不放規則。要調整請編輯策略標籤（設定頁「標籤」），會影響所有貼了它的股票。</div>
+            <div class="tablewrap"><table><thead><tr><th class="l">參數</th><th>套用值</th><th class="l">來源</th></tr></thead><tbody>
+            ${[...ov, ...rest].map(p => `<tr><td class="l" style="white-space:normal">${esc(p.label)}</td><td class="num">${p.value}${esc(p.unit || "")}</td><td class="l">${p.source === "label" ? `<b>策略標籤</b> <span class="small muted">預設 ${p.default}</span>` : `<span class="muted">預設</span>`}</td></tr>`).join("")}</tbody></table></div>`; },
+        trial: async el => { const t = await api(`/watchlist/${w.code}/trial`); const h = t.hold;
+          el.innerHTML = `${dirty()}<div class="row">${badge(t.light, t.lightLabel)}${h ? badge(h.light) : ""}<span class="small muted">資料日 ${esc(t.date)}・${t.strategy ? esc(t.strategy) : "全域預設"}${t.rule ? "・觸發規則：" + esc(t.rule) : ""}</span></div>
+            ${t.needs.length ? `<div class="small"><b>還差：</b>${esc(t.needs.join("；"))}</div>` : ""}${t.warnings.length ? `<div class="small"><b>原因：</b>${esc(t.warnings.join("；"))}</div>` : ""}
+            ${h ? `<div class="small"><b>持有：</b>${esc(holdLine(h))}</div>` : ""}${t.missing.length ? `<div class="small"><b>未取得：</b>${esc(t.missing.join("、"))}</div>` : ""}
+            <div class="tablewrap"><table class="sortable" data-sort="trial"><thead><tr><th class="l">條件</th><th>結果</th><th class="l">說明</th></tr></thead><tbody>
+            ${t.trace.map(x => `<tr><td class="l">${esc(x.label)}</td><td data-v="${{pass: 0, fail: 1, na: 2}[x.state]}"><span class="mx ${esc(x.state)}">${st[x.state] || "?"}</span></td><td class="l" style="white-space:normal">${esc(x.text || "")}</td></tr>`).join("")}</tbody></table></div>
+            <div class="small muted">✓ 成立　✕ 不成立　? 資料不足。只列出這次判定用到的條件。</div>`; }};
+      s.querySelectorAll("[data-tab]").forEach(b => b.onclick = async () => { s.querySelectorAll("[data-tab]").forEach(x => x.classList.toggle("on", x === b));
+        ["base", "rules", "trial"].forEach(k => { q("#pane-" + k).hidden = k !== b.dataset.tab; });
+        const el = q("#pane-" + b.dataset.tab); if (load[b.dataset.tab]) { el.innerHTML = `<div class="small muted">載入中…</div>`; try { await load[b.dataset.tab](el); } catch (err) { el.innerHTML = `<div class="banner bad small">${esc(err.message)}</div>`; } } }); });
 }
 
 /* ---------- 路由 ---------- */
@@ -348,10 +471,12 @@ async function route() {
   const [, page, arg] = h.split("/");
   document.querySelectorAll("#tabs a").forEach(a => a.classList.toggle("on", a.dataset.tab === (page === "report" ? "report" : page === "settings" ? "settings" : "home")));
   try {
+    if (page !== "settings" && !Object.keys(LABELS).length) await loadLabels();
     if (page === "report") await viewReport(arg);
     else if (page === "settings") await viewSettings();
     else if (page === "stock" && arg) await viewStock(arg);
     else await viewHome(page === "day" ? arg : null);
+    applySorts();
   } catch (err) { $("#view").innerHTML = `<div class="panel empty">無法載入：${esc(err.message)}</div>`; }
 }
 window.addEventListener("hashchange", route);

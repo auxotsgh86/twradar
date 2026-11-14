@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -568,7 +569,8 @@ class SettingsTests(unittest.TestCase):
             s = st.get()
             self.assertEqual([w["code"] for w in s["watchlist"]], ["6488", "2454"])
             self.assertEqual(s["watchlist"][1]["keyLevel"], 4000)
-            self.assertEqual(s["watchlist"][1]["group"], "半導體")
+            self.assertEqual(s["watchlist"][1]["labels"], ["半導體"])  # 分組轉成標籤
+            self.assertIn("半導體", [lb["name"] for lb in s["labels"]])
             self.assertEqual((st.params()["maTol"], st.params()["blowoff"]), (1.0, 2))
             self.assertEqual(s["schedule"], ["18:00", "07:00"])
             self.assertEqual(s["sources"]["options"]["finmind"]["token"], "fm-9999")
@@ -631,6 +633,72 @@ class AuthApiTests(unittest.TestCase):
         self.assertIn("集保", js["holdersLog"][0]["message"])
         self.assertIsNone(js["backtest"])
         self.assertIn(js["tracking"]["status"], ("未啟用", "樣本不足", "累積中", "正常", "偏離"))
+
+    def test_add_by_code_or_name_and_labels(self):
+        """只填代號或名稱就能新增；標籤、策略標籤（同範圍互斥、規則覆寫）。"""
+        A = {"Authorization": "Bearer " + self.cfg.admin_token}
+        R = {"Authorization": "Bearer " + self.cfg.read_token}
+        with self.db.tx() as c:
+            c.execute("INSERT INTO runs(date,status,attempts) VALUES('20261110','complete',1)")
+            c.executemany("INSERT INTO quotes(date,code,name,market,close) VALUES('20261110',?,?,?,100)",
+                          [("3017", "奇鋐", "TWSE"), ("3163", "波若威", "TPEx"), ("2303", "聯電", "TWSE"), ("2308", "台達電", "TWSE")])
+        st, js, _ = self.call("/api/v1/stocks/search?q=" + urllib.parse.quote("奇"), headers=R)
+        self.assertEqual([(x["code"], x["market"]) for x in js], [("3017", "TWSE")])
+        self.assertEqual([x["code"] for x in self.call("/api/v1/stocks/search?q=230", headers=R)[1]], ["2303", "2308"])
+        st, js, _ = self.call("/api/v1/watchlist", "POST", {"code": "3163"}, A)          # 只填代號
+        self.assertEqual((st, js["stock"]["name"], js["stock"]["market"]), (200, "波若威", "TPEx"))
+        st, js, _ = self.call("/api/v1/watchlist", "POST", {"name": "奇鋐", "labels": ["散熱", "策略::飆股"]}, A)  # 只填名稱
+        self.assertEqual((st, js["stock"]["code"]), (200, "3017"))
+        st, js, _ = self.call("/api/v1/watchlist", "POST", {"code": "23"}, A)             # 不明確
+        self.assertEqual(st, 400)
+        self.assertIn("2303", js["error"])
+        self.assertEqual(self.call("/api/v1/watchlist", "POST", {"code": "9999"}, A)[0], 400)
+        # 標籤自動登記；同一個範圍後貼的取代先貼的
+        self.call("/api/v1/watchlist", "POST", {"code": "3017", "labels": ["散熱", "策略::飆股", "策略::穩健"]}, A)
+        w = next(x for x in self.st.watchlist() if x["code"] == "3017")
+        self.assertEqual(w["labels"], ["散熱", "策略::穩健"])
+        labs = {x["name"]: x for x in self.call("/api/v1/labels", headers=R)[1]}
+        self.assertEqual((labs["散熱"]["count"], labs["策略::穩健"]["strategy"], labs["策略::飆股"]["count"]), (1, True, 0))
+        # 策略標籤帶規則；一般標籤不行；指標參數不行
+        new = [{"name": "散熱", "color": "#108548"}, {"name": "策略::穩健", "color": "#1f75cb", "params": {"stopLossPct": 6}, "allowAdd": False}]
+        st, js, _ = self.call("/api/v1/labels", "PUT", {"labels": new}, A)
+        self.assertEqual(st, 200, js)
+        self.assertEqual(self.call("/api/v1/labels", "PUT", {"labels": new}, R)[0], 403)
+        bad = [{"name": "散熱", "color": "#108548", "params": {"stopLossPct": 6}}, new[1]]
+        self.assertEqual(self.call("/api/v1/labels", "PUT", {"labels": bad}, A)[0], 400)
+        bad = [new[0], {**new[1], "params": {"pullbackDays": 5}}]
+        self.assertEqual(self.call("/api/v1/labels", "PUT", {"labels": bad}, A)[0], 400)
+        st, js, _ = self.call("/api/v1/watchlist/3017/rules", headers=R)
+        prm = {x["id"]: x for x in js["params"]}
+        self.assertEqual((js["strategy"], js["allowAdd"], js["affected"]), ("策略::穩健", False, 1))
+        self.assertEqual((prm["stopLossPct"]["value"], prm["stopLossPct"]["source"], prm["stopLossPct"]["default"]), (6, "label", 10))
+        self.assertEqual(prm["profitTargetPct"]["source"], "default")
+        self.assertIsNone(self.call("/api/v1/watchlist/3163/rules", headers=R)[1]["strategy"])
+        # 改名跟著改；刪掉的標籤從個股拿掉
+        new2 = [{"name": "策略::保守", "color": "#1f75cb", "params": {"stopLossPct": 6}}]
+        st, js, _ = self.call("/api/v1/labels", "PUT", {"labels": new2, "renames": {"策略::穩健": "策略::保守"}}, A)
+        self.assertEqual(st, 200, js)
+        self.assertEqual(next(x for x in self.st.watchlist() if x["code"] == "3017")["labels"], ["策略::保守"])
+        st, js, _ = self.call("/api/v1/watchlist/3017/trial", headers=R)
+        self.assertEqual((st, js["strategy"]), (200, "策略::保守"))
+        self.assertTrue(js["trace"])
+
+    def test_strategy_label_changes_signal(self):
+        """策略標籤的參數覆寫與「不加碼」真的影響判定。"""
+        from twradar import labels as L
+        S = self.st.get()
+        S["labels"] = [L.new_label("策略::緊", params={"stopLossPct": 3}, allowAdd=False)]
+        P = {**DEFAULT_RULES, **{p["id"]: p["value"] for p in S["params"]}}
+        plain, tagged = {"code": "X", "labels": []}, {"code": "X", "labels": ["策略::緊"]}
+        self.assertEqual(L.resolve(S, plain, P), (P, S, None))
+        P2, S2, name = L.resolve(S, tagged, P)
+        self.assertEqual((name, P2["stopLossPct"], P["stopLossPct"]), ("策略::緊", 3, 10))
+        self.assertNotIn("加碼", [r.get("label") for r in S2["playbooks"]["entry"]])
+        self.assertIn("加碼", [r.get("label") for r in S["playbooks"]["entry"]])
+        rec = {"close": 95.0, "ma20": 90.0, "ma20Prev": 89.0, "ma5": 94.0, "volume": 1000, "vol5": 1000}
+        hold = {"holding": True, "cost": 100.0}
+        self.assertNotEqual(evaluate(rec, {**plain, **hold}, P, S)["hold"]["rule"], "停損")
+        self.assertEqual(evaluate(rec, {**tagged, **hold}, P2, S2)["hold"]["light"], "exit")
 
     def test_roles(self):
         R = {"Authorization": "Bearer " + self.cfg.read_token}

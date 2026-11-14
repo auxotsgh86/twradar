@@ -5,6 +5,7 @@ import json
 from datetime import datetime
 
 from .config import TW
+from .labels import resolve as resolve_rules
 from .db import DB
 from .rules import LIGHT_LABEL, evaluate as rules_evaluate
 from .settings import BUILTIN_PARAMS, SettingsStore
@@ -397,7 +398,9 @@ def run_analysis(db: DB, d: str, settings: SettingsStore) -> dict:
         prev = _previous(db, [s["code"] for s in watch], d, max(0, n_max - 1))
         for s in watch:
             rec = recs[s["code"]]
-            sig = evaluate(rec, s, R, S)
+            Ps, Ss, strat = resolve_rules(S, s, R)   # 策略標籤的規則覆寫
+            sig = evaluate(rec, s, Ps, Ss)
+            sig["strategy"] = strat
             _apply_confirm(sig, prev.get(s["code"], []), n_confirm)
             summary[sig["light"]] += 1
             c.execute("INSERT INTO signals(date,code,light,payload) VALUES(?,?,?,?)",

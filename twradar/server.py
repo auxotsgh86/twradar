@@ -23,7 +23,8 @@ from . import __version__
 from .dates import is_weekend, norm_date
 from .analysis import DEFAULT_RULES, LIGHT_LABEL, evaluate, indicators_many, rules_of, run_analysis
 from .auth import COOKIE, SESSION_DAYS, AuthError, Authenticator, Credentials, TokenPasswordAuthenticator
-from .settings import SettingsError, SettingsStore, mask, stock as new_stock
+from . import labels as L
+from .settings import CODE_RE, SettingsError, SettingsStore, mask, stock as new_stock
 from .config import Config, now_tw
 from .db import DB
 from .jobs import STATUS_TEXT, Crawler, Scheduler, Worker, prev_weekday, today
@@ -110,8 +111,10 @@ class App:
             p = sigs.get(w["code"])
             if not p:  # 分析之後才加入的個股：即時計算
                 rec = late[w["code"]]
-                p = {"data": rec, "signal": evaluate(rec, w, R, S)}
-            out.append({"code": w["code"], "name": w["name"], "market": w["market"], "group": w["group"],
+                Pw, Sw, strat = L.resolve(S, w, R)
+                p = {"data": rec, "signal": {**evaluate(rec, w, Pw, Sw), "strategy": strat}}
+            out.append({"code": w["code"], "name": w["name"], "market": w["market"], "group": L.group_of(w),
+                        "labels": w["labels"],
                         "note": w["note"], "keyLevel": w["keyLevel"], "holding": w["holding"], "cost": w["cost"],
                         "data": p["data"], "signal": p["signal"]})
         return out
@@ -148,7 +151,7 @@ class App:
         env = self.envelope(d)
         m = env["market"]
         return {"schema": "right-side-radar/1", "date": d,
-                "watchlist": [{"code": s["code"], "name": s["name"], "market": s["market"], "group": s["group"] or "",
+                "watchlist": [{"code": s["code"], "name": s["name"], "market": s["market"], "group": s.get("group") or "",
                                "note": s["note"] or "", "keyLevel": s["keyLevel"], "order": i + 1}
                               for i, s in enumerate(env["stocks"])],
                 "days": [{"date": d, "market": {k: m.get(k) for k in ("taiex", "taiexChgPct", "foreignAmt") if m.get(k) is not None},
@@ -177,6 +180,63 @@ class App:
                         "ma20": round(sum(c20) / 20, 2) if len(c20) == 20 else None,
                         "ma60": round(sum(c60) / 60, 2) if len(c60) == 60 else None})
         return out[-days:]
+
+    def lookup(self, q: str, limit: int = 12) -> list[dict]:
+        """用代號或名稱找股票（資料庫裡最近幾個交易日的全市場行情，不連外）。"""
+        q = q.strip().upper()
+        if not q:
+            return []
+        ds = [r["date"] for r in self.db.q("SELECT DISTINCT date FROM runs WHERE status!='holiday' ORDER BY date DESC LIMIT 5")]
+        if not ds:
+            return []
+        like = "%" + q.replace("%", "").replace("_", "") + "%"
+        rows = self.db.q("SELECT code, name, market, MAX(date) AS d FROM quotes WHERE date>=? AND (code LIKE ? OR UPPER(name) LIKE ?) "
+                         "GROUP BY code", (min(ds), like, like))
+        have = {w["code"] for w in self.settings.watchlist()}
+
+        def rank(r):
+            c, n = r["code"], (r["name"] or "").upper()
+            return (0 if c == q or n == q else 1 if c.startswith(q) else 2 if n.startswith(q) else 3, len(c) != 4, c)
+        return [{"code": r["code"], "name": r["name"], "market": r["market"], "inWatchlist": r["code"] in have}
+                for r in sorted((r for r in rows if CODE_RE.fullmatch(r["code"]) and r["name"]), key=rank)[:limit]]
+
+    def labels_view(self) -> list[dict]:
+        S = self.settings.get()
+        n = {}
+        for w in S["watchlist"]:
+            for x in w["labels"]:
+                n[x] = n.get(x, 0) + 1
+        return [{**lb, "count": n.get(lb["name"], 0), "scope": L.scope_of(lb["name"]),
+                 "strategy": L.is_strategy(lb["name"])} for lb in S["labels"]]
+
+    def stock_rules(self, code: str) -> dict | None:
+        """這檔股票實際套用的參數，以及每個值來自策略標籤還是全域預設。"""
+        S = self.settings.get()
+        w = next((x for x in S["watchlist"] if x["code"] == code), None)
+        if not w:
+            return None
+        lb = L.strategy_of(S, w)
+        ov = (lb or {}).get("params") or {}
+        return {"code": code, "strategy": lb["name"] if lb else None, "allowAdd": (lb or {}).get("allowAdd", True),
+                "affected": sum(1 for x in S["watchlist"] if lb and lb["name"] in x["labels"]),
+                "params": [{"id": p["id"], "label": p["label"], "unit": p.get("unit", ""), "default": p["value"],
+                            "value": ov.get(p["id"], p["value"]), "source": "label" if p["id"] in ov else "default"}
+                           for p in S["params"]]}
+
+    def stock_trial(self, code: str) -> dict | None:
+        """用最近一個交易日的資料試算，逐條列出條件是否成立。"""
+        S = self.settings.get()
+        w = next((x for x in S["watchlist"] if x["code"] == code), None)
+        d = self.latest_date()
+        if not w or not d:
+            return None
+        R = rules_of(self.settings)
+        Pw, Sw, strat = L.resolve(S, w, R)
+        rec = indicators_many(self.db, [code], d, R, {code: w})[code]
+        sig = evaluate(rec, w, Pw, Sw)
+        return {"code": code, "date": d, "strategy": strat, "light": sig["light"], "lightLabel": sig["lightLabel"],
+                "rule": sig.get("rule"), "needs": sig["needs"], "warnings": sig["warnings"], "missing": sig["missing"],
+                "hold": sig.get("hold"), "trace": sig["trace"]}
 
     def reanalyze_latest(self) -> None:
         d = self.latest_date()
@@ -455,6 +515,34 @@ def make_handler(app: App):
                     return self.json(app.day_status(d))
                 return self.json(app.envelope(d))
 
+            if head == "stocks" and len(parts) == 2 and parts[1] == "search" and method == "GET":
+                return self.json(app.lookup((qs.get("q") or [""])[0]))
+
+            if head == "labels":
+                if method == "GET":
+                    return self.json(app.labels_view())
+                if method == "PUT":
+                    b = self.body()
+                    new = b.get("labels")
+                    ren = b.get("renames") if isinstance(b.get("renames"), dict) else {}
+                    if not isinstance(new, list):
+                        return self.err(400, "需要 labels 陣列")
+
+                    def put(s):
+                        s["labels"] = [{k: v for k, v in lb.items() if k in ("name", "color", "params", "allowAdd")}
+                                       if isinstance(lb, dict) else lb for lb in new]
+                        keep = {lb.get("name") for lb in s["labels"] if isinstance(lb, dict)}
+                        for w in s["watchlist"]:   # 改名跟著改；被刪掉的標籤從個股拿掉
+                            w["labels"] = L.clean([ren.get(x, x) for x in w["labels"] if ren.get(x, x) in keep])
+                    app.settings.update(put)
+                    app.reanalyze_latest()
+                    return self.json({"ok": True, "labels": app.labels_view()})
+
+            if head == "watchlist" and len(parts) == 3 and parts[2] in ("rules", "trial") and method == "GET":
+                code = parts[1].upper()
+                out = app.stock_rules(code) if parts[2] == "rules" else app.stock_trial(code)
+                return self.json(out) if out else self.err(404, f"{code} 不在觀察清單，或還沒有資料")
+
             if head == "stocks" and len(parts) >= 3 and parts[2] == "history" and method == "GET":
                 code = parts[1].upper()
                 days = max(5, min(400, int((qs.get("days") or ["120"])[0])))
@@ -472,9 +560,23 @@ def make_handler(app: App):
                     return self.json(app.settings.watchlist())
                 if method == "POST":
                     b = self.body()
+                    code, name = str(b.get("code") or "").strip().upper(), str(b.get("name") or "").strip()
+                    cur = next((w for w in app.settings.watchlist() if w["code"] == code), None)
+                    if cur:   # 更新：沒送的欄位沿用
+                        name, b = name or cur["name"], {"market": cur["market"], **b}
+                    elif not (code and name and b.get("market")):
+                        # 只填代號或名稱：其他從全市場行情帶入
+                        q = code or name or str(b.get("q") or "").strip()
+                        hits = app.lookup(q, 50)
+                        exact = [h for h in hits if q.upper() in (h["code"], (h["name"] or "").upper())]
+                        pick = exact[0] if len(exact) == 1 else hits[0] if len(hits) == 1 else None
+                        if pick:
+                            code, name, b = pick["code"], name or pick["name"], {**b, "market": b.get("market") or pick["market"]}
+                        elif not (code and name):
+                            return self.err(400, f"找不到「{q}」" + ("，請輸入完整的代號或名稱" if not hits else
+                                            "，符合的有：" + "、".join(f"{h['code']} {h['name']}" for h in hits[:8])))
                     market = "TPEx" if str(b.get("market", "")).upper() in ("TPEX", "OTC", "上櫃") else "TWSE"
-                    item = new_stock(**{**b, "code": str(b.get("code", "")).strip().upper(),
-                                        "name": str(b.get("name") or "").strip(), "market": market})
+                    item = new_stock(**{**b, "code": code, "name": name, "market": market})
 
                     def upsert(s):
                         wl = s["watchlist"]
@@ -484,6 +586,9 @@ def make_handler(app: App):
                             wl.insert(int(pos) - 1 if isinstance(pos, int) and pos > 0 else len(wl), item)
                         else:  # 只更新有送來的欄位（舊版網頁不會送 holding、cost 等）
                             given = {k: v for k, v in item.items() if k in b or k in ("code", "name", "market")}
+                            if "group" in b and "labels" not in b:   # 舊版網頁：分組
+                                given["labels"] = L.clean([*[x for x in wl[i]["labels"] if L.scope_of(x) is not None],
+                                                           *item["labels"]])
                             if "keyLevel" not in b and "key_level" in b:
                                 given["keyLevel"] = b["key_level"]
                             wl[i] = {**wl[i], **given}
