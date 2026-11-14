@@ -233,8 +233,8 @@ def simulate(hist: History, code: str, dates: list[str], universe: dict, P: dict
     adj = hist.adj[code]
     for d in dates:
         bar = adj.get(d)
-        if bar is None:
-            continue
+        if bar is None or bar.get("close") is None:
+            continue  # 沒有資料或當日無成交（暫停交易、處置停牌）：訊號留到下一個有成交的日子執行
         # 執行前一日的訊號（開盤價）
         if pending:
             px = bar["open"] or bar["close"]
@@ -299,7 +299,7 @@ def simulate(hist: History, code: str, dates: list[str], universe: dict, P: dict
             elif light == "go" and rule == "加碼" and pos.adds < cfg.max_adds:
                 pending = ("add",)
     if pos:  # 期末未平倉：以最後收盤計價
-        last = max((d for d in dates if d in adj), default=None)
+        last = max((d for d in dates if adj.get(d) and adj[d].get("close") is not None), default=None)
         if last:
             px = adj[last]["close"]
             pos.proceeds += pos.shares * px * (1 - fee - tax)

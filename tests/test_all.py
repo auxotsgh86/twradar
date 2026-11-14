@@ -1119,6 +1119,30 @@ class BacktestTests(unittest.TestCase):
         ev = {(e["kind"], e["tag"], e["regime"], e["sample"]): e for e in res["results"][0]["events"]}
         self.assertEqual(ev[("退場：停損", "全部", "全部", "全期")]["f5"]["n"], 1)
 
+    def test_trade_simulation_no_trade_day(self):
+        """進場日當天沒有成交（暫停交易，開收盤皆空）：不能當掉，改在下一個有成交的日子進場。"""
+        from twradar import backtest as B
+        S = self.st.get()
+        S["conditions"] = [{"id": "cUp", "label": "上", "left": {"field": "close"}, "op": ">", "right": 105},
+                           {"id": "cDn", "label": "下", "left": {"field": "close"}, "op": "<", "right": 95}]
+        S["playbooks"] = {"entry": [{"light": "add", "label": "上車", "when": {"all": ["notHolding", "cUp"]}},
+                                    {"light": "watch", "default": True}],
+                          "hold": [{"light": "exit", "label": "停損", "when": "cDn"}, {"light": "keep", "default": True}]}
+        S["watchlist"] = [w for w in S["watchlist"] if w["code"] == "2330"]
+        d = self.dates[101]
+        old = self.db.q("SELECT open, high, low, close, change FROM quotes WHERE date=? AND code='2330'", (d,))[0]
+        try:
+            with self.db.tx() as c:
+                c.execute("UPDATE quotes SET open=NULL, high=NULL, low=NULL, close=NULL, change=NULL, volume=0 "
+                          "WHERE date=? AND code='2330'", (d,))
+            conf = B.BTConfig(start=self.dates[80], end=self.dates[-1], split=self.dates[120], universe="watchlist")
+            trades = B.run(self.db, S, conf)["results"][0]["tradeList"]
+            self.assertEqual([(t["entry"], t["reason"]) for t in trades], [(self.dates[102], "停損")])
+        finally:
+            with self.db.tx() as c:
+                c.execute("UPDATE quotes SET open=?, high=?, low=?, close=?, change=? WHERE date=? AND code='2330'",
+                          (*tuple(old), d))
+
     def test_cli_and_report(self):
         import contextlib
         from types import SimpleNamespace
