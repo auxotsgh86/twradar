@@ -307,6 +307,7 @@ GET /api/v1/latest?ready=1      最新「抓取＋分析皆完成」的交易日
 GET /api/v1/days/2026-11-11     指定日；?format=csv | radar | status
 GET /api/v1/stocks/2330/history?days=120&amp;format=csv
 GET /api/v1/dates  /status  /watchlist  /rules  /events  /labels
+GET /api/v1/scan   全市場強勢注意清單（各排序方法與回溯驗證）
 GET /api/v1/stocks/search?q=奇鋐   用代號或名稱找股票
 GET /api/v1/watchlist/3017/rules | trial   這檔套用的規則／試算
 GET /api/v1/export/sqlite       下載整個資料庫（管理）
@@ -466,15 +467,51 @@ function editStock(w, labels, rules, reload) {
         const el = q("#pane-" + b.dataset.tab); if (load[b.dataset.tab]) { el.innerHTML = `<div class="small muted">載入中…</div>`; try { await load[b.dataset.tab](el); } catch (err) { el.innerHTML = `<div class="banner bad small">${esc(err.message)}</div>`; } } }); });
 }
 
+/* ---------- 全市場強勢注意清單 ---------- */
+let scanMethod = null;
+async function viewScan() {
+  $("#view").innerHTML = `<div class="panel empty">掃描全市場中…（每個資料日第一次需要幾秒）</div>`;
+  const s = await api("/scan");
+  const names = Object.keys(s.methods);
+  if (!scanMethod || !names.includes(scanMethod)) scanMethod = s.defaultMethod;
+  const draw = () => {
+    const m = s.methods[scanMethod], v = (s.validation || {})[scanMethod];
+    const vx = seg => v && v[seg] && isNum(v[seg].excess) ? `${fmtS(v[seg].excess, 2)}%（勝出 ${fmt(v[seg].hit, 0)}% 的日子）` : "—";
+    const weak = v && isNum(v["樣本外"].excess) && v["樣本外"].excess <= 0;
+    const reg = v && v[s.regime] && isNum(v[s.regime].excess) ? v[s.regime].excess : null;
+    $("#view").innerHTML = `<section class="panel" style="display:flex;flex-direction:column;gap:10px">
+      <div class="row between"><div><h2>全市場強勢注意清單</h2><div class="small muted">資料日 ${esc(s.date)}・大盤${esc(s.regime)}・流動性合格 ${s.liquid} 檔 → 趨勢合格 ${s.trend} 檔 → 取前 ${s.top} 名</div></div>
+        <div class="row"><label class="small muted" for="scanM">排序</label><select id="scanM">${names.map(n => `<option${n === scanMethod ? " selected" : ""}>${esc(n)}</option>`).join("")}</select></div></div>
+      <div class="banner ${weak || (reg !== null && reg < 0) ? "warn" : ""} small">${v ? `<b>回溯驗證（前 ${s.top} 名 10 日後，相對全市場平均）：</b>樣本內 ${vx("樣本內")}、樣本外 ${vx("樣本外")}；多頭 ${vx("多頭")}、盤整 ${vx("盤整")}、空頭 ${vx("空頭")}。
+        ${weak ? "<br><b>這個排序在樣本外沒有勝過全市場，名單僅供對照。</b>" : ""}${!weak && reg !== null && reg < 0 ? `<br><b>這個排序在大盤${esc(s.regime)}時落後全市場。</b>` : ""}` : "還沒有回溯驗證結果（執行 deploy/backtest.sh 後會顯示）。"}
+        <br>買賣一趟的費用與稅約 0.6%，超額報酬扣掉後所剩不多：這是研究名單，不是買進建議。</div>
+      ${m.rows.length ? `<div class="tablewrap"><table class="sortable" data-sort="scan-${esc(scanMethod)}"><thead><tr><th>#</th><th class="l">代號</th><th class="l">名稱</th><th class="l">市場</th><th>收盤</th><th>法人 5 日買超<br>佔成交量</th><th>20 日<br>贏大盤</th><th>60 日<br>贏大盤</th><th>5 日線<br>乖離</th><th>月線<br>乖離</th><th>日均額<br>（億）</th><th data-nosort></th></tr></thead><tbody>
+        ${m.rows.map((r, i) => `<tr><td class="num">${i + 1}</td><td class="l num">${r.inWatchlist ? `<a href="#/stock/${esc(r.code)}">${esc(r.code)}</a>` : esc(r.code)}</td><td class="l">${esc(r.name)}</td><td class="l">${mktName(r.market)}</td><td class="num">${fmt(r.close, pd(r.close))}</td>
+          <td class="num ${cls(r.inst5Pct)}">${isNum(r.inst5Pct) ? fmtS(r.inst5Pct, 1) + "%" : "—"}</td><td class="num ${cls(r.rs20)}">${fmtS(r.rs20, 1)}%</td><td class="num ${cls(r.rs60)}">${fmtS(r.rs60, 1)}%</td>
+          <td class="num" data-v="${isNum(r.bias5) ? r.bias5 : ""}">${isNum(r.bias5) ? fmtS(r.bias5, 1) + "%" : "—"}${r.hot ? ` <span class="badge wait" title="5 日乖離在這檔自己近一年的前 10%">偏熱</span>` : ""}</td>
+          <td class="num">${fmtS(r.maDist, 1)}%</td><td class="num">${fmt(r.value20, 1)}</td>
+          <td>${r.inWatchlist ? `<span class="small muted">已在清單</span>` : `<button data-add="${esc(r.code)}">加入觀察</button>`}</td></tr>`).join("")}
+        </tbody></table></div>` : `<div class="empty">今天沒有股票通過篩選${s.trend ? "（這個排序需要法人資料）" : "：大盤弱勢時，站穩月線與季線、接近 60 日高點的股票很少"}。</div>`}
+      <div class="small muted">篩選：一般股票、近 20 日平均成交金額 ≥ 1 億元；收盤 > 月線 > 季線、月線走平或上揚、收盤在 60 日最高的 90% 以上。
+        「法人」依外資＋投信近 5 日累計買超佔成交量排序；「相對強度」依近 20、60 日漲幅勝過加權指數的幅度；「不追高」排除標示偏熱的股票。
+        名單只依公開資料機械式篩選，未考慮基本面、處置股與個別風險，不構成投資建議。</div></section>`;
+    $("#scanM").onchange = ev => { scanMethod = ev.target.value; draw(); applySorts(); };
+    document.querySelectorAll("[data-add]").forEach(b => b.onclick = async () => { try { const j = await api("/watchlist", {method: "POST", body: JSON.stringify({code: b.dataset.add})});
+      toast(`已加入 ${j.stock.code} ${j.stock.name}`); b.outerHTML = `<span class="small muted">已在清單</span>`; } catch (err) { toast(err.message); } });
+  };
+  draw();
+}
+
 /* ---------- 路由 ---------- */
 async function route() {
   const h = location.hash.replace(/^#/, "") || "/";
   const [, page, arg] = h.split("/");
-  document.querySelectorAll("#tabs a").forEach(a => a.classList.toggle("on", a.dataset.tab === (page === "report" ? "report" : page === "settings" ? "settings" : "home")));
+  document.querySelectorAll("#tabs a").forEach(a => a.classList.toggle("on", a.dataset.tab === (["report", "settings", "scan"].includes(page) ? page : "home")));
   try {
     if (page !== "settings" && !Object.keys(LABELS).length) await loadLabels();
     if (page === "report") await viewReport(arg);
     else if (page === "settings") await viewSettings();
+    else if (page === "scan") await viewScan();
     else if (page === "stock" && arg) await viewStock(arg);
     else await viewHome(page === "day" ? arg : null);
     applySorts();

@@ -1333,6 +1333,18 @@ class BacktestTests(unittest.TestCase):
         self.assertIn("marketWeak", summary["conditions"])
         self.assertIn(summary["conditions"]["marketWeak"]["樣本內"]["verdict"], ("樣本不足", "看不出差別", "成立後較好", "成立後較差"))
         self.assertIn("綜合＋不追高", summary["scan"]["methods"])
+        os.environ["TWRADAR_HOME"] = self.cfg.home
+        try:
+            from twradar.server import App, latest_scan_study
+            (out.parent / "20261114-020000").mkdir()   # 較新、但略過掃描驗證的回溯
+            (out.parent / "20261114-020000" / "result.json").write_text(json.dumps({"results": [], "scan": None}), encoding="utf-8")
+            self.assertEqual(latest_scan_study()[0], "20261114-010000")
+            api = App(self.cfg, self.db, self.st, start_background=False).scan()
+            self.assertIn("hit", api["validation"]["法人"]["樣本外"])
+        finally:
+            (out.parent / "20261114-020000" / "result.json").unlink()
+            (out.parent / "20261114-020000").rmdir()
+            os.environ["TWRADAR_HOME"] = TMP
         self.assertIn("全期", summary["trades"])
         self.assertEqual(code, 0, buf.getvalue())
         html_ = (out / "report.html").read_text(encoding="utf-8")
@@ -1428,6 +1440,15 @@ class BacktestTests(unittest.TestCase):
         st = SC.study(self.db, self.dates[70:], self.dates[110], cfg)
         self.assertEqual(set(st["methods"]), set(SC.METHODS))
         self.assertIn("f10", st["methods"]["綜合"]["趨勢股"]["樣本內"])
+        snap = SC.snapshot(self.db, d, cfg)
+        self.assertEqual(set(snap["methods"]), set(SC.METHODS))
+        self.assertEqual((snap["regime"], SC.DEFAULT_METHOD), ("多頭", "法人"))
+        from twradar.server import App
+        app = App(self.cfg, self.db, self.st, start_background=False)
+        api = app.scan(d)
+        self.assertIn("inWatchlist", api["methods"]["相對強度"]["rows"][0])
+        self.assertIs(app._scan_cache[d], app._scan_cache[d])
+        self.assertEqual(api["defaultMethod"], "法人")
         r = SC.latest(self.db, d, "相對強度", cfg)
         self.assertEqual(r["rows"][0]["code"], "2330")
         with self.assertRaises(ValueError):

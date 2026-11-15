@@ -200,6 +200,28 @@ class App:
         return [{"code": r["code"], "name": r["name"], "market": r["market"], "inWatchlist": r["code"] in have}
                 for r in sorted((r for r in rows if CODE_RE.fullmatch(r["code"]) and r["name"]), key=rank)[:limit]]
 
+    def scan(self, d: str | None = None) -> dict:
+        """全市場強勢股名單（每個資料日算一次後快取），附上最近一次回溯對各排序方法的驗證。"""
+        from . import scan as SC
+        d = d or self.latest_date()
+        if not d:
+            raise ValueError("還沒有任何行情資料")
+        cache = self.__dict__.setdefault("_scan_cache", {})
+        if d not in cache:
+            if len(cache) >= 3:
+                cache.pop(next(iter(cache)))
+            cache[d] = SC.snapshot(self.db, d)
+        have = {w["code"] for w in self.settings.watchlist()}
+        snap = cache[d]
+        run, sc = latest_scan_study()
+        val = {}
+        for m, v in ((sc or {}).get("methods") or {}).items():
+            val[m] = {seg: {k: v["全市場"][seg]["f10"].get(k) for k in ("excess", "se", "hit", "days")}
+                      for seg in ("樣本內", "樣本外", "多頭", "盤整", "空頭")}
+        return {**snap, "defaultMethod": SC.DEFAULT_METHOD, "validation": val, "validationRun": run,
+                "methods": {m: {**x, "rows": [{**r, "inWatchlist": r["code"] in have} for r in x["rows"]]}
+                            for m, x in snap["methods"].items()}}
+
     def labels_view(self) -> list[dict]:
         S = self.settings.get()
         n = {}
@@ -304,6 +326,20 @@ def latest_backtest() -> dict | None:
                          for r in res["results"]],
             "conditions": _conditions_brief(r0.get("conditions")),
             "scan": _scan_brief(res.get("scan"))}
+
+
+def latest_scan_study() -> tuple[str | None, dict | None]:
+    """最近一次有做「全市場掃描驗證」的回溯（有些回溯會用 --no-scan 略過）。"""
+    from .config import home_dir
+    root = home_dir() / "backtest"
+    for f in sorted(root.glob("*/result.json"), reverse=True)[:10] if root.exists() else []:
+        try:
+            sc = json.loads(f.read_text(encoding="utf-8")).get("scan")
+        except (OSError, ValueError):
+            continue
+        if sc:
+            return f.parent.name, sc
+    return None, None
 
 
 def _conditions_brief(cs: dict | None) -> dict | None:
@@ -512,6 +548,12 @@ def make_handler(app: App):
 
             if head == "status" and method == "GET":
                 return self.json(app.system())
+
+            if head == "scan" and method == "GET":
+                try:
+                    return self.json(app.scan(norm_date((qs.get("date") or [""])[0]) if qs.get("date") else None))
+                except ValueError as e:
+                    return self.err(400, str(e))
 
             if head == "dates" and method == "GET":
                 rows = app.db.q("SELECT r.date, r.status, a.status AS astatus, a.summary FROM runs r "

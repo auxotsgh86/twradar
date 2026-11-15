@@ -246,18 +246,32 @@ def study(db: DB, dates: list[str], split: str, cfg: ScanConfig | None = None, p
     return out
 
 
-def latest(db: DB, d: str | None = None, method: str = "綜合＋不追高", cfg: ScanConfig | None = None) -> dict:
+DEFAULT_METHOD = "法人"   # 回溯中唯一樣本內、樣本外都勝過基準的排序
+
+
+def latest(db: DB, d: str | None = None, method: str = DEFAULT_METHOD, cfg: ScanConfig | None = None) -> dict:
     """d 當天（預設最新交易日）的掃描結果。"""
+    return snapshot(db, d, cfg, (method,))["methods"][method] | {"method": method}
+
+
+def snapshot(db: DB, d: str | None = None, cfg: ScanConfig | None = None, methods=METHODS) -> dict:
+    """d 當天所有排序方法的名單：{"date", "liquid", "trend", "regime", "methods": {方法: {"date", "liquid", "trend", "rows"}}}。"""
     cfg = cfg or ScanConfig()
-    if method not in METHODS:
-        raise ValueError(f"未知的方法：{method}（可用：{'、'.join(METHODS)}）")
+    for method in methods:
+        if method not in METHODS:
+            raise ValueError(f"未知的方法：{method}（可用：{'、'.join(METHODS)}）")
     last = db.one("SELECT MAX(date) AS d FROM market WHERE taiex IS NOT NULL")["d"]
     d = d or last
+    if not d:
+        raise ValueError("還沒有任何行情資料")
     since = db.one("SELECT MIN(date) AS d FROM (SELECT date FROM market WHERE taiex IS NOT NULL AND date<=? "
                    "ORDER BY date DESC LIMIT 320)", (d,))["d"] or ""
     data, taiex, trading = load(db, d, since, cfg.min_value)
     sc = screen(data, taiex, trading, d, cfg)
-    rows = [{"code": c, "name": data[c].name, "market": data[c].market, **{k: (round(v, 2) if isinstance(v, float) else v)
-                                                                         for k, v in sc["rows"][c].items()}}
-            for c in sc["rank"][method]]
-    return {"date": d, "method": method, "liquid": len(sc["liquid"]), "trend": len(sc["trend"]), "rows": rows}
+    def rows(method):
+        return [{"code": c, "name": data[c].name, "market": data[c].market,
+                 **{k: (round(v, 2) if isinstance(v, float) else v) for k, v in sc["rows"][c].items()}}
+                for c in sc["rank"][method]]
+    head = {"date": d, "liquid": len(sc["liquid"]), "trend": len(sc["trend"])}
+    return {**head, "regime": _regime(taiex, trading, d), "top": cfg.top,
+            "methods": {m: {**head, "rows": rows(m)} for m in methods}}

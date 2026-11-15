@@ -236,7 +236,7 @@ def main(argv=None) -> None:
     sub.add_parser("version")
     sc = sub.add_parser("scan", help="全市場強勢股掃描")
     sc.add_argument("--date", help="日期（預設：最新交易日）")
-    sc.add_argument("--method", default="綜合＋不追高", help="相對強度、相對強度＋不追高、法人、綜合、綜合＋不追高")
+    sc.add_argument("--method", default="法人", help="法人（預設）、相對強度、相對強度＋不追高、綜合、綜合＋不追高")
     sc.add_argument("--top", type=int, default=20)
     tk = sub.add_parser("track", help="模型追蹤：補建過去的紀錄並更新摘要")
     tk.add_argument("--since", help="從這天（YYYYMMDD）起補建，預設只更新報酬與摘要")
