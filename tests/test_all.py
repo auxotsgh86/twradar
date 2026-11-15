@@ -1362,6 +1362,27 @@ class BacktestTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             B.run(self.db, S, conf)
 
+    def test_v04_candidate(self):
+        from twradar import backtest as B
+        from twradar.rules import default_playbooks, v04_playbooks
+        from twradar.settings import validate
+        S = self.st.get()
+        (name, over), = B.preset_variants(["v04"], S)
+        S4, p = B.apply_variant(S, over)
+        self.assertEqual((p, validate(S4)), ({}, []))
+        e = {r["label"]: r for r in S4["playbooks"]["entry"]}
+        h = {r["label"]: r for r in S4["playbooks"]["hold"]}
+        self.assertEqual(e["否決"]["when"], {"any": ["belowMa20", "marginExcess"]})
+        self.assertEqual(e["投信買、外資賣"]["when"], "trustBuyConflict5d")
+        txt = json.dumps(S4["playbooks"]["entry"])
+        self.assertIn("inst5dBuy", txt)
+        self.assertNotIn('"instBuy"', txt)
+        self.assertIn("blowoffBlack", h["出貨警訊"]["when"]["any"])
+        self.assertEqual([r["label"] for r in v04_playbooks()["entry"]], [r["label"] for r in default_playbooks()["entry"]])
+        self.assertEqual(S["playbooks"], self.st.get()["playbooks"])   # 原設定不變
+        conf = B.BTConfig(start=self.dates[80], end=self.dates[-1], split=self.dates[120], variants=[("目前設定", {}), (name, over)])
+        self.assertEqual([r["name"] for r in B.run(self.db, S, conf)["results"]], ["目前設定", "v0.4 候選"])
+
     def test_condition_study(self):
         from twradar import backtest as B
         conf = B.BTConfig(start=self.dates[70], end=self.dates[-1], split=self.dates[110], study=True)

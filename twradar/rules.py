@@ -62,6 +62,37 @@ def default_playbooks() -> dict:
     }
 
 
+def v04_playbooks() -> dict:
+    """v0.4 候選（2026-11-16，依回溯的規則對照與條件研究；尚未設為預設）。與 v0.3 的差別：
+    - 法人條件改看 5 日累計（instBuy／trustBuyConflict → 5 日版）。
+    - 否決只留「跌破月線」「融資追價過熱」；拿掉「外資買、投信賣」「籌碼背離」「法人賣、融資接」。
+    - 「爆量長黑」從否決移到持有面的出貨警訊。"""
+    pb = default_playbooks()
+    swap = {"instBuy": "inst5dBuy", "trustBuyConflict": "trustBuyConflict5d"}
+
+    def sw(x):
+        if isinstance(x, str):
+            return swap.get(x, x)
+        if isinstance(x, list):
+            return [sw(y) for y in x]
+        if isinstance(x, dict):
+            return {k: sw(v) if k in ("all", "any", "none", "not", "when") else v for k, v in x.items()}
+        return x
+    entry = []
+    for r in pb["entry"]:
+        if r.get("label") == "否決":
+            r = {**r, "when": {"any": ["belowMa20", "marginExcess"]}}
+        elif not r.get("default"):
+            r = {**r, "when": sw(r["when"])}
+        entry.append(r)
+    hold = []
+    for r in pb["hold"]:
+        if r.get("label") == "出貨警訊":
+            r = {**r, "when": {"any": [*r["when"]["any"], "blowoffBlack"]}}
+        hold.append(r)
+    return {"entry": entry, "hold": hold}
+
+
 def p3_playbooks() -> dict:
     """v0.2 P3 的預設規則（加碼面與 v0.1.3 相同＋法人對作）。保留供升級比對與對照測試。"""
     weak = ["whaleDown", "retailUp", "marginHigh", "instSellStreak"]

@@ -509,6 +509,7 @@ def _veto_ids(settings: dict) -> list[str]:
 
 def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
     """內建的規則對照組：
+    v04     v0.4 候選規則（整套換掉）
     veto    否決條件逐條拿掉（每條一組），再加「全部拿掉」
     inst5d  法人條件改看 5 日累計
     market  拿掉「大盤逆風」"""
@@ -522,10 +523,13 @@ def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
         elif n == "inst5d":
             out.append(("法人看 5 日累計", {"_replace": {"instBuy": "inst5dBuy", "trustSellConflict": "trustSellConflict5d",
                                                      "trustBuyConflict": "trustBuyConflict5d"}}))
+        elif n == "v04":
+            from .rules import v04_playbooks
+            out.append(("v0.4 候選", {"_playbooks": v04_playbooks()}))
         elif n == "market":
             out.append(("不用大盤逆風", {"_drop": ["marketWeak"]}))
         else:
-            raise ValueError(f"未知的對照組：{n}（可用：veto、inst5d、market）")
+            raise ValueError(f"未知的對照組：{n}（可用：veto、inst5d、market、v04）")
     return out
 
 
@@ -563,6 +567,8 @@ def apply_variant(settings: dict, over: dict) -> tuple[dict, dict]:
     drop, rep = set(over.get("_drop") or []), dict(over.get("_replace") or {})
     params = {k: v for k, v in over.items() if not k.startswith("_")}
     S = copy.deepcopy(settings)
+    if over.get("_playbooks"):
+        S["playbooks"] = copy.deepcopy(over["_playbooks"])
     if drop or rep:
         for side in ("entry", "hold"):
             rules = []
