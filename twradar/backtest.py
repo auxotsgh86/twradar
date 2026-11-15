@@ -41,6 +41,8 @@ class BTConfig:
     top_otc: int = 50
     max_adds: int = 2
     variants: list[tuple[str, dict]] = field(default_factory=lambda: [("目前設定", {})])
+    study: bool = False             # 條件研究（每個條件的區分力）
+    scan: bool = False              # 全市場掃描的排序驗證
 
 
 # ---------------- 股票池 ----------------
@@ -389,7 +391,12 @@ def summarize_trades(trades: list[dict], split: str) -> dict:
 
 def run(db: DB, settings: dict, cfg: BTConfig, progress=None) -> dict:
     P0 = {**DEFAULT_RULES, **{p["id"]: p["value"] for p in settings["params"]}}
+    from .conditions import BUILTIN as _CONDS
     for name, over in cfg.variants:
+        for cid in [*(over.get("_drop") or []), *(over.get("_replace") or {}).values()]:
+            if cid not in _CONDS and cid not in {c["id"] for c in settings.get("conditions", [])}:
+                raise ValueError(f"未知的條件：{cid}")
+        over = {k: v for k, v in over.items() if not k.startswith("_")}
         bad = [k for k in over if k in INDICATOR_PARAMS]
         if bad:
             raise ValueError(f"參數組合不能包含 {', '.join(bad)}（會改變指標計算）")
@@ -427,8 +434,8 @@ def run(db: DB, settings: dict, cfg: BTConfig, progress=None) -> dict:
     rec_cache: dict = {}
     results = []
     for vi, (name, over) in enumerate(cfg.variants):
-        P = {**P0, **over}
-        S = copy.deepcopy(settings)
+        S, pover = apply_variant(settings, over)
+        P = {**P0, **pover}
         events: list | None = [] if vi == 0 else None   # 事件研究只對目前設定做
         trades: list[dict] = []
         for ci, code in enumerate(codes):
@@ -436,6 +443,9 @@ def run(db: DB, settings: dict, cfg: BTConfig, progress=None) -> dict:
             if progress:
                 progress(vi, len(cfg.variants), ci + 1, len(codes))
         res = {"name": name, "params": over, "trades": summarize_trades(trades, cfg.split)}
+        if vi == 0 and cfg.study:
+            from .study import condition_study
+            res["conditions"] = condition_study(hist, dates, universe, P, S, cfg.split, rec_cache, regimes)
         if events is not None:
             res["events"] = summarize_events(events, baseline, cfg.split)
             res["eventCount"] = len(events)
@@ -447,6 +457,11 @@ def run(db: DB, settings: dict, cfg: BTConfig, progress=None) -> dict:
             res["byReason"] = {r: summarize_trades([t for t in trades if t["reason"] == r], cfg.split)["全期"]
                                for r in sorted({t["reason"] for t in trades})}
         results.append(res)
+    scan_res = None
+    if cfg.scan:
+        from .scan import study as scan_study
+        scan_res = scan_study(db, dates, cfg.split, progress=(lambda i, n: progress(len(cfg.variants), len(cfg.variants) + 1, i, n))
+                              if progress else None)
     bh = {}
     for tag in sorted({x for u in universe.values() for tags in u.values() for x in tags}):
         rets = []
@@ -460,7 +475,7 @@ def run(db: DB, settings: dict, cfg: BTConfig, progress=None) -> dict:
     return {"config": {"start": cfg.start, "end": cfg.end, "split": cfg.split, "universe": cfg.universe,
                        "maxAdds": cfg.max_adds, "horizons": list(HORIZONS)},
             "coverage": coverage, "baseline": {"|".join(k): v for k, v in baseline.items()},
-            "buyHold": bh, "results": results}
+            "buyHold": bh, "results": results, "scan": scan_res}
 
 
 def parse_grid(items: list[str]) -> list[tuple[str, dict]]:
@@ -476,6 +491,90 @@ def parse_grid(items: list[str]) -> list[tuple[str, dict]]:
     if len(combos) > 60:
         raise ValueError(f"參數組合 {len(combos)} 組太多（上限 60）")
     return [("目前設定", {})] + [("、".join(f"{k}={v}" for k, v in c.items()), c) for c in combos]
+
+
+# ---------------- 規則對照 ----------------
+# 對照組＝（名稱, 覆寫）。覆寫除了參數，還可以有：
+#   "_drop": [條件 id...]       從規則中拿掉這些條件（any／all 清單裡的項目；整條規則只剩它時，整條規則拿掉）
+#   "_replace": {舊 id: 新 id}  把條件換成另一個（例如單日法人 → 5 日累計）
+VETO_RULE = "否決"
+
+
+def _veto_ids(settings: dict) -> list[str]:
+    for r in settings["playbooks"]["entry"]:
+        if r.get("label") == VETO_RULE and isinstance(r.get("when"), dict) and "any" in r["when"]:
+            return [x for x in r["when"]["any"] if isinstance(x, str)]
+    return []
+
+
+def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
+    """內建的規則對照組：
+    veto    否決條件逐條拿掉（每條一組），再加「全部拿掉」
+    inst5d  法人條件改看 5 日累計
+    market  拿掉「大盤逆風」"""
+    out: list[tuple[str, dict]] = []
+    for n in [x.strip() for x in names for x in x.split(",") if x.strip()]:
+        if n == "veto":
+            ids = _veto_ids(settings)
+            out += [(f"不用否決：{i}", {"_drop": [i]}) for i in ids]
+            if ids:
+                out.append(("不用任何否決", {"_drop": ids}))
+        elif n == "inst5d":
+            out.append(("法人看 5 日累計", {"_replace": {"instBuy": "inst5dBuy", "trustSellConflict": "trustSellConflict5d",
+                                                     "trustBuyConflict": "trustBuyConflict5d"}}))
+        elif n == "market":
+            out.append(("不用大盤逆風", {"_drop": ["marketWeak"]}))
+        else:
+            raise ValueError(f"未知的對照組：{n}（可用：veto、inst5d、market）")
+    return out
+
+
+def _transform(expr, drop: set, rep: dict):
+    """回傳轉換後的規則運算式；整個運算式被拿掉時回傳 None。"""
+    if isinstance(expr, str):
+        return None if expr in drop else rep.get(expr, expr)
+    if isinstance(expr, list):
+        xs = [y for y in (_transform(x, drop, rep) for x in expr) if y is not None]
+        return xs or None
+    if isinstance(expr, dict):
+        out = dict(expr)
+        for k in ("all", "any", "none"):
+            if k in out:
+                xs = _transform(out[k], drop, rep)
+                if xs is None:
+                    return None
+                out[k] = xs
+        if "not" in out:
+            x = _transform(out["not"], drop, rep)
+            if x is None:
+                return None
+            out["not"] = x
+        if "atLeast" in out:
+            of = _transform(out["atLeast"]["of"], drop, rep)
+            if of is None:
+                return None
+            out["atLeast"] = {**out["atLeast"], "of": of, "n": min(out["atLeast"]["n"], len(of))}
+        return out
+    return expr
+
+
+def apply_variant(settings: dict, over: dict) -> tuple[dict, dict]:
+    """（設定, 參數覆寫）：把 _drop／_replace 套到規則上。"""
+    drop, rep = set(over.get("_drop") or []), dict(over.get("_replace") or {})
+    params = {k: v for k, v in over.items() if not k.startswith("_")}
+    S = copy.deepcopy(settings)
+    if drop or rep:
+        for side in ("entry", "hold"):
+            rules = []
+            for r in S["playbooks"].get(side) or []:
+                if r.get("default"):
+                    rules.append(r)
+                    continue
+                w = _transform(r["when"], drop, rep)
+                if w is not None:
+                    rules.append({**r, "when": w})
+            S["playbooks"][side] = rules
+    return S, params
 
 
 def to_json(result: dict) -> str:

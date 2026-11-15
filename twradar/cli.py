@@ -130,6 +130,25 @@ def probe(cfg, date: str | None = None) -> None:
         print()
 
 
+def run_scan(cfg, args) -> int:
+    from . import scan as SC
+    from .dates import norm_date
+    db, _ = open_all(cfg)
+    try:
+        r = SC.latest(db, norm_date(args.date) if args.date else None, args.method, SC.ScanConfig(top=args.top))
+    except ValueError as e:
+        print(f"錯誤：{e}")
+        return 1
+    print(f"{r['date']} 全市場掃描（{r['method']}）：流動性合格 {r['liquid']} 檔，趨勢合格 {r['trend']} 檔")
+    print("代號\t名稱\t收盤\t20日相對%\t60日相對%\t法人5日%\t5日乖離%\t乖離百分位\t日均額(億)\t分數")
+    f = lambda v, d=1: "—" if v is None else f"{v:.{d}f}"
+    for x in r["rows"]:
+        print(f"{x['code']}\t{x['name']}\t{f(x['close'], 2)}\t{f(x['rs20'])}\t{f(x['rs60'])}\t{f(x['inst5Pct'])}\t"
+              f"{f(x['bias5'])}\t{f(x['biasPct'], 0)}\t{f(x['value20'])}\t{f(x['score'])}")
+    print("此清單只依規則篩選與排序，排序方法是否有效請看回溯分析的「全市場掃描驗證」，不構成投資建議。")
+    return 0
+
+
 def run_track(cfg, args) -> int:
     from . import tracking
     from .dates import norm_date
@@ -167,16 +186,20 @@ def run_backtest(cfg, args) -> int:
     period = [d for d in usable if d >= start]
     split = norm_date(args.split) if args.split else period[len(period) * 2 // 3]
     try:
-        variants = B.parse_grid(args.grid)
-        conf = B.BTConfig(start=start, end=end, split=split, universe=args.universe, max_adds=args.max_adds, variants=variants)
+        variants = B.parse_grid(args.grid) + B.preset_variants(args.compare, st.get())
+        conf = B.BTConfig(start=start, end=end, split=split, universe=args.universe, max_adds=args.max_adds, variants=variants,
+                          study=not args.no_study, scan=not args.no_scan)
+        nv = len(variants) + (1 if conf.scan else 0)
         last = [-1]
 
-        def progress(vi, nv, ci, nc):
+        def progress(vi, _nv, ci, nc):
             pct = int((vi + ci / nc) / nv * 100)
             if pct != last[0] and pct % 5 == 0:
                 last[0] = pct
-                print(f"  {pct}%（{vi + 1}/{nv} 組）", flush=True)
-        print(f"回溯分析 {start}～{end}，{split} 起為樣本外，{len(variants)} 組參數…", flush=True)
+                what = f"{vi + 1}/{len(variants)} 組" if vi < len(variants) else "全市場掃描驗證"
+                print(f"  {pct}%（{what}）", flush=True)
+        print(f"回溯分析 {start}～{end}，{split} 起為樣本外，{len(variants)} 組規則"
+              f"{'＋條件研究' if conf.study else ''}{'＋全市場掃描驗證' if conf.scan else ''}…", flush=True)
         res = B.run(db, st.get(), conf, progress)
     except ValueError as e:
         print(f"錯誤：{e}")
@@ -211,6 +234,10 @@ def main(argv=None) -> None:
     sub.add_parser("watchlist")
     im = sub.add_parser("import"); im.add_argument("file")
     sub.add_parser("version")
+    sc = sub.add_parser("scan", help="全市場強勢股掃描")
+    sc.add_argument("--date", help="日期（預設：最新交易日）")
+    sc.add_argument("--method", default="綜合＋不追高", help="相對強度、相對強度＋不追高、法人、綜合、綜合＋不追高")
+    sc.add_argument("--top", type=int, default=20)
     tk = sub.add_parser("track", help="模型追蹤：補建過去的紀錄並更新摘要")
     tk.add_argument("--since", help="從這天（YYYYMMDD）起補建，預設只更新報酬與摘要")
     bt = sub.add_parser("backtest", help="回溯分析")
@@ -219,6 +246,10 @@ def main(argv=None) -> None:
     bt.add_argument("--split", help="樣本外起始日（預設：期間的後三分之一）")
     bt.add_argument("--universe", default="auto", help="auto（預設）、watchlist，或 CSV 檔（代號,組別）")
     bt.add_argument("--grid", action="append", default=[], help="參數組合，例：--grid profitTargetPct=8,10,15（可重複）")
+    bt.add_argument("--compare", action="append", default=[],
+                    help="規則對照組：veto（否決條件逐條拿掉）、inst5d（法人看 5 日累計）、market（不用大盤逆風），可用逗號合併")
+    bt.add_argument("--no-study", action="store_true", help="不做條件研究")
+    bt.add_argument("--no-scan", action="store_true", help="不做全市場掃描驗證")
     bt.add_argument("--max-adds", type=int, default=2)
     bt.add_argument("--out", help="輸出資料夾（預設：資料夾/backtest/時間）")
     ad = sub.add_parser("admin"); ad.add_argument("action", choices=["reset-password", "set-password", "rotate-token"])
@@ -282,6 +313,8 @@ def main(argv=None) -> None:
         sys.exit(run_backtest(cfg, args))
     elif args.cmd == "track":
         sys.exit(run_track(cfg, args))
+    elif args.cmd == "scan":
+        sys.exit(run_scan(cfg, args))
     elif args.cmd == "admin":
         from .auth import AuthError, TokenPasswordAuthenticator
         open_all(cfg)

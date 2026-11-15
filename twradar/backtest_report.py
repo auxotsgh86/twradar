@@ -123,6 +123,47 @@ def _findings(res: dict, cfg: dict) -> list[str]:
     return out
 
 
+def _cond_section(cs: dict | None) -> str:
+    if not cs:
+        return ""
+    from .study import verdict
+    rows = []
+    for cid, row in sorted(cs.items(), key=lambda kv: (kv[1]["side"], kv[0])):
+        tds = []
+        for smp in ("樣本內", "樣本外"):
+            cell = row["趨勢股"][smp]
+            p, f, df = cell["pass"]["f10"], cell["fail"]["f10"], cell["diff"].get("f10")
+            v = verdict(cell)
+            tds.append(f"<td class='num'>{p.get('n', 0):,}</td><td class='num {_cls(p.get('excess'))}'>{_num(p.get('excess'), sign=True, pct=True)}</td>"
+                       f"<td class='num {_cls(f.get('excess'))}'>{_num(f.get('excess'), sign=True, pct=True)}</td>"
+                       f"<td class='num {_cls(df)}'>{_num(df, sign=True)}</td><td class='sm'>{_e(v)}</td>")
+        rows.append(f"<tr><td>{_e(row['label'])}<div class='sm'>{_e(cid)}・{_e(row['side'])}</div></td>{''.join(tds)}</tr>")
+    head = "".join(f"<th>{s} 成立筆數</th><th>成立</th><th>不成立</th><th>差距</th><th>判讀</th>" for s in ("樣本內", "樣本外"))
+    return f"""<h2>條件研究：每個條件的區分力</h2><section>
+<p class="sm">母體：趨勢股（收盤在月線上、月線走平或上揚）。數字為 10 日超額報酬（同日同組平均為基準）。
+否決類條件「差距」應為負、買進類應為正；兩段樣本方向一致才可信。「看不出差別」＝差距小於兩倍標準誤。</p>
+<div class="tw"><table><tr><th>條件</th>{head}</tr>{''.join(rows)}</table></div></section>"""
+
+
+def _scan_section(sc: dict | None) -> str:
+    if not sc:
+        return ""
+    rows = []
+    for m, v in sc["methods"].items():
+        for b in ("全市場", "趨勢股"):
+            tds = "".join(
+                f"<td class='num {_cls(v[b][sg]['f10'].get('excess'))}'>{_num(v[b][sg]['f10'].get('excess'), sign=True, pct=True)}"
+                f"<div class='sm'>±{_num(v[b][sg]['f10'].get('se'))}・勝 {_num(v[b][sg]['f10'].get('hit'), 0)}%</div></td>"
+                for sg in ("樣本內", "樣本外", "多頭", "盤整", "空頭"))
+            rows.append(f"<tr><td>{_e(m)}</td><td>{_e(b)}</td>{tds}</tr>")
+    c = sc["config"]
+    return f"""<h2>全市場掃描驗證</h2><section>
+<p class="sm">每天從全市場（日均成交額 ≥ {c['minValue'] / 1e8:.0f} 億、平均 {sc['avgLiquid']} 檔）篩出趨勢股（平均 {sc['avgTrend']} 檔），依各方法取前 {c['top']} 名，
+隔日開盤買、10 日後收盤。數字＝每天（前 {c['top']} 名平均 − 基準平均）的平均；±為標準誤、勝＝勝過基準的天數比例。
+對「趨勢股」的超額代表排序本身有沒有加分。</p>
+<div class="tw"><table><tr><th>方法</th><th>基準</th><th>樣本內</th><th>樣本外</th><th>多頭</th><th>盤整</th><th>空頭</th></tr>{''.join(rows)}</table></div></section>"""
+
+
 def render(res: dict) -> str:
     cfg, cov = res["config"], res["coverage"]
     r0 = res["results"][0]
@@ -173,6 +214,8 @@ th{{background:#f0f3f7;font-weight:600}} td.num{{text-align:right;font-variant-n
 報酬以「訊號隔日開盤買進」計算，使用還原股價，未扣費用。</p></section>
 
 <h2>進場訊號：上車與加碼</h2><section>{_event_table(ev, ENTRY_KINDS)}</section>
+{_cond_section(r0.get("conditions"))}
+{_scan_section(res.get("scan"))}
 
 <h2>持有面訊號：減碼與退場</h2><section>{_event_table(ev, hold_kinds, invert=True, tags=["全部", "大型", "中型", "上櫃"],
     note='<p class="sm">出場後股價的走勢：超額為負（綠底）代表出場後確實相對轉弱，訊號有幫你避開下跌。</p>')}</section>
@@ -188,7 +231,7 @@ th{{background:#f0f3f7;font-weight:600}} td.num{{text-align:right;font-variant-n
 <h3>每半年（依買進日）</h3><div class="tw"><table>{TRADE_HEAD}{''.join(_trade_row(k, v) for k, v in r0.get('byHalfYear', {}).items())}</table></div>
 </section>
 
-<h2>參數組合比較</h2><section>
+<h2>規則與參數對照</h2><section>
 <div class="tw"><table><tr><th rowspan=2>組合</th><th colspan=5>樣本內</th><th colspan=5>樣本外</th></tr>
 <tr><th>筆數</th><th>平均報酬</th><th>勝率</th><th>獲利因子</th><th>最大回落</th><th>筆數</th><th>平均報酬</th><th>勝率</th><th>獲利因子</th><th>最大回落</th></tr>
 {variants}</table></div><p class="sm">選參數時以樣本外為準，並優先選「相鄰數值表現也接近」的參數，避免只是配合過去走勢。</p></section>

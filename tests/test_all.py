@@ -1310,22 +1310,92 @@ class BacktestTests(unittest.TestCase):
         os.environ["TWRADAR_HOME"] = self.cfg.home
         try:
             args = SimpleNamespace(start=None, end=None, split=None, universe="auto", grid=["profitTargetPct=8,12"],
-                                   max_adds=2, out=str(out))
+                                   compare=["inst5d,market"], no_study=False, no_scan=False, max_adds=2, out=str(out))
             with contextlib.redirect_stdout(io.StringIO()) as buf:
                 code = run_backtest(self.cfg, args)
             summary = latest_backtest()  # 狀態 API 會附上最新一次回溯摘要
         finally:
             os.environ["TWRADAR_HOME"] = TMP
         self.assertEqual(summary["run"], "20261114-010000")
-        self.assertEqual(len(summary["variants"]), 3)
+        self.assertEqual([v["name"] for v in summary["variants"]][3:], ["法人看 5 日累計", "不用大盤逆風"])
+        self.assertIn("marketWeak", summary["conditions"])
+        self.assertIn(summary["conditions"]["marketWeak"]["樣本內"]["verdict"], ("樣本不足", "看不出差別", "成立後較好", "成立後較差"))
+        self.assertIn("綜合＋不追高", summary["scan"]["methods"])
         self.assertIn("全期", summary["trades"])
         self.assertEqual(code, 0, buf.getvalue())
         html_ = (out / "report.html").read_text(encoding="utf-8")
-        for k in ("回溯分析", "進場訊號", "參數組合比較", "profitTargetPct=8", "注意事項"):
+        for k in ("回溯分析", "進場訊號", "規則與參數對照", "profitTargetPct=8", "條件研究", "全市場掃描驗證", "注意事項"):
             self.assertIn(k, html_)
         res = json.loads((out / "result.json").read_text(encoding="utf-8"))
-        self.assertEqual(len(res["results"]), 3)
+        self.assertEqual(len(res["results"]), 5)
         self.assertTrue((out / "trades.csv").exists())
+
+    def test_rule_variants(self):
+        """對照組：拿掉否決條件、換成 5 日版；整條規則只剩被拿掉的條件時整條拿掉。"""
+        from twradar import backtest as B
+        S = self.st.get()
+        veto = B._veto_ids(S)
+        self.assertIn("trustSellConflict", veto)
+        vs = B.preset_variants(["veto", "inst5d,market"], S)
+        self.assertEqual(len(vs), len(veto) + 1 + 2)
+        with self.assertRaises(ValueError):
+            B.preset_variants(["nope"], S)
+        S1, p1 = B.apply_variant(S, {"_drop": ["divergence"], "stopLossPct": 8})
+        entry = {r["label"]: r for r in S1["playbooks"]["entry"]}
+        self.assertNotIn("divergence", entry["否決"]["when"]["any"])
+        self.assertEqual(len(entry["否決"]["when"]["any"]), len(veto) - 1)
+        self.assertEqual(p1, {"stopLossPct": 8})
+        self.assertIn("divergence", {r["label"]: r for r in S["playbooks"]["entry"]}["否決"]["when"]["any"])  # 原設定不變
+        S2, _ = B.apply_variant(S, {"_drop": veto})
+        self.assertNotIn("否決", [r["label"] for r in S2["playbooks"]["entry"]])
+        S3, _ = B.apply_variant(S, dict(vs[-2][1]))
+        e3 = {r["label"]: r for r in S3["playbooks"]["entry"]}
+        self.assertIn("trustSellConflict5d", e3["否決"]["when"]["any"])
+        self.assertEqual(e3["投信買、外資賣"]["when"], "trustBuyConflict5d")
+        self.assertIn("inst5dBuy", json.dumps(e3["加碼"]["when"]))
+        S4, _ = B.apply_variant(S, {"_drop": ["marketWeak"]})
+        self.assertNotIn("大盤逆風", [r["label"] for r in S4["playbooks"]["entry"]])
+        from twradar.settings import validate
+        for Sx in (S1, S2, S3, S4):
+            self.assertEqual(validate(Sx), [], Sx["playbooks"]["entry"])
+        conf = B.BTConfig(start=self.dates[80], end=self.dates[-1], split=self.dates[120], variants=[("x", {"_drop": ["nope"]})])
+        with self.assertRaises(ValueError):
+            B.run(self.db, S, conf)
+
+    def test_condition_study(self):
+        from twradar import backtest as B
+        conf = B.BTConfig(start=self.dates[70], end=self.dates[-1], split=self.dates[110], study=True)
+        cs = B.run(self.db, self.st.get(), conf)["results"][0]["conditions"]
+        self.assertIn("trendUp", cs)
+        cell = cs["trendUp"]["全部"]["全期"]
+        self.assertTrue(cell["pass"]["f5"]["n"] + cell["fail"]["f5"]["n"] > 0)
+        # 趨勢股母體裡 trendUp 一定成立
+        self.assertEqual(cs["trendUp"]["趨勢股"]["全期"]["fail"]["f5"].get("n", 0), 0)
+        self.assertNotIn("stopLoss", cs)
+
+    def test_scan(self):
+        """全市場掃描：強勢股排前面；報酬定義與回溯相同；驗證結構完整。"""
+        from twradar import scan as SC
+        from twradar.backtest import History
+        cfg = SC.ScanConfig(top=2, min_value=0)
+        data, taiex, trading = SC.load(self.db, self.dates[-1])
+        d = self.dates[119]                      # 2330 正在上漲
+        sc = SC.screen(data, taiex, trading, d, cfg)
+        self.assertIn("2330", sc["trend"])
+        self.assertEqual(sc["rank"]["相對強度"][0], "2330")
+        h = History(self.db, ["2330"], self.dates[-1])
+        fw = data["2330"].fwd(data["2330"].pos[d])
+        for k, v in h.fwd("2330", d).items():
+            self.assertAlmostEqual(fw[k], v, 4)
+        d2 = self.dates[-1]                      # 跌破月線：不在趨勢股
+        self.assertNotIn("2330", SC.screen(data, taiex, trading, d2, cfg)["trend"])
+        st = SC.study(self.db, self.dates[70:], self.dates[110], cfg)
+        self.assertEqual(set(st["methods"]), set(SC.METHODS))
+        self.assertIn("f10", st["methods"]["綜合"]["趨勢股"]["樣本內"])
+        r = SC.latest(self.db, d, "相對強度", cfg)
+        self.assertEqual(r["rows"][0]["code"], "2330")
+        with self.assertRaises(ValueError):
+            SC.latest(self.db, d, "亂來", cfg)
 
     def test_grid_validation(self):
         from twradar import backtest as B
@@ -1345,8 +1415,8 @@ class BacktestTests(unittest.TestCase):
         os.environ["TWRADAR_HOME"] = cfg.home
         try:
             with contextlib.redirect_stdout(io.StringIO()) as buf:
-                code = run_backtest(cfg, SimpleNamespace(start=None, end=None, split=None, universe="auto", grid=[],
-                                                         max_adds=2, out=None))
+                code = run_backtest(cfg, SimpleNamespace(start=None, end=None, split=None, universe="auto", grid=[], compare=[],
+                                                         no_study=True, no_scan=True, max_adds=2, out=None))
         finally:
             os.environ["TWRADAR_HOME"] = TMP
         self.assertEqual(code, 1)

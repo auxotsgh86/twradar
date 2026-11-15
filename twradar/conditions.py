@@ -508,6 +508,52 @@ def trust_sell_conflict(c: Ctx) -> Res:
     return Res(FAIL)
 
 
+def _inst5_ratio(c: Ctx, lots):
+    """5 日累計張數 ÷ 近 5 日成交量（%）。vol5 是前 5 日平均（張）。"""
+    v5 = c.g("vol5")
+    return None if lots is None or not v5 else lots / (v5 * 5) * 100
+
+
+@condition("inst5dBuy", "法人 5 日累計買超", "entry", ("inst5dPct",), ("foreign5d", "trust5d", "vol5"),
+           "外資＋投信近 5 日累計買超 ≥ 近 5 日成交量的設定比例（比單日不易受雜訊影響）")
+def inst5d_buy(c: Ctx) -> Res:
+    f, t = c.g("foreign5d"), c.g("trust5d")
+    if f is None and t is None:
+        return Res(NA)
+    net = (f or 0) + (t or 0)
+    r = _inst5_ratio(c, net)
+    if r is None:
+        return Res(NA)
+    if r >= c.P["inst5dPct"]:
+        return Res(PASS, f"法人 5 日累計買超 {net:+,} 張（{r:.1f}% 成交量）")
+    return Res(FAIL, need=f"法人 5 日累計買超 ≥ 成交量 {fmt(c.P['inst5dPct'], 1)}%（目前 {r:+.1f}%）")
+
+
+@condition("trustSellConflict5d", "外資買、投信賣（5 日）", "entry", ("conflictRatio", "inst5dPct"),
+           ("foreign5d", "trust5d", "vol5"), "近 5 日外資累計買超、投信累計賣超，投信賣超 ≥ 外資買超的設定比例，且達 5 日成交量的設定比例")
+def trust_sell_conflict5d(c: Ctx) -> Res:
+    f, t = c.g("foreign5d"), c.g("trust5d")
+    if f is None or t is None:
+        return Res(NA)
+    r = _inst5_ratio(c, -t)
+    if f > 0 and t < 0 and -t >= f * c.P["conflictRatio"] / 100 and r is not None and r >= c.P["inst5dPct"]:
+        return Res(PASS, f"近 5 日投信賣、外資買（投信 {t:+,}、外資 {f:+,} 張）")
+    return Res(FAIL)
+
+
+@condition("trustBuyConflict5d", "投信買、外資賣（5 日）", "entry", ("conflictRatio", "inst5dPct"),
+           ("foreign5d", "trust5d", "vol5"), "近 5 日投信累計買超、外資累計賣超且達門檻")
+def trust_buy_conflict5d(c: Ctx) -> Res:
+    f, t = c.g("foreign5d"), c.g("trust5d")
+    if f is None or t is None:
+        return Res(NA)
+    small = min(t, -f)
+    r = _inst5_ratio(c, small)
+    if t > 0 and f < 0 and small >= max(t, -f) * c.P["conflictRatio"] / 100 and r is not None and r >= c.P["inst5dPct"]:
+        return Res(PASS, f"近 5 日投信買、外資賣（投信 {t:+,}、外資 {f:+,} 張）")
+    return Res(FAIL)
+
+
 @condition("trustBuyConflict", "投信買、外資賣", "entry", ("conflictRatio", "conflictValuePct", "conflictMinAmt"),
            ("foreign", "trust", "close", "amt5"), "投信買超、外資賣超且達門檻：可能是投信認養，先列觀察")
 def trust_buy_conflict(c: Ctx) -> Res:

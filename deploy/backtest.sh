@@ -22,7 +22,7 @@ SEPARATE=0
 DAYS=560
 INTERVAL=""
 SKIP=0
-GRID=(--grid profitTargetPct=8,10,15 --grid stopLossPct=8,10,12)
+GRID=(--compare veto,inst5d,market)
 EXTRA=()
 while [ $# -gt 0 ]; do
   case "$1" in

@@ -91,6 +91,7 @@ ENGINE_PARAMS = [
     {"id": "amplifyVolPct", "label": "買超放大：當日買超佔成交量 ≥", "value": 10, "unit": "%", "min": 0, "max": 100, "note": "或金額達下一項"},
     {"id": "amplifyMinAmt", "label": "買超放大：當日買超金額 ≥", "value": 3000, "unit": "萬元", "min": 0, "max": None, "note": ""},
     {"id": "marginInstRatio", "label": "融資健康：融資增加 < 法人買超的", "value": 30, "unit": "%", "min": 0, "max": 1000, "note": ""},
+    {"id": "inst5dPct", "label": "法人 5 日累計：佔近 5 日成交量 ≥", "value": 3, "unit": "%", "min": 0, "max": 100, "note": "5 日版的法人條件用"},
     {"id": "addMinProfit", "label": "加碼前提：底倉獲利 ≥", "value": 3, "unit": "%", "min": 0, "max": 100, "note": "不攤平"},
     {"id": "pullbackDays", "label": "上車：回測觀察天數", "value": 10, "unit": "日", "min": 1, "max": 40, "note": ""},
     {"id": "pullbackPct", "label": "上車：回測時最低價距月線 ≤", "value": 2, "unit": "%", "min": -20, "max": 20, "note": "曾回到月線附近"},

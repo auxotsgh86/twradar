@@ -301,7 +301,35 @@ def latest_backtest() -> dict | None:
             "byHalfYear": r0.get("byHalfYear"), "signals": signals, "entryByTag": by_tag,
             "buyHold": res.get("buyHold"),
             "variants": [{"name": r["name"], "inSample": r["trades"]["樣本內"], "outSample": r["trades"]["樣本外"]}
-                         for r in res["results"]]}
+                         for r in res["results"]],
+            "conditions": _conditions_brief(r0.get("conditions")),
+            "scan": _scan_brief(res.get("scan"))}
+
+
+def _conditions_brief(cs: dict | None) -> dict | None:
+    """條件研究摘要：趨勢股母體、10 日超額報酬（成立／不成立／差距）與判讀。"""
+    if not cs:
+        return None
+    from .study import verdict
+    out = {}
+    for cid, row in cs.items():
+        r = {"label": row["label"], "side": row["side"]}
+        for smp in ("樣本內", "樣本外"):
+            cell = row["趨勢股"][smp]
+            p, f = cell["pass"]["f10"], cell["fail"]["f10"]
+            r[smp] = {"pass": p.get("excess"), "passN": p.get("n", 0), "fail": f.get("excess"), "diff": cell["diff"].get("f10"),
+                      "se": p.get("se"), "verdict": verdict(cell)}
+        out[cid] = r
+    return out
+
+
+def _scan_brief(sc: dict | None) -> dict | None:
+    if not sc:
+        return None
+    pick = lambda st: {h: {k: st[h].get(k) for k in ("excess", "se", "hit", "days")} for h in ("f5", "f10", "f20")}
+    return {"stocks": sc["stocks"], "avgLiquid": sc["avgLiquid"], "avgTrend": sc["avgTrend"], "config": sc["config"],
+            "methods": {m: {b: {sg: pick(v[b][sg]) for sg in ("樣本內", "樣本外", "多頭", "盤整", "空頭")} for b in ("全市場", "趨勢股")}
+                        for m, v in sc["methods"].items()}}
 
 
 def make_handler(app: App):
