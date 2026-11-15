@@ -1422,6 +1422,15 @@ class BacktestTests(unittest.TestCase):
             Sx, _ = B.apply_variant(S, over)
             self.assertEqual(validate(Sx), [], Sx["playbooks"])
         self.assertNotIn("大盤逆風", [r["label"] for r in B.apply_variant(S, vs["加試單＋不用大盤逆風"])[0]["playbooks"]["entry"]])
+        grid = B.preset_variants(["bullstop-grid"], S)
+        self.assertEqual(len(grid), 6)
+        for _, over in grid:
+            Sx, px = B.apply_variant(S, over)
+            self.assertEqual(validate(Sx), [])
+        self.assertEqual(B.apply_variant(S, grid[0][1])[1], {"breakMaBullPct": 2})
+        stop = next(r for r in grid[-1][1]["_playbooks"]["hold"] if r["label"] == "停損")["when"]["any"]
+        self.assertIn({"all": ["belowMa20", "instNetSell"]}, stop)
+        self.assertNotIn("breakMa20Hard", stop)
         self.assertEqual(S["playbooks"], default_playbooks())
         # 試單：月線還在下彎（上車不成立），但帶量紅 K 站上均線、法人 5 日買超、乖離小
         rec = {"close": 32.3, "open": 31.0, "candle": 1, "chgPct": 4.0, "vol": 300, "vol5": 100, "ma5": 31.2, "ma20": 31.9,

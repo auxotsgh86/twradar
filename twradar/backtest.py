@@ -535,10 +535,22 @@ def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
             from .rules import bull_playbooks
             name = {"bullhold": "多頭不因警訊減碼", "bullstop": "多頭放寬月線停損", "bull": "多頭不減碼＋放寬停損"}[n]
             out.append((name, {"_playbooks": bull_playbooks(hold=n != "bullstop", stop=n != "bullhold")}))
+        elif n == "bullstop-grid":   # 穩健性：放寬幅度換成相鄰數值，以及只放寬幅度（保留「跌破月線＋法人賣超」停損）
+            from .rules import bull_playbooks, default_playbooks
+            for v in (2, 2.5, 3, 4, 5):
+                out.append((f"多頭放寬月線停損 {v}%", {"_playbooks": bull_playbooks(stop=True), "breakMaBullPct": v}))
+            pb = bull_playbooks(stop=True)
+            base = next(r for r in default_playbooks()["hold"] if r.get("label") == "停損")["when"]["any"]
+            for r in pb["hold"]:
+                if r.get("label") == "停損":
+                    r["when"]["any"] = [x if not (isinstance(x, dict) and "instNetSell" in (x.get("all") or [])) else
+                                        next(y for y in base if isinstance(y, dict) and "instNetSell" in (y.get("all") or []))
+                                        for x in r["when"]["any"]]
+            out.append(("多頭只放寬幅度 3%（法人賣超停損照舊）", {"_playbooks": pb}))
         elif n == "market":
             out.append(("不用大盤逆風", {"_drop": ["marketWeak"]}))
         else:
-            raise ValueError(f"未知的對照組：{n}（可用：trial、bullhold、bullstop、bull、veto、inst1d、market、v03）")
+            raise ValueError(f"未知的對照組：{n}（可用：trial、bullhold、bullstop、bullstop-grid、bull、veto、inst1d、market、v03）")
     return out
 
 
