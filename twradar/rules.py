@@ -348,6 +348,9 @@ def evaluate(rec: dict, stock: dict, P: dict, settings: dict | None = None) -> d
                        "rule": h["rule"], "confirm": h["confirm"],
                        "reasons": h["reasons"], "weak": [w for w in warn if w not in h["reasons"]],
                        "profitPct": None if prof is None else round(prof, 2)}
+        if rec.get("costExDates") and ctx.cost:
+            out["hold"]["costAdj"] = round(ctx.cost, 2)
+            out["hold"]["costExDates"] = rec["costExDates"]
     out["trace"] = eng.trace(ctx)
     return out
 

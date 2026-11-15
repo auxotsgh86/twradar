@@ -37,8 +37,14 @@ class Ctx:
         v, v5 = self.g("vol"), self.g("vol5")
         return v / v5 if v is not None and v5 else None
 
-    def profit_at(self, price):
+    @property
+    def cost(self):
+        """成本（依買進後的除權息、減資、分割調整）。未填成本為 None。"""
         cost = self.stock.get("cost")
+        return cost * (self.g("costFactor") or 1.0) if cost else None
+
+    def profit_at(self, price):
+        cost = self.cost
         if not cost or price is None:
             return None
         fee, tax = self.P.get("feePct", 0.1425) / 100, self.P.get("taxPct", 0.3) / 100
@@ -57,7 +63,7 @@ class Ctx:
     @property
     def profit_pct(self):
         """以成本計算的報酬率（%），扣手續費與證交稅估算。未填成本為 None。"""
-        cost, close = self.stock.get("cost"), self.g("close")
+        cost, close = self.cost, self.g("close")
         if not cost or close is None:
             return None
         fee, tax = self.P.get("feePct", 0.1425) / 100, self.P.get("taxPct", 0.3) / 100
@@ -639,7 +645,9 @@ def field_value(c: Ctx, name: str):
     if name == "maDistPct":
         close, ma20 = c.g("close"), c.g("ma20")
         return (close / ma20 - 1) * 100 if close is not None and ma20 else None
-    if name in ("keyLevel", "cost"):
+    if name == "cost":
+        return c.cost
+    if name == "keyLevel":
         return c.stock.get(name)
     if name == "profitPct":
         return c.profit_pct

@@ -87,8 +87,11 @@ def indicators_many(db: DB, codes: list[str], d: str, P: dict | None = None,
                 rec["capAmt"] = round(rec["totalShares"] * rec["close"] / 1e8, 1)  # 億元（以集保總股數估算）
         if rec:
             rec.update(mkt)
-        if c in peaks:
-            rec["peakClose"] = peaks[c]
+        if c in peaks and rec:
+            rec["peakClose"] = round(peaks[c]["peakClose"], 4)
+            if peaks[c]["costExDates"]:
+                rec["costFactor"] = peaks[c]["costFactor"]
+                rec["costExDates"] = peaks[c]["costExDates"]
         out[c] = rec
     return out
 
@@ -106,23 +109,50 @@ def _market(db: DB, d: str) -> dict:
     return out
 
 
-def _peaks(db: DB, stocks: dict[str, dict], d: str) -> dict[str, float]:
-    """買進日以來的最高收盤（保本線用）。"""
+def _peaks(db: DB, stocks: dict[str, dict], d: str) -> dict[str, dict]:
+    """買進日以來（還原價）的最高收盤，以及成本的除權息調整係數。
+
+    成本是買進當時的價格；之後每次除權息、減資、股票分割，都要乘上同樣的還原比例，
+    才能和現在的股價比較（配 20 元股息＝成本少 20 元；1 拆 4＝成本變四分之一）。
+    回傳 {code: {"peakClose", "costFactor", "costExDates"}}。"""
     out = {}
     for c, s in stocks.items():
         bd = (s.get("buyDate") or "").replace("-", "")
-        r = db.one("SELECT MAX(close) AS m FROM quotes WHERE code=? AND date>=? AND date<=?", (c, bd, d))
-        if r and r["m"] is not None:
-            out[c] = r["m"]
+        if not bd or bd > d:
+            continue
+        before = db.one("SELECT MAX(date) AS d FROM quotes WHERE code=? AND date<=? AND close IS NOT NULL", (c, bd))
+        start = (before and before["d"]) or bd
+        rows = db.q("SELECT date, open, high, low, close, change FROM quotes WHERE code=? AND date>=? AND date<=? "
+                    "ORDER BY date DESC", (c, start, d))
+        if not rows:
+            continue
+        trading = [r["date"] for r in db.q("SELECT date FROM market WHERE taiex IS NOT NULL AND date>=? AND date<=? "
+                                           "ORDER BY date", (start, d))]
+        adj, events = adjust_prices(rows, trading or None)
+        held = [(a, r) for a, r in zip(adj, rows) if r["date"] >= bd and a["close"] is not None]
+        if not held:
+            continue
+        base = next(((a, r) for a, r in zip(adj, rows) if r["date"] <= bd and r["close"]), held[-1])
+        f = base[0]["close"] / base[1]["close"] if base[1]["close"] else 1.0
+        out[c] = {"peakClose": max(a["close"] for a, _ in held), "costFactor": round(f, 6),
+                  "costExDates": [e for e in events if e > base[1]["date"]]}
     return out
 
 
+LIMIT = 1.1   # 漲跌幅限制：每個交易日最多 ±10%
+
+
 def adjust_prices(q: list, trading: list[str] | None = None) -> tuple[list[dict], list[str]]:
-    """除權息／減資還原：交易所的「漲跌」是相對於參考價，
-    若某日（收盤 − 漲跌）≠ 前一日收盤，代表該日有除權息或減資，往前的價格乘上（參考價 ÷ 前日收盤）。
-    q 為新到舊；trading 為交易日（大盤有資料的日期）：兩筆之間缺了交易日（資料缺漏）時不調整，避免誤判。
-    回傳（還原後的列，除權息日期）。"""
+    """除權息、減資、面額變更（分割）還原。
+
+    交易所的「漲跌」是相對於參考價：若某日（收盤 − 漲跌）≠ 上一筆有收盤的價格，代表中間有除權息或股數變動，
+    往前的價格乘上（參考價 ÷ 上一筆收盤）。
+    - 相鄰交易日：照上面直接判斷。
+    - 中間隔了 n 個交易日（停止交易，例如面額變更、減資換股；或資料缺漏）：差距可能只是這幾天的正常漲跌，
+      所以只有比例超出 n+1 天漲跌停的範圍（例如 1 拆 4 的 0.25）才調整。
+    q 為新到舊；trading 為交易日（大盤有資料的日期）。回傳（還原後的列，調整日期）。"""
     import bisect
+    import math
     tr = sorted(trading) if trading else None
     out, events, f = [], [], 1.0
     for i, r in enumerate(q):
@@ -132,12 +162,24 @@ def adjust_prices(q: list, trading: list[str] | None = None) -> tuple[list[dict]
                 if rr.get(k) is not None:
                     rr[k] = rr[k] * f
         out.append(rr)
-        if i + 1 < len(q) and r["close"] is not None and r["change"] is not None and q[i + 1]["close"]:
-            ref, prev = r["close"] - r["change"], q[i + 1]["close"]
-            gap = tr is not None and bisect.bisect_left(tr, r["date"]) - bisect.bisect_right(tr, q[i + 1]["date"]) > 0
-            if not gap and ref > 0 and abs(ref - prev) > max(0.011, prev * 0.001) and 0.2 <= ref / prev <= 5:
-                f *= ref / prev
-                events.append(r["date"])
+        r = q[i]
+        if r["close"] is None or r["change"] is None:
+            continue
+        j = next((k for k in range(i + 1, len(q)) if q[k]["close"]), None)
+        if j is None:
+            continue
+        ref, prev = r["close"] - r["change"], q[j]["close"]
+        if ref <= 0 or abs(ref - prev) <= max(0.011, prev * 0.001):
+            continue
+        ratio = ref / prev
+        skipped = (bisect.bisect_left(tr, r["date"]) - bisect.bisect_right(tr, q[j]["date"])) if tr is not None else j - i - 1
+        if skipped <= 0:
+            ok = 0.05 <= ratio <= 20
+        else:   # 中間停止交易或缺資料：要大到正常漲跌解釋不了
+            ok = 0.05 <= ratio <= 20 and abs(math.log(ratio)) > (skipped + 1) * math.log(LIMIT)
+        if ok:
+            f *= ratio
+            events.append(r["date"])
     return out, events
 
 

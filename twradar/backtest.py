@@ -317,6 +317,8 @@ def simulate(hist: History, code: str, dates: list[str], universe: dict, P: dict
 def _close(pos: Position, d: str, reason: str) -> dict:
     from .dates import to_date
     ret = (pos.proceeds / pos.invested - 1) * 100 if pos.invested else 0.0
+    if reason == "停損" and ret >= 0:
+        reason = "移動停利"   # 停損類規則（跌破月線、獲利回吐…）觸發，但整筆是賺的
     return {"entry": pos.entry_date, "exit": d, "days": (to_date(d) - to_date(pos.entry_date)).days,
             "tags": pos.tags, "rule": pos.entry_rule, "reason": reason, "invested": pos.invested,
             "pnl": pos.proceeds - pos.invested, "ret": round(ret, 3), "adds": pos.adds, "reduced": pos.reduced,

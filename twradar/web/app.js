@@ -13,6 +13,7 @@ const holdLine = h => [
   [h.rule && h.rule !== LIGHT[h.light] ? h.rule : "", ...(h.reasons || [])].filter(Boolean).join("、"),
   h.weak && h.weak.length ? "留意：" + h.weak.join("、") : "",
   isNum(h.profitPct) ? `報酬 ${fmtS(h.profitPct, 1)}%` : "",
+  isNum(h.costAdj) ? `成本依除權息調整為 ${fmt(h.costAdj, 2)}` : "",
   h.pending ? `待確認轉為「${LIGHT[h.pending] || h.pending}」` : ""].filter(Boolean).join("；");
 const STATUS = {complete: "完成", waiting: "等待交易所公布", running: "抓取中", partial: "部分缺漏", failed: "失敗",
   holiday: "休市", not_started: "尚未開始", provisional: "暫定", pending: "等待中", ok: "完成", nodata: "尚未公布", fallback: "備援完成"};
@@ -429,9 +430,9 @@ function editStock(w, labels, rules, reload) {
        <div class="field"><label for="e-hold">持有中</label><select id="e-hold"><option value="0">否</option><option value="1"${w.holding ? " selected" : ""}>是</option></select></div>
        <div class="field"><label for="e-cost">成本價</label><input id="e-cost" inputmode="decimal" value="${w.cost ?? ""}"></div>
        <div class="field"><label for="e-shares">股數</label><input id="e-shares" inputmode="numeric" value="${w.shares ?? ""}"></div>
-       <div class="field"><label for="e-buy">買進日期（保本線用）</label><input id="e-buy" type="date" value="${w.buyDate ? esc(w.buyDate.replace(/^(\d{4})-?(\d{2})-?(\d{2})$/, "$1-$2-$3")) : ""}"></div>
+       <div class="field"><label for="e-buy">買進日期（保本線、除權息調整成本用）</label><input id="e-buy" type="date" value="${w.buyDate ? esc(w.buyDate.replace(/^(\d{4})-?(\d{2})-?(\d{2})$/, "$1-$2-$3")) : ""}"></div>
        <div class="field"><label for="e-name">名稱</label><input id="e-name" value="${esc(w.name)}"></div></div>
-      <div class="small muted">持有中要填成本，停損與出場的提示才會啟動。</div>
+      <div class="small muted">持有中要填成本，停損與出場的提示才會啟動；填了買進日期，之後的除權息、減資、分割會自動調整成本。</div>
       <div class="row" style="justify-content:flex-end"><button type="button" data-close>取消</button><button class="primary">儲存</button></div></form>
     <div id="pane-rules" hidden></div><div id="pane-trial" hidden></div>`,
     s => { const q = x => s.querySelector(x);

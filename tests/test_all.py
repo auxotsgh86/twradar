@@ -1089,6 +1089,19 @@ class V3RulesTests(unittest.TestCase):
         trading = sorted(days)
         q2 = [q[0]] + q[2:]
         self.assertEqual(adjust_prices(q2, trading)[1], [])
+        # 停止交易後恢復：1 拆 4（國巨 2025），中間 3 個交易日沒有成交（可能沒有列，或有列但收盤是空的）
+        base = [{"date": d, "open": 600, "high": 610, "low": 590, "close": 600.0, "change": 0.0, "volume": 1000, "value": 1e8}
+                for d in days]
+        base[0].update(open=152, high=155, low=150, close=153.0, change=3.0)   # 參考價 150 = 600 ÷ 4
+        for q3 in ([base[0]] + base[4:],
+                   [base[0]] + [{**x, "open": None, "high": None, "low": None, "close": None, "change": None, "volume": 0}
+                                for x in base[1:4]] + base[4:]):
+            adj3, ev3 = adjust_prices(q3, trading)
+            self.assertEqual(ev3, [days[0]])
+            self.assertAlmostEqual(adj3[-1]["close"], 150.0)
+        # 一樣隔 3 天但只差 20%（這幾天的正常漲跌就可能造成）：不調整
+        base[0].update(close=483.0, change=3.0)
+        self.assertEqual(adjust_prices([base[0]] + base[4:], trading)[1], [])
 
     def test_upgrade_old_defaults(self):
         from twradar.rules import default_playbooks, p3_playbooks
@@ -1187,6 +1200,48 @@ class BacktestTests(unittest.TestCase):
         self.assertAlmostEqual(t["ret"], ((90 * (1 - fee - tax)) / (106 * (1 + fee)) - 1) * 100, 2)
         ev = {(e["kind"], e["tag"], e["regime"], e["sample"]): e for e in res["results"][0]["events"]}
         self.assertEqual(ev[("退場：停損", "全部", "全部", "全期")]["f5"]["n"], 1)
+
+    def test_cost_adjusted_for_dividend_and_split(self):
+        """持有成本隨買進後的除息、股票分割調整（緯穎配息、國巨 1 拆 4）。"""
+        from twradar.analysis import indicators_many
+        ds = self.dates
+        rows = []
+        for i, d in enumerate(ds[:80]):
+            if 70 <= i <= 72:
+                continue                                    # 停止交易（面額變更）
+            if i < 50:
+                close, chg = 100.0, 0.0
+            elif i == 50:
+                close, chg = 95.0, 0.0                      # 除息 5 元：參考價 95
+            elif i < 73:
+                close, chg = 95.0, 0.0
+            else:
+                close, chg = 23.75, 0.0                     # 1 拆 4：參考價 23.75
+            rows.append((d, "9998", "測試", "TWSE", close, close, close, close, chg, 1_000_000, 1e8, "test"))
+        with self.db.tx() as c:
+            c.executemany("INSERT INTO quotes(date,code,name,market,open,high,low,close,change,volume,value,src) "
+                          "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", rows)
+        try:
+            S = self.st.get()
+            P = {**DEFAULT_RULES, **{p["id"]: p["value"] for p in S["params"]}}
+            stock = {"code": "9998", "holding": True, "cost": 100.0, "buyDate": ds[40]}
+            rec = indicators_many(self.db, ["9998"], ds[79], P, {"9998": stock})["9998"]
+            self.assertAlmostEqual(rec["costFactor"], 0.95 * 0.25, 4)
+            self.assertEqual(rec["costExDates"], [ds[73], ds[50]])
+            self.assertAlmostEqual(rec["peakClose"], 23.75, 2)       # 還原後的最高價，不是 100
+            h = evaluate(rec, stock, P, S)["hold"]
+            self.assertAlmostEqual(h["costAdj"], 23.75, 2)
+            self.assertGreater(h["profitPct"], -1)                   # 只剩手續費與稅；未調整會是 −76%
+            self.assertNotEqual(h["rule"], "停損")
+            # 除息日當天才買：成本不調整
+            rec2 = indicators_many(self.db, ["9998"], ds[60], P, {"9998": {**stock, "buyDate": ds[50], "cost": 95.0}})["9998"]
+            self.assertNotIn("costFactor", rec2)
+            # 沒填買進日：不知道成本是哪一天的，不調整
+            rec3 = indicators_many(self.db, ["9998"], ds[79], P, {"9998": {**stock, "buyDate": None}})["9998"]
+            self.assertNotIn("costFactor", rec3)
+        finally:
+            with self.db.tx() as c:
+                c.execute("DELETE FROM quotes WHERE code='9998'")
 
     def test_trade_simulation_no_trade_day(self):
         """進場日當天沒有成交（暫停交易，開收盤皆空）：不能當掉，改在下一個有成交的日子進場。"""
