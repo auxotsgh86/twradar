@@ -1440,6 +1440,19 @@ class BacktestTests(unittest.TestCase):
         st = SC.study(self.db, self.dates[70:], self.dates[110], cfg)
         self.assertEqual(set(st["methods"]), set(SC.METHODS))
         self.assertIn("f10", st["methods"]["綜合"]["趨勢股"]["樣本內"])
+        # 當日轉弱：把 2330 當天改成爆量長黑 → 標示，且「排除轉弱」的排序拿掉它
+        i = data["2330"].pos[d]
+        self.assertEqual(sc["rows"]["2330"]["weak"], "")
+        data["2330"].chg[i], data["2330"].volR[i] = -6.3, 2.0
+        sc2 = SC.screen(data, taiex, trading, d, cfg)
+        self.assertEqual(sc2["rows"]["2330"]["weak"], "爆量長黑")
+        self.assertNotIn("2330", sc2["rank"]["法人＋排除轉弱"])
+        if "2330" in sc["rank"]["法人"]:
+            self.assertIn("2330", sc2["rank"]["法人"])
+        data["2330"].chg[i], data["2330"].black[i], data["2330"].shadow[i] = -1.0, True, 70.0
+        self.assertEqual(SC.screen(data, taiex, trading, d, cfg)["rows"]["2330"]["weak"], "爆量長上影")
+        data["2330"].volR[i] = 1.0
+        self.assertEqual(SC.screen(data, taiex, trading, d, cfg)["rows"]["2330"]["weak"], "")
         snap = SC.snapshot(self.db, d, cfg)
         self.assertEqual(set(snap["methods"]), set(SC.METHODS))
         self.assertEqual((snap["regime"], SC.DEFAULT_METHOD), ("多頭", "法人"))

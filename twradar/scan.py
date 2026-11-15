@@ -5,6 +5,8 @@
 - 流動性：近 20 日平均成交金額 ≥ minValue（預設 1 億元）。
 - 趨勢：收盤 > 月線 > 季線，月線走平或上揚，收盤在近 60 日最高價的 90% 以上。
 - 不追高（部分方法）：今天的 5 日乖離排在這檔自己近 250 日的前 10% → 排除。
+- 當日轉弱（標示；「排除轉弱」的方法會排除）：爆量長黑（跌幅 ≥ 3% 且量比 ≥ 1.5），
+  或爆量長上影黑 K（上影線 ≥ 當日振幅一半、收黑、量比 ≥ 1.5）。例：法人大買但當天收長黑，代表賣壓大於買盤。
 
 排序方法
 - 相對強度：近 20 日、60 日漲幅減去加權指數同期漲幅，各取百分位後平均。
@@ -27,7 +29,7 @@ from .backtest import _is_stock
 from .db import DB
 
 HORIZONS = (5, 10, 20)
-METHODS = ("相對強度", "相對強度＋不追高", "法人", "綜合", "綜合＋不追高")
+METHODS = ("相對強度", "相對強度＋不追高", "法人", "法人＋排除轉弱", "綜合", "綜合＋不追高")
 
 
 @dataclass
@@ -37,11 +39,13 @@ class ScanConfig:
     near_high: float = 0.9
     bias_pct: float = 90            # 5 日乖離百分位上限（不追高）
     bias_window: int = 250
+    weak_drop: float = 3.0          # 當日轉弱：跌幅 ≥（%）
+    weak_vol: float = 1.5           # 當日轉弱：量比 ≥
 
 
 class Series:
     __slots__ = ("code", "name", "market", "dates", "open", "close", "value", "vol", "inst", "pos",
-                 "ma5", "ma20", "ma60", "max60", "val20", "inst5", "vol5", "biasPct")
+                 "ma5", "ma20", "ma60", "max60", "val20", "inst5", "vol5", "biasPct", "chg", "volR", "shadow", "black")
 
     def __init__(self, code, name, market, rows, inst: dict, trading, intern: dict | None = None):
         self.code, self.name, self.market = code, name, market
@@ -55,6 +59,20 @@ class Series:
         self.vol = [r["volume"] or 0.0 for r in rows]
         self.inst = [inst.get(d) for d in self.dates]
         self.pos = {d: i for i, d in enumerate(self.dates)}
+        # 當日 K 棒（原始價）：漲跌幅、量比（對前 5 日均量）、上影線佔振幅比例、是否收黑
+        n = len(rows)
+        self.chg, self.volR, self.shadow, self.black = [None] * n, [None] * n, [None] * n, [False] * n
+        for i, r in enumerate(rows):
+            c, ch, o, hi, lo = r["close"], r["change"], r["open"], r["high"], r["low"]
+            if ch is not None and c - ch:
+                self.chg[i] = ch / (c - ch) * 100
+            if i >= 5:
+                pv = sum(self.vol[i - 5:i]) / 5
+                if pv:
+                    self.volR[i] = self.vol[i] / pv
+            if None not in (o, hi, lo) and hi > lo:
+                self.shadow[i] = (hi - max(o, c)) / (hi - lo) * 100
+                self.black[i] = c < o
         self._derive()
         self.value = self.vol = self.inst = None   # 衍生完就不需要，省記憶體
 
@@ -165,20 +183,34 @@ def screen(data: dict[str, Series], taiex: dict, trading: list[str], d: str, cfg
         rows[code] = {"rs20": (c / s.close[i - 20] - 1 - t20) * 100, "rs60": (c / s.close[i - 60] - 1 - t60) * 100,
                       "inst5Pct": None if s.inst5[i] is None or not v5 else s.inst5[i] / (v5 * 5) * 100,
                       "biasPct": s.biasPct[i], "bias5": (c / s.ma5[i] - 1) * 100 if s.ma5[i] else None,
-                      "maDist": (c / m20 - 1) * 100, "value20": s.val20[i] / 1e8, "close": c}
+                      "maDist": (c / m20 - 1) * 100, "value20": s.val20[i] / 1e8, "close": c,
+                      "chgPct": s.chg[i], "volRatio": s.volR[i], "weak": _weak(s, i, cfg)}
     r20 = _pct_rank({k: v["rs20"] for k, v in rows.items()})
     r60 = _pct_rank({k: v["rs60"] for k, v in rows.items()})
     ri = _pct_rank({k: v["inst5Pct"] for k, v in rows.items() if v["inst5Pct"] is not None})
     sc_rs = {k: (r20[k] + r60[k]) / 2 for k in rows}
     sc_mix = {k: 0.7 * sc_rs[k] + 0.3 * ri.get(k, 50) for k in rows}
     hot = {k for k, v in rows.items() if v["biasPct"] is not None and v["biasPct"] >= cfg.bias_pct}
+    weak = {k for k, v in rows.items() if v["weak"]}
     top = lambda sc, ex=(): [k for k in sorted(sc, key=lambda k: -sc[k]) if k not in ex][:cfg.top]
     for k in rows:
         rows[k].update(rsScore=round(sc_rs[k], 1), instScore=round(ri[k], 1) if k in ri else None, score=round(sc_mix[k], 1),
                        hot=k in hot)
     return {"liquid": liquid, "trend": trend, "rows": rows,
-            "rank": {"相對強度": top(sc_rs), "相對強度＋不追高": top(sc_rs, hot), "法人": top(ri),
+            "rank": {"相對強度": top(sc_rs), "相對強度＋不追高": top(sc_rs, hot), "法人": top(ri), "法人＋排除轉弱": top(ri, weak),
                      "綜合": top(sc_mix), "綜合＋不追高": top(sc_mix, hot)}}
+
+
+def _weak(s: Series, i: int, cfg: ScanConfig) -> str:
+    """當日轉弱的原因（空字串＝沒有）。"""
+    vr, ch = s.volR[i], s.chg[i]
+    if vr is None or vr < cfg.weak_vol:
+        return ""
+    if ch is not None and ch <= -cfg.weak_drop:
+        return "爆量長黑"
+    if s.black[i] and s.shadow[i] is not None and s.shadow[i] >= 50:
+        return "爆量長上影"
+    return ""
 
 
 def _regime(taiex, trading, d) -> str:

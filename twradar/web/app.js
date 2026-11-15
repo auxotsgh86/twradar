@@ -485,15 +485,16 @@ async function viewScan() {
       <div class="banner ${weak || (reg !== null && reg < 0) ? "warn" : ""} small">${v ? `<b>回溯驗證（前 ${s.top} 名 10 日後，相對全市場平均）：</b>樣本內 ${vx("樣本內")}、樣本外 ${vx("樣本外")}；多頭 ${vx("多頭")}、盤整 ${vx("盤整")}、空頭 ${vx("空頭")}。
         ${weak ? "<br><b>這個排序在樣本外沒有勝過全市場，名單僅供對照。</b>" : ""}${!weak && reg !== null && reg < 0 ? `<br><b>這個排序在大盤${esc(s.regime)}時落後全市場。</b>` : ""}` : "還沒有回溯驗證結果（執行 deploy/backtest.sh 後會顯示）。"}
         <br>買賣一趟的費用與稅約 0.6%，超額報酬扣掉後所剩不多：這是研究名單，不是買進建議。</div>
-      ${m.rows.length ? `<div class="tablewrap"><table class="sortable" data-sort="scan-${esc(scanMethod)}"><thead><tr><th>#</th><th class="l">代號</th><th class="l">名稱</th><th class="l">市場</th><th>收盤</th><th>法人 5 日買超<br>佔成交量</th><th>20 日<br>贏大盤</th><th>60 日<br>贏大盤</th><th>5 日線<br>乖離</th><th>月線<br>乖離</th><th>日均額<br>（億）</th><th data-nosort></th></tr></thead><tbody>
+      ${m.rows.length ? `<div class="tablewrap"><table class="sortable" data-sort="scan-${esc(scanMethod)}"><thead><tr><th>#</th><th class="l">代號</th><th class="l">名稱</th><th class="l">市場</th><th>收盤</th><th>法人 5 日買超<br>佔成交量</th><th>20 日<br>贏大盤</th><th>60 日<br>贏大盤</th><th>5 日線<br>乖離</th><th class="l">當日<br>轉弱</th><th>月線<br>乖離</th><th>日均額<br>（億）</th><th data-nosort></th></tr></thead><tbody>
         ${m.rows.map((r, i) => `<tr><td class="num">${i + 1}</td><td class="l num">${r.inWatchlist ? `<a href="#/stock/${esc(r.code)}">${esc(r.code)}</a>` : esc(r.code)}</td><td class="l">${esc(r.name)}</td><td class="l">${mktName(r.market)}</td><td class="num">${fmt(r.close, pd(r.close))}</td>
           <td class="num ${cls(r.inst5Pct)}">${isNum(r.inst5Pct) ? fmtS(r.inst5Pct, 1) + "%" : "—"}</td><td class="num ${cls(r.rs20)}">${fmtS(r.rs20, 1)}%</td><td class="num ${cls(r.rs60)}">${fmtS(r.rs60, 1)}%</td>
           <td class="num" data-v="${isNum(r.bias5) ? r.bias5 : ""}">${isNum(r.bias5) ? fmtS(r.bias5, 1) + "%" : "—"}${r.hot ? ` <span class="badge wait" title="5 日乖離在這檔自己近一年的前 10%">偏熱</span>` : ""}</td>
+          <td class="l" data-v="${r.weak ? 0 : 1}">${r.weak ? `<span class="badge stop" title="當天${esc(r.weak)}（${fmtP(r.chgPct)}、量比 ${fmt(r.volRatio, 1)}）：賣壓大於買盤">${esc(r.weak)}</span>` : ""}</td>
           <td class="num">${fmtS(r.maDist, 1)}%</td><td class="num">${fmt(r.value20, 1)}</td>
           <td>${r.inWatchlist ? `<span class="small muted">已在清單</span>` : `<button data-add="${esc(r.code)}">加入觀察</button>`}</td></tr>`).join("")}
         </tbody></table></div>` : `<div class="empty">今天沒有股票通過篩選${s.trend ? "（這個排序需要法人資料）" : "：大盤弱勢時，站穩月線與季線、接近 60 日高點的股票很少"}。</div>`}
       <div class="small muted">篩選：一般股票、近 20 日平均成交金額 ≥ 1 億元；收盤 > 月線 > 季線、月線走平或上揚、收盤在 60 日最高的 90% 以上。
-        「法人」依外資＋投信近 5 日累計買超佔成交量排序；「相對強度」依近 20、60 日漲幅勝過加權指數的幅度；「不追高」排除標示偏熱的股票。
+        「法人」依外資＋投信近 5 日累計買超佔成交量排序；「相對強度」依近 20、60 日漲幅勝過加權指數的幅度；「不追高」排除標示偏熱的股票；「當日轉弱」＝爆量長黑（跌 ≥ 3%、量比 ≥ 1.5）或爆量長上影黑 K，「排除轉弱」的排序會拿掉這些股票。
         名單只依公開資料機械式篩選，未考慮基本面、處置股與個別風險，不構成投資建議。</div></section>`;
     $("#scanM").onchange = ev => { scanMethod = ev.target.value; draw(); applySorts(); };
     document.querySelectorAll("[data-add]").forEach(b => b.onclick = async () => { try { const j = await api("/watchlist", {method: "POST", body: JSON.stringify({code: b.dataset.add})});
