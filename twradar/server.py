@@ -107,6 +107,7 @@ class App:
         out = []
         watch = S["watchlist"]
         late = indicators_many(self.db, [w["code"] for w in watch if w["code"] not in sigs], d, R, {w["code"]: w for w in watch})
+        alerts = self.db.alerts_for([w["code"] for w in watch], d)
         for w in watch:
             p = sigs.get(w["code"])
             if not p:  # 分析之後才加入的個股：即時計算
@@ -116,7 +117,7 @@ class App:
             out.append({"code": w["code"], "name": w["name"], "market": w["market"], "group": L.group_of(w),
                         "labels": w["labels"],
                         "note": w["note"], "keyLevel": w["keyLevel"], "holding": w["holding"], "cost": w["cost"],
-                        "data": p["data"], "signal": p["signal"]})
+                        "data": p["data"], "signal": p["signal"], "alert": alerts.get(w["code"])})
         return out
 
     def envelope(self, d: str) -> dict:
@@ -213,13 +214,14 @@ class App:
             cache[d] = SC.snapshot(self.db, d)
         have = {w["code"] for w in self.settings.watchlist()}
         snap = cache[d]
+        alerts = self.db.alerts_for(None, d)
         run, sc = latest_scan_study()
         val = {}
         for m, v in ((sc or {}).get("methods") or {}).items():
             val[m] = {seg: {k: v["全市場"][seg]["f10"].get(k) for k in ("excess", "se", "hit", "days")}
                       for seg in ("樣本內", "樣本外", "多頭", "盤整", "空頭")}
         return {**snap, "defaultMethod": SC.DEFAULT_METHOD, "validation": val, "validationRun": run,
-                "methods": {m: {**x, "rows": [{**r, "inWatchlist": r["code"] in have} for r in x["rows"]]}
+                "methods": {m: {**x, "rows": [{**r, "inWatchlist": r["code"] in have, "alert": alerts.get(r["code"])} for r in x["rows"]]}
                             for m, x in snap["methods"].items()}}
 
     def labels_view(self) -> list[dict]:

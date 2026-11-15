@@ -134,6 +134,11 @@ class Crawler:
         if fallback:
             self._fallback(d, run, final)
         self.crawl_weekly(d)
+        try:
+            self.crawl_alerts(d, force=final)
+        except Exception as e:  # noqa: BLE001  不影響當日狀態
+            log.exception("alerts")
+            self.db.log("warn", f"注意／處置股處理失敗：{e!r}")
         ok = [s for s in self.step_ids if run["steps"][s]["status"] in DONE]
         missing = [s for s in self.step_ids if s not in ok]
         label = self.step_labels
@@ -191,6 +196,32 @@ class Crawler:
             self.db.log("info", f"已取得 {got} 集保股權分散表（{len({r['code'] for r in rows})} 檔）")
             return got
         return None
+
+    def crawl_alerts(self, d: str, force: bool = False) -> int | None:
+        """注意股、處置股：每天抓一次（最後一次抓取時再更新一次）；只抓最近的日子，補歷史時不抓。失敗只記錄。"""
+        from datetime import timedelta
+
+        from .providers.alerts import Alerts
+        today = now_tw().strftime("%Y%m%d")
+        if (to_date(today) - to_date(d)).days > 7:
+            return None
+        # 網址：設定 sources.options.alerts.{twse,tpex}；其他資料源被指到別處（例如測試的假交易所）而這裡沒設定時不抓
+        opts = {} if self._custom else self.settings.source_plan(self.cfg.env)[2]
+        al = opts.get("alerts") or {}
+        if not al and (self._custom or any(isinstance(v, dict) and v.get("base") for v in opts.values())):
+            return None
+        key = self.db.get_setting("alerts") or {}
+        if not force and key.get("date") == d:
+            return None
+        start = (to_date(d) - timedelta(days=40)).strftime("%Y%m%d")   # 處置期間可能跨越數週
+        kw = {k: al[k] for k in ("twse", "tpex") if al.get(k)}
+        rows, errs = Alerts(self.f, **kw).fetch(start, d)
+        if rows:
+            self.db.put_alerts(rows)
+        for e in errs:
+            self.db.log("warn", f"注意／處置股抓取失敗：{e}")
+        self.db.set_setting("alerts", {"date": d, "at": _now(), "rows": len(rows), "errors": errs})
+        return len(rows)
 
     def _past_publish(self, d: str) -> bool:
         n = now_tw()

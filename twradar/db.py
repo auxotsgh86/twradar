@@ -55,6 +55,11 @@ CREATE TABLE IF NOT EXISTS track (             -- 上線後追蹤（影子組合
   f5 REAL, f10 REAL, f20 REAL, PRIMARY KEY (date, code)
 );
 CREATE INDEX IF NOT EXISTS idx_track_kind ON track(kind, date);
+CREATE TABLE IF NOT EXISTS alerts (            -- 注意股、處置股公告（date＝公布日期）
+  date TEXT NOT NULL, code TEXT NOT NULL, kind TEXT NOT NULL, market TEXT, name TEXT, count INTEGER, reason TEXT,
+  start TEXT, end TEXT, measure TEXT, src TEXT, PRIMARY KEY (date, code, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_alerts_code ON alerts(code, date);
 CREATE INDEX IF NOT EXISTS idx_quotes_code ON quotes(code, date);
 CREATE INDEX IF NOT EXISTS idx_inst_code ON inst(code, date);
 CREATE INDEX IF NOT EXISTS idx_margin_code ON margin(code, date);
@@ -157,6 +162,32 @@ class DB:
             c.executemany("""INSERT OR REPLACE INTO holders(date,code,level,people,shares,pct,src)
               VALUES(:date,:code,:level,:people,:shares,:pct,:src)""", rows)
         return len(rows)
+
+    def put_alerts(self, rows: list[dict]) -> int:
+        with self.tx() as c:
+            c.executemany("""INSERT OR REPLACE INTO alerts(date,code,kind,market,name,count,reason,start,end,measure,src)
+              VALUES(:date,:code,:kind,:market,:name,:count,:reason,:start,:end,:measure,:src)""", rows)
+        return len(rows)
+
+    def alerts_for(self, codes: list[str] | None, d: str) -> dict[str, dict]:
+        """d 當天每檔的狀態：{"disposal": 處置中（起迄、措施、第幾次）, "notice": 當天的注意公告, "notices10": 近 10 個交易日注意次數}。"""
+        ds = [r["date"] for r in self.q("SELECT date FROM market WHERE date<=? AND taiex IS NOT NULL ORDER BY date DESC LIMIT 10", (d,))]
+        since = min(ds) if ds else d
+        cond, args = "", ()
+        if codes is not None:
+            if not codes:
+                return {}
+            cond, args = f" AND code IN ({','.join('?' * len(codes))})", tuple(codes)
+        out: dict[str, dict] = {}
+        for r in self.q(f"SELECT * FROM alerts WHERE kind='處置' AND start<=? AND end>=?{cond} ORDER BY date", (d, d, *args)):
+            out.setdefault(r["code"], {})["disposal"] = {"start": r["start"], "end": r["end"], "count": r["count"],
+                                                         "measure": r["measure"], "reason": r["reason"]}
+        for r in self.q(f"SELECT code, COUNT(*) AS n, MAX(date) AS last FROM alerts WHERE kind='注意' AND date>=? AND date<=?{cond} "
+                        "GROUP BY code", (since, d, *args)):
+            out.setdefault(r["code"], {})["notices10"] = r["n"]
+        for r in self.q(f"SELECT * FROM alerts WHERE kind='注意' AND date=?{cond}", (d, *args)):
+            out.setdefault(r["code"], {})["notice"] = {"count": r["count"], "reason": r["reason"]}
+        return out
 
     def holders_latest(self) -> str | None:
         r = self.one("SELECT MAX(date) AS d FROM holders")

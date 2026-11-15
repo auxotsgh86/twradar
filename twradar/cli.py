@@ -130,6 +130,40 @@ def probe(cfg, date: str | None = None) -> None:
         print()
 
 
+def run_alerts(cfg, args) -> int:
+    from datetime import timedelta
+
+    from .dates import norm_date, to_date
+    from .net import Fetcher
+    from .providers.alerts import Alerts
+    db, _ = open_all(cfg)
+    d = norm_date(args.date) if args.date else (db.one("SELECT MAX(date) AS d FROM market WHERE taiex IS NOT NULL")["d"])
+    if not d:
+        print("資料庫還沒有行情資料")
+        return 1
+    if not args.no_fetch:
+        start = (to_date(d) - timedelta(days=40)).strftime("%Y%m%d")
+        rows, errs = Alerts(Fetcher(cfg.request_interval, cfg.user_agent)).fetch(start, d)
+        db.put_alerts(rows)
+        by = {}
+        for r in rows:
+            by[(r["src"])] = by.get(r["src"], 0) + 1
+        print(f"抓取 {start}～{d}：{len(rows)} 筆（{'、'.join(f'{k} {v}' for k, v in by.items()) or '無'}）")
+        for e in errs:
+            print("  失敗：" + e)
+    a = db.alerts_for(None, d)
+    disp = sorted((c, x) for c, x in a.items() if x.get("disposal"))
+    print(f"\n{d} 處置中：{len(disp)} 檔")
+    for c, x in disp:
+        p = x["disposal"]
+        print(f"  {c}\t{p['start']}～{p['end']}\t{p.get('measure') or ''}\t{p.get('reason') or ''}"[:160])
+    note = sorted((c, x) for c, x in a.items() if x.get("notice"))
+    print(f"\n{d} 當天注意：{len(note)} 檔")
+    for c, x in note[:60]:
+        print(f"  {c}\t近10日 {x.get('notices10', 0)} 次\t{x['notice'].get('reason') or ''}"[:160])
+    return 0
+
+
 def run_scan(cfg, args) -> int:
     from . import scan as SC
     from .dates import norm_date
@@ -234,6 +268,9 @@ def main(argv=None) -> None:
     sub.add_parser("watchlist")
     im = sub.add_parser("import"); im.add_argument("file")
     sub.add_parser("version")
+    al = sub.add_parser("alerts", help="注意股、處置股：抓取並列出")
+    al.add_argument("--date", help="日期（預設：最新交易日）")
+    al.add_argument("--no-fetch", action="store_true", help="只列出資料庫裡的，不抓取")
     sc = sub.add_parser("scan", help="全市場強勢股掃描")
     sc.add_argument("--date", help="日期（預設：最新交易日）")
     sc.add_argument("--method", default="法人", help="法人（預設）、相對強度、相對強度＋不追高、綜合、綜合＋不追高")
@@ -313,6 +350,8 @@ def main(argv=None) -> None:
         sys.exit(run_backtest(cfg, args))
     elif args.cmd == "track":
         sys.exit(run_track(cfg, args))
+    elif args.cmd == "alerts":
+        sys.exit(run_alerts(cfg, args))
     elif args.cmd == "scan":
         sys.exit(run_scan(cfg, args))
     elif args.cmd == "admin":

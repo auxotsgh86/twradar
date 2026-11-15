@@ -1573,6 +1573,83 @@ class TrackingSummaryTests(unittest.TestCase):
         from twradar.db import DB
         self.assertEqual(tracking.summary(DB(Path(tempfile.mkdtemp()) / "e.sqlite3"))["status"], "未啟用")
 
+
+class AlertsTests(unittest.TestCase):
+    """注意股、處置股：用 2026/11 實際回應的格式。"""
+    TWSE_PUNISH = {"stat": "OK", "title": "公布處置有價證券資訊 (115/11/16 至 115/11/17)",
+                   "fields": ["編號", "公布日期", "證券代號", "證券名稱", "累計", "處置條件", "處置起迄時間", "處置措施", "處置內容", "備註"],
+                   "data": [[1, "115/11/10", "2455", "全新", 1, "最近十個營業日已有六次", "115/11/11～115/11/17", "第一次處置",
+                             "１處置原因：…\n３處置措施：\nａ以人工管制之撮合終端機執行撮合作業（約每二分鐘撮合一次）。", ""]]}
+    TWSE_NOTICE = {"stat": "OK", "title": "公布注意有價證券資訊",
+                   "fields": ["編號", "證券代號", "證券名稱", "累計次數", "注意交易資訊", "日期", "收盤價", "本益比"],
+                   "data": [[1, "6108", "競國", 3, "最近六個營業日累積之最後成交價漲幅達 52%（第一款）", "115/11/13", "41.00", "20.1"]]}
+    TPEX_DISP = {"tables": [{"title": "上櫃處置有價證券",
+                             "fields": ["編號", "公布日期", "證券代號", "證券名稱", "累計", "處置起訖時間", "處置原因", "處置措施", "處置內容",
+                                        "收    ", "本益比", " "],
+                             "data": [[1, "115/11/13", "", "                ", "", "", "", "", "本日無處置資料", "", "", ""],
+                                      [3, "115/11/11", "6425", "易發(../../mainboard/listed/company-detail.html?code=6425)", 1,
+                                       "115/11/12~115/11/18", "連續3個營業日", "第一次處置",
+                                       "* 處置內容：<br>以人工管制之撮合終端機執行撮合作業（約每五分鐘撮合一次）", "80.00", "", ""]]}]}
+    TPEX_ATT = {"tables": [{"title": "上櫃公布注意有價證券",
+                            "fields": ["編號", "證券代號", "證券名稱", "累計", "注意交易資訊", "公告日期", "收盤價", "本益比", "link"],
+                            "data": [[1, "1815", "富喬", 28, "最近六個營業日之當日沖銷成交量占總成交量比率達68.21%（第十三款)",
+                                      "115/11/13", "142.00", "34.63", "../../x"]]}]}
+
+    def test_parse(self):
+        from twradar.providers import alerts as A
+        p = A.parse_twse_punish(self.TWSE_PUNISH)
+        self.assertEqual([(r["date"], r["code"], r["start"], r["end"], r["measure"]) for r in p],
+                         [("20261110", "2455", "20261111", "20261117", "每二分鐘撮合")])
+        self.assertIn("最近十個營業日已有六次", p[0]["reason"])
+        n = A.parse_twse_notice(self.TWSE_NOTICE)
+        self.assertEqual((n[0]["code"], n[0]["date"], n[0]["count"], n[0]["kind"]), ("6108", "20261113", 3, "注意"))
+        d = A.parse_tpex_disposal(self.TPEX_DISP)
+        self.assertEqual([(r["code"], r["name"], r["start"], r["end"], r["measure"], r["market"]) for r in d],
+                         [("6425", "易發", "20261112", "20261118", "每五分鐘撮合", "TPEx")])
+        a = A.parse_tpex_attention(self.TPEX_ATT)
+        self.assertEqual((a[0]["code"], a[0]["count"], a[0]["date"]), ("1815", 28, "20261113"))
+        self.assertEqual(A.parse_twse_notice({"stat": "OK", "fields": self.TWSE_NOTICE["fields"], "data": []}), [])
+        with self.assertRaises(FetchError):
+            A.parse_twse_notice({"stat": "很抱歉，沒有符合條件的資料!"})
+        with self.assertRaises(FetchError):
+            A.parse_twse_punish({"stat": "OK", "fields": ["亂"], "data": []})
+
+    def test_fetch_store_and_query(self):
+        from twradar.db import DB
+        from twradar.providers.alerts import Alerts
+
+        class T:
+            def __init__(s, parent):
+                s.p, s.urls = parent, []
+
+            def get_json(s, url, retries=1):
+                s.urls.append(url)
+                if "notice" in url:
+                    return s.p.TWSE_NOTICE
+                if "punish" in url:
+                    return s.p.TWSE_PUNISH
+                if "attention" in url:
+                    raise FetchError("http", "boom")
+                return s.p.TPEX_DISP
+        t = T(self)
+        rows, errs = Alerts(t).fetch("20261004", "20261113")
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(len(errs), 1)
+        self.assertIn("startDate=20261004&endDate=20261113", t.urls[0])
+        self.assertIn("startDate=2026/10/04&endDate=2026/11/13", t.urls[2])
+        db = DB(Path(tempfile.mkdtemp()) / "a.sqlite3")
+        with db.tx() as c:
+            c.executemany("INSERT INTO market(date, taiex) VALUES(?, 1)", [(d,) for d in ("20261110", "20261111", "20261112", "20261113")])
+        db.put_alerts(rows)
+        db.put_alerts(rows)   # 重複寫入不重複
+        a = db.alerts_for(None, "20261113")
+        self.assertEqual(a["2455"]["disposal"]["end"], "20261117")
+        self.assertEqual(a["6425"]["disposal"]["measure"], "每五分鐘撮合")
+        self.assertEqual((a["6108"]["notices10"], a["6108"]["notice"]["count"]), (1, 3))
+        self.assertNotIn("disposal", db.alerts_for(None, "20261120").get("2455", {}))
+        self.assertEqual(set(db.alerts_for(["6108"], "20261113")), {"6108"})
+        self.assertEqual(db.alerts_for([], "20261113"), {})
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 
