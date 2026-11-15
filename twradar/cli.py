@@ -247,7 +247,7 @@ def main(argv=None) -> None:
     bt.add_argument("--universe", default="auto", help="auto（預設）、watchlist，或 CSV 檔（代號,組別）")
     bt.add_argument("--grid", action="append", default=[], help="參數組合，例：--grid profitTargetPct=8,10,15（可重複）")
     bt.add_argument("--compare", action="append", default=[],
-                    help="規則對照組：v03（前一版規則）、veto（否決條件逐條拿掉）、inst1d（法人改回看單日）、market（不用大盤逆風），可用逗號合併")
+                    help="規則對照組：trial（試單）、bullhold／bullstop／bull（依大盤環境調整出場）、v03（前一版規則）、veto（否決條件逐條拿掉）、inst1d（法人改回看單日）、market（不用大盤逆風），可用逗號合併")
     bt.add_argument("--no-study", action="store_true", help="不做條件研究")
     bt.add_argument("--no-scan", action="store_true", help="不做全市場掃描驗證")
     bt.add_argument("--max-adds", type=int, default=2)

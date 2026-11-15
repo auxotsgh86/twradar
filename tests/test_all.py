@@ -1410,6 +1410,45 @@ class BacktestTests(unittest.TestCase):
         self.assertEqual(sig["light"], "wait")
         self.assertIn("inst5dBuy", {t["id"] for t in sig["trace"]})
 
+    def test_trial_and_bull_variants(self):
+        from twradar import backtest as B
+        from twradar.rules import bull_playbooks, default_playbooks, trial_playbooks
+        from twradar.settings import validate
+        S = self.st.get()
+        P = {**DEFAULT_RULES, **{p["id"]: p["value"] for p in S["params"]}}
+        vs = dict(B.preset_variants(["trial,bullhold,bullstop,bull"], S))
+        self.assertEqual(list(vs), ["加試單", "加試單＋不用大盤逆風", "多頭不因警訊減碼", "多頭放寬月線停損", "多頭不減碼＋放寬停損"])
+        for over in vs.values():
+            Sx, _ = B.apply_variant(S, over)
+            self.assertEqual(validate(Sx), [], Sx["playbooks"])
+        self.assertNotIn("大盤逆風", [r["label"] for r in B.apply_variant(S, vs["加試單＋不用大盤逆風"])[0]["playbooks"]["entry"]])
+        self.assertEqual(S["playbooks"], default_playbooks())
+        # 試單：月線還在下彎（上車不成立），但帶量紅 K 站上均線、法人 5 日買超、乖離小
+        rec = {"close": 32.3, "open": 31.0, "candle": 1, "chgPct": 4.0, "vol": 300, "vol5": 100, "ma5": 31.2, "ma20": 31.9,
+               "ma20Prev": 32.1, "pbLowMinPct": -15, "pbCloseMinPct": -15, "foreign": 2100, "trust": 0, "foreign5d": 2500,
+               "trust5d": 0, "marginChg": 10, "instTurn": True, "mktClose": 100, "mktMa20": 99, "mktMa20Prev": 98}
+        self.assertEqual(evaluate(rec, {"code": "6108"}, P, S)["light"], "wait")
+        St = {**S, "playbooks": trial_playbooks()}
+        e = evaluate(rec, {"code": "6108"}, P, St)
+        self.assertEqual((e["light"], e["rule"], e["lightLabel"]), ("go", "試單", "試單訊號"))
+        self.assertEqual(evaluate({**rec, "close": 41.0, "ma5": 35.62}, {"code": "6108"}, P, St)["light"], "wait")   # 追高：不試單
+        # 多頭放寬停損：跌破下彎月線 2%（> 1.5%、< 3%）
+        hold = {"code": "X", "holding": True, "cost": 100.0}
+        r2 = {"close": 98.0, "ma20": 100.0, "ma20Prev": 100.5, "ma5": 99.0, "vol": 100, "vol5": 100, "instNet": -50,
+              "mktClose": 100, "mktMa20": 99, "mktMa20Prev": 98}
+        Sb = {**S, "playbooks": bull_playbooks(stop=True)}
+        self.assertEqual(evaluate(r2, hold, P, S)["hold"]["light"], "exit")
+        self.assertEqual(evaluate(r2, hold, P, Sb)["hold"]["light"], "keep")
+        self.assertEqual(evaluate({**r2, "close": 96.5}, hold, P, Sb)["hold"]["light"], "exit")            # 超過 3%
+        self.assertEqual(evaluate({**r2, "mktClose": 97, "mktMa20Prev": 99.5}, hold, P, Sb)["hold"]["light"], "exit")  # 大盤不是多頭
+        # 多頭不因警訊減碼：爆量長黑
+        r3 = {"close": 120.0, "ma20": 110.0, "ma20Prev": 109.0, "ma5": 121.0, "chgPct": -4.0, "vol": 300, "vol5": 100,
+              "mktClose": 100, "mktMa20": 99, "mktMa20Prev": 98}
+        Sh = {**S, "playbooks": bull_playbooks(hold=True)}
+        self.assertEqual(evaluate(r3, hold, P, S)["hold"]["light"], "reduce")
+        self.assertEqual(evaluate(r3, hold, P, Sh)["hold"]["light"], "keep")
+        self.assertEqual(evaluate({**r3, "mktClose": 97, "mktMa20Prev": 99.5}, hold, P, Sh)["hold"]["light"], "reduce")
+
     def test_condition_study(self):
         from twradar import backtest as B
         conf = B.BTConfig(start=self.dates[70], end=self.dates[-1], split=self.dates[110], study=True)

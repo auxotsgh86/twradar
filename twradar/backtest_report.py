@@ -5,7 +5,7 @@ import html
 
 TAG_ORDER = ["全部", "大型", "中型", "上櫃", "觀察清單"]
 REG_ORDER = ["全部", "多頭", "盤整", "空頭"]
-ENTRY_KINDS = ["上車", "加碼"]
+ENTRY_KINDS = ["上車", "加碼", "試單"]
 
 
 def _e(x) -> str:

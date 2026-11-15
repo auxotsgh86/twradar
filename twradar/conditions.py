@@ -575,6 +575,36 @@ def market_weak(c: Ctx) -> Res:
     return Res(FAIL)
 
 
+@condition("marketBull", "大盤多頭", "any", (), ("mktClose", "mktMa20", "mktMa20Prev"), "加權指數收盤在月線之上，且月線走平或上揚")
+def market_bull(c: Ctx) -> Res:
+    x, ma, prev = c.g("mktClose"), c.g("mktMa20"), c.g("mktMa20Prev")
+    if None in (x, ma, prev):
+        return Res(NA)
+    return Res(PASS, "大盤多頭") if x >= ma and ma >= prev else Res(FAIL)
+
+
+@condition("biasMa5Ok", "未追高（5 日線乖離）", "entry", ("maxBiasMa5Pct",), ("close", "ma5"), "收盤距 5 日線不超過設定幅度")
+def bias_ma5_ok(c: Ctx) -> Res:
+    close, ma5 = c.g("close"), c.g("ma5")
+    if close is None or not ma5:
+        return Res(NA)
+    b = (close / ma5 - 1) * 100
+    if b <= c.P["maxBiasMa5Pct"]:
+        return Res(PASS, f"5 日線乖離 {b:+.1f}%")
+    return Res(FAIL, need=f"等回到 5 日線附近（乖離 {b:+.1f}%，上限 {fmt(c.P['maxBiasMa5Pct'], 1)}%）")
+
+
+@condition("breakMa20Deep", "深跌破下彎月線", "hold", ("breakMaBullPct",), ("close", "ma20", "ma20Prev"),
+           "收盤低於月線超過較寬的幅度，且月線下彎（大盤多頭時用）")
+def break_ma20_deep(c: Ctx) -> Res:
+    close, ma20, prev = c.g("close"), c.g("ma20"), c.g("ma20Prev")
+    if None in (close, ma20, prev):
+        return Res(NA)
+    if close < ma20 * (1 - c.P["breakMaBullPct"] / 100) and ma20 < prev:
+        return Res(PASS, f"跌破下彎月線 {fmt(ma20, 2)} 超過 {fmt(c.P['breakMaBullPct'], 1)}%")
+    return Res(FAIL)
+
+
 @condition("isHolding", "持有中", "any", (), (), "觀察清單標記為持有")
 def is_holding(c: Ctx) -> Res:
     return Res(PASS, "持有中") if c.stock.get("holding") else Res(FAIL, need="（未持有：看上車條件）")

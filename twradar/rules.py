@@ -93,6 +93,40 @@ def default_playbooks() -> dict:
     return {"entry": entry, "hold": hold}
 
 
+# ---- 回溯對照用的候選規則（尚未採用） ----
+
+def trial_playbooks() -> dict:
+    """試單：月線還沒翻揚，但帶量紅 K 站上 5 日線與月線、法人 5 日買超、離 5 日線不遠 → 先進場（排在上車之後）。"""
+    pb = default_playbooks()
+    i = next(k for k, r in enumerate(pb["entry"]) if r.get("label") == "上車") + 1
+    pb["entry"].insert(i, {"light": "add", "label": "試單", "lightLabel": "試單訊號",
+                           "when": {"all": ["notHolding", "redVolK", "aboveMa5And20", "inst5dBuy", "biasMa5Ok"]}})
+    return pb
+
+
+def bull_playbooks(hold: bool = False, stop: bool = False) -> dict:
+    """依大盤環境調整出場。hold：大盤多頭時不因出貨警訊、獲利保護減碼；
+    stop：大盤多頭時，跌破月線要超過較寬的幅度才停損，且不因「跌破月線＋法人當日賣超」停損。"""
+    pb = default_playbooks()
+    not_bull = {"not": "marketBull"}
+    out = []
+    for r in pb["hold"]:
+        if hold and r.get("label") in ("出貨警訊", "獲利保護"):
+            r = {**r, "when": {"all": [r["when"], not_bull]}}
+        elif stop and r.get("label") == "停損":
+            xs = []
+            for x in r["when"]["any"]:
+                if x == "breakMa20Hard":
+                    x = {"any": [{"all": ["breakMa20Hard", not_bull]}, "breakMa20Deep"]}
+                elif isinstance(x, dict) and x.get("all") == ["belowMa20", "instNetSell"]:
+                    x = {"all": ["belowMa20", "instNetSell", not_bull]}
+                xs.append(x)
+            r = {**r, "when": {"any": xs}}
+        out.append(r)
+    pb["hold"] = out
+    return pb
+
+
 def p3_playbooks() -> dict:
     """v0.2 P3 的預設規則（加碼面與 v0.1.3 相同＋法人對作）。保留供升級比對與對照測試。"""
     weak = ["whaleDown", "retailUp", "marginHigh", "instSellStreak"]
@@ -123,6 +157,8 @@ ENGINE_PARAMS = [
     {"id": "amplifyMinAmt", "label": "買超放大：當日買超金額 ≥", "value": 3000, "unit": "萬元", "min": 0, "max": None, "note": ""},
     {"id": "marginInstRatio", "label": "融資健康：融資增加 < 法人買超的", "value": 30, "unit": "%", "min": 0, "max": 1000, "note": ""},
     {"id": "inst5dPct", "label": "法人 5 日累計：佔近 5 日成交量 ≥", "value": 3, "unit": "%", "min": 0, "max": 100, "note": "5 日版的法人條件用"},
+    {"id": "maxBiasMa5Pct", "label": "試單：收盤距 5 日線 ≤", "value": 5, "unit": "%", "min": 0, "max": 50, "note": "對照組「試單」用，不追高"},
+    {"id": "breakMaBullPct", "label": "停損（大盤多頭時）：跌破下彎月線超過", "value": 3, "unit": "%", "min": 0, "max": 20, "note": "對照組「多頭放寬停損」用"},
     {"id": "addMinProfit", "label": "加碼前提：底倉獲利 ≥", "value": 3, "unit": "%", "min": 0, "max": 100, "note": "不攤平"},
     {"id": "pullbackDays", "label": "上車：回測觀察天數", "value": 10, "unit": "日", "min": 1, "max": 40, "note": ""},
     {"id": "pullbackPct", "label": "上車：回測時最低價距月線 ≤", "value": 2, "unit": "%", "min": -20, "max": 20, "note": "曾回到月線附近"},

@@ -509,6 +509,8 @@ def _veto_ids(settings: dict) -> list[str]:
 
 def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
     """內建的規則對照組：
+    trial   加「試單」規則（另一組同時拿掉大盤逆風）
+    bullhold／bullstop／bull  大盤多頭時不因警訊減碼／放寬月線停損／兩者都做
     v03     前一版規則 v0.3（整套換掉）
     veto    否決條件逐條拿掉（每條一組），再加「全部拿掉」
     inst1d  法人條件改回看單日
@@ -525,10 +527,18 @@ def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
         elif n == "v03":
             from .rules import v03_playbooks
             out.append(("v0.3（前一版）", {"_playbooks": v03_playbooks()}))
+        elif n == "trial":
+            from .rules import trial_playbooks
+            out.append(("加試單", {"_playbooks": trial_playbooks()}))
+            out.append(("加試單＋不用大盤逆風", {"_playbooks": trial_playbooks(), "_drop": ["marketWeak"]}))
+        elif n in ("bullhold", "bullstop", "bull"):
+            from .rules import bull_playbooks
+            name = {"bullhold": "多頭不因警訊減碼", "bullstop": "多頭放寬月線停損", "bull": "多頭不減碼＋放寬停損"}[n]
+            out.append((name, {"_playbooks": bull_playbooks(hold=n != "bullstop", stop=n != "bullhold")}))
         elif n == "market":
             out.append(("不用大盤逆風", {"_drop": ["marketWeak"]}))
         else:
-            raise ValueError(f"未知的對照組：{n}（可用：veto、inst1d、market、v03）")
+            raise ValueError(f"未知的對照組：{n}（可用：trial、bullhold、bullstop、bull、veto、inst1d、market、v03）")
     return out
 
 
