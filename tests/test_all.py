@@ -1001,7 +1001,7 @@ class HoldersTests(unittest.TestCase):
 
 
 class V3RulesTests(unittest.TestCase):
-    """v0.3 規則（2026-11-13 專家審閱後）。"""
+    """v0.3 規則（2026-11-13 專家審閱後）。v0.4 沿用其中的條件，這裡固定用 v0.3 規則檢查條件本身。"""
     # 未持有、回測月線有守後出帶量紅 K、法人由賣轉買
     BASE = {"close": 105.0, "open": 101.0, "high": 106, "low": 100.5, "chgPct": 3.0, "candle": 1, "vol": 150, "vol5": 100,
             "ma5": 102.0, "ma20": 100.0, "ma20Prev": 99.8, "prevHigh": 110.0, "pbLowMinPct": 0.5, "pbCloseMinPct": -0.8,
@@ -1009,7 +1009,8 @@ class V3RulesTests(unittest.TestCase):
             "foreign5d": 100, "trust5d": 0, "marginChg": 50, "amt5": 50000, "upperShadowPct": 10, "prevFromHigh20": -5}
 
     def ev(self, rec=None, **stock):
-        return evaluate({**self.BASE, **(rec or {})}, stock, DEFAULT_RULES)
+        from twradar.rules import v03_playbooks
+        return evaluate({**self.BASE, **(rec or {})}, stock, DEFAULT_RULES, {"playbooks": v03_playbooks()})
 
     def test_first_entry(self):
         e = self.ev()
@@ -1126,7 +1127,18 @@ class V3RulesTests(unittest.TestCase):
         path.write_text(json.dumps(data), encoding="utf-8")
         s = SettingsStore(path, 50).get()
         self.assertEqual(s["playbooks"]["entry"][1]["label"], "自訂")
-        self.assertEqual(s["rulesVersion"], 3)
+        self.assertEqual(s["rulesVersion"], 4)
+        # v0.3 預設 → 升級為 v0.4；參數不再重設
+        from twradar.rules import v03_playbooks
+        data["playbooks"], data["rulesVersion"] = v03_playbooks(), 3
+        for p_ in data["params"]:
+            if p_["id"] == "profitTargetPct":
+                p_["value"] = 20
+        path.write_text(json.dumps(data), encoding="utf-8")
+        s = SettingsStore(path, 50).get()
+        self.assertEqual((s["playbooks"], s["rulesVersion"]), (default_playbooks(), 4))
+        self.assertEqual({p_["id"]: p_["value"] for p_ in s["params"]}["profitTargetPct"], 20)
+        self.assertIn("inst5dPct", {p_["id"] for p_ in s["params"]})
 
     def test_per_rule_confirm(self):
         from twradar.analysis import _apply_confirm
@@ -1310,14 +1322,14 @@ class BacktestTests(unittest.TestCase):
         os.environ["TWRADAR_HOME"] = self.cfg.home
         try:
             args = SimpleNamespace(start=None, end=None, split=None, universe="auto", grid=["profitTargetPct=8,12"],
-                                   compare=["inst5d,market"], no_study=False, no_scan=False, max_adds=2, out=str(out))
+                                   compare=["inst1d,market"], no_study=False, no_scan=False, max_adds=2, out=str(out))
             with contextlib.redirect_stdout(io.StringIO()) as buf:
                 code = run_backtest(self.cfg, args)
             summary = latest_backtest()  # 狀態 API 會附上最新一次回溯摘要
         finally:
             os.environ["TWRADAR_HOME"] = TMP
         self.assertEqual(summary["run"], "20261114-010000")
-        self.assertEqual([v["name"] for v in summary["variants"]][3:], ["法人看 5 日累計", "不用大盤逆風"])
+        self.assertEqual([v["name"] for v in summary["variants"]][3:], ["法人看單日", "不用大盤逆風"])
         self.assertIn("marketWeak", summary["conditions"])
         self.assertIn(summary["conditions"]["marketWeak"]["樣本內"]["verdict"], ("樣本不足", "看不出差別", "成立後較好", "成立後較差"))
         self.assertIn("綜合＋不追高", summary["scan"]["methods"])
@@ -1331,57 +1343,60 @@ class BacktestTests(unittest.TestCase):
         self.assertTrue((out / "trades.csv").exists())
 
     def test_rule_variants(self):
-        """對照組：拿掉否決條件、換成 5 日版；整條規則只剩被拿掉的條件時整條拿掉。"""
+        """對照組：拿掉否決條件、換條件、整套換成前一版；整條規則只剩被拿掉的條件時整條拿掉。"""
         from twradar import backtest as B
+        from twradar.rules import default_playbooks, v03_playbooks
+        from twradar.settings import validate
         S = self.st.get()
         veto = B._veto_ids(S)
-        self.assertIn("trustSellConflict", veto)
-        vs = B.preset_variants(["veto", "inst5d,market"], S)
-        self.assertEqual(len(vs), len(veto) + 1 + 2)
+        self.assertEqual(veto, ["belowMa20", "marginExcess"])
+        vs = B.preset_variants(["v03,veto", "inst1d,market"], S)
+        self.assertEqual([n for n, _ in vs], ["v0.3（前一版）", "不用否決：belowMa20", "不用否決：marginExcess", "不用任何否決",
+                                             "法人看單日", "不用大盤逆風"])
         with self.assertRaises(ValueError):
             B.preset_variants(["nope"], S)
-        S1, p1 = B.apply_variant(S, {"_drop": ["divergence"], "stopLossPct": 8})
-        entry = {r["label"]: r for r in S1["playbooks"]["entry"]}
-        self.assertNotIn("divergence", entry["否決"]["when"]["any"])
-        self.assertEqual(len(entry["否決"]["when"]["any"]), len(veto) - 1)
+        S1, p1 = B.apply_variant(S, {"_drop": ["marginExcess"], "stopLossPct": 8})
+        self.assertEqual({r["label"]: r for r in S1["playbooks"]["entry"]}["否決"]["when"]["any"], ["belowMa20"])
         self.assertEqual(p1, {"stopLossPct": 8})
-        self.assertIn("divergence", {r["label"]: r for r in S["playbooks"]["entry"]}["否決"]["when"]["any"])  # 原設定不變
+        self.assertEqual(S["playbooks"], default_playbooks())   # 原設定不變
         S2, _ = B.apply_variant(S, {"_drop": veto})
         self.assertNotIn("否決", [r["label"] for r in S2["playbooks"]["entry"]])
-        S3, _ = B.apply_variant(S, dict(vs[-2][1]))
+        S3, _ = B.apply_variant(S, dict(vs[4][1]))
         e3 = {r["label"]: r for r in S3["playbooks"]["entry"]}
-        self.assertIn("trustSellConflict5d", e3["否決"]["when"]["any"])
-        self.assertEqual(e3["投信買、外資賣"]["when"], "trustBuyConflict5d")
-        self.assertIn("inst5dBuy", json.dumps(e3["加碼"]["when"]))
+        self.assertEqual(e3["投信買、外資賣"]["when"], "trustBuyConflict")
+        self.assertIn('"instBuy"', json.dumps(e3["加碼"]["when"]))
         S4, _ = B.apply_variant(S, {"_drop": ["marketWeak"]})
         self.assertNotIn("大盤逆風", [r["label"] for r in S4["playbooks"]["entry"]])
-        from twradar.settings import validate
-        for Sx in (S1, S2, S3, S4):
+        S5, _ = B.apply_variant(S, dict(vs[0][1]))
+        self.assertEqual(S5["playbooks"], v03_playbooks())
+        for Sx in (S1, S2, S3, S4, S5):
             self.assertEqual(validate(Sx), [], Sx["playbooks"]["entry"])
         conf = B.BTConfig(start=self.dates[80], end=self.dates[-1], split=self.dates[120], variants=[("x", {"_drop": ["nope"]})])
         with self.assertRaises(ValueError):
             B.run(self.db, S, conf)
 
-    def test_v04_candidate(self):
-        from twradar import backtest as B
-        from twradar.rules import default_playbooks, v04_playbooks
-        from twradar.settings import validate
-        S = self.st.get()
-        (name, over), = B.preset_variants(["v04"], S)
-        S4, p = B.apply_variant(S, over)
-        self.assertEqual((p, validate(S4)), ({}, []))
-        e = {r["label"]: r for r in S4["playbooks"]["entry"]}
-        h = {r["label"]: r for r in S4["playbooks"]["hold"]}
+    def test_v04_default(self):
+        """v0.4：否決只留兩條、法人看 5 日、爆量長黑移到持有面；燈號說明用 5 日法人。"""
+        from twradar.rules import default_playbooks, v03_playbooks
+        pb = default_playbooks()
+        e = {r["label"]: r for r in pb["entry"]}
+        h = {r["label"]: r for r in pb["hold"]}
         self.assertEqual(e["否決"]["when"], {"any": ["belowMa20", "marginExcess"]})
         self.assertEqual(e["投信買、外資賣"]["when"], "trustBuyConflict5d")
-        txt = json.dumps(S4["playbooks"]["entry"])
+        txt = json.dumps(pb["entry"])
         self.assertIn("inst5dBuy", txt)
         self.assertNotIn('"instBuy"', txt)
         self.assertIn("blowoffBlack", h["出貨警訊"]["when"]["any"])
-        self.assertEqual([r["label"] for r in v04_playbooks()["entry"]], [r["label"] for r in default_playbooks()["entry"]])
-        self.assertEqual(S["playbooks"], self.st.get()["playbooks"])   # 原設定不變
-        conf = B.BTConfig(start=self.dates[80], end=self.dates[-1], split=self.dates[120], variants=[("目前設定", {}), (name, over)])
-        self.assertEqual([r["name"] for r in B.run(self.db, S, conf)["results"]], ["目前設定", "v0.4 候選"])
+        self.assertEqual([r["label"] for r in pb["entry"]], [r["label"] for r in v03_playbooks()["entry"]])
+        # 外資買、投信賣：v0.3 否決，v0.4 不否決
+        S = self.st.get()
+        P = {**DEFAULT_RULES, **{p["id"]: p["value"] for p in S["params"]}}
+        rec = {"close": 72.7, "ma20": 71.19, "ma20Prev": 71.0, "ma5": 72.0, "vol": 31585.1, "vol5": 37317.3, "amt5": 250000,
+               "foreign": 18007, "trust": -9913, "foreign5d": 20000, "trust5d": -12000, "chgPct": 1.1, "marginChg": 0}
+        self.assertEqual(evaluate(rec, {"code": "2885"}, P, {**S, "playbooks": v03_playbooks()})["light"], "stop")
+        sig = evaluate(rec, {"code": "2885"}, P, S)
+        self.assertEqual(sig["light"], "wait")
+        self.assertIn("inst5dBuy", {t["id"] for t in sig["trace"]})
 
     def test_condition_study(self):
         from twradar import backtest as B

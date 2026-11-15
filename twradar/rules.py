@@ -28,11 +28,11 @@ LIGHT_LABEL = {"go": "加碼訊號", "wait": "觀察中", "stop": "不宜加碼"
 CHIP_CONDS = ("inst", "main", "retail")
 
 
-RULES_VERSION = 3
+RULES_VERSION = 4
 
 
-def default_playbooks() -> dict:
-    """預設規則 v0.3（2026-11-13 依專家審閱修改，見 docs/STRATEGY.md）。"""
+def v03_playbooks() -> dict:
+    """v0.3（2026-11-13 依專家審閱修改）。保留供升級比對與回溯對照。"""
     weak = ["whaleDown", "retailUp", "marginHigh", "instSellStreak"]
     return {
         "entry": [
@@ -62,12 +62,12 @@ def default_playbooks() -> dict:
     }
 
 
-def v04_playbooks() -> dict:
-    """v0.4 候選（2026-11-16，依回溯的規則對照與條件研究；尚未設為預設）。與 v0.3 的差別：
+def default_playbooks() -> dict:
+    """預設規則 v0.4（2026-11-16，依回溯的規則對照與條件研究，見 docs/STRATEGY.md 第 10 節）。與 v0.3 的差別：
     - 法人條件改看 5 日累計（instBuy／trustBuyConflict → 5 日版）。
     - 否決只留「跌破月線」「融資追價過熱」；拿掉「外資買、投信賣」「籌碼背離」「法人賣、融資接」。
     - 「爆量長黑」從否決移到持有面的出貨警訊。"""
-    pb = default_playbooks()
+    pb = v03_playbooks()
     swap = {"instBuy": "inst5dBuy", "trustBuyConflict": "trustBuyConflict5d"}
 
     def sw(x):
@@ -173,13 +173,14 @@ def upgrade(s: dict) -> dict:
         return s
     pb = s.get("playbooks")
     if isinstance(pb, dict):
-        old = p3_playbooks()
+        olds = [p3_playbooks(), v03_playbooks()] if v < 3 else [v03_playbooks()]
         for k in ("entry", "hold"):
-            if not pb.get(k) or pb.get(k) == old[k]:
+            if not pb.get(k) or any(pb.get(k) == old[k] for old in olds):
                 pb[k] = default_playbooks()[k]
-    for p in s.get("params", []):
-        if isinstance(p, dict) and p.get("id") in PARAM_DEFAULT_CHANGES and p.get("value") == PARAM_DEFAULT_CHANGES[p["id"]][0]:
-            p["value"] = PARAM_DEFAULT_CHANGES[p["id"]][1]
+    if v < 3:
+        for p in s.get("params", []):
+            if isinstance(p, dict) and p.get("id") in PARAM_DEFAULT_CHANGES and p.get("value") == PARAM_DEFAULT_CHANGES[p["id"]][0]:
+                p["value"] = PARAM_DEFAULT_CHANGES[p["id"]][1]
     s["rulesVersion"] = RULES_VERSION
     return s
 
@@ -335,8 +336,8 @@ def evaluate(rec: dict, stock: dict, P: dict, settings: dict | None = None) -> d
     light = ENTRY_LIGHTS.get(entry["light"], entry["light"])
     # 顯示用的四項檢查：新規則用 v0.3 條件，舊規則用 v0.1 條件
     used = {x for r in entry_pb if not r.get("default") for x in refs(r["when"])}
-    v3 = "instBuy" in used or "pvTrend" in used or "pvBreakout" in used
-    ck_ids = {"inst": "instBuy" if v3 else "inst", "main": "main", "retail": "retailHealthy" if v3 else "retail",
+    v3 = "instBuy" in used or "inst5dBuy" in used or "pvTrend" in used or "pvBreakout" in used
+    ck_ids = {"inst": "inst5dBuy" if "inst5dBuy" in used else "instBuy" if v3 else "inst", "main": "main", "retail": "retailHealthy" if v3 else "retail",
               "priceVolume": "pvTrend" if v3 else "pvConfirm"}
 
     # 與 v0.1 相同的欄位

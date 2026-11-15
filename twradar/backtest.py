@@ -509,9 +509,9 @@ def _veto_ids(settings: dict) -> list[str]:
 
 def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
     """內建的規則對照組：
-    v04     v0.4 候選規則（整套換掉）
+    v03     前一版規則 v0.3（整套換掉）
     veto    否決條件逐條拿掉（每條一組），再加「全部拿掉」
-    inst5d  法人條件改看 5 日累計
+    inst1d  法人條件改回看單日
     market  拿掉「大盤逆風」"""
     out: list[tuple[str, dict]] = []
     for n in [x.strip() for x in names for x in x.split(",") if x.strip()]:
@@ -520,16 +520,15 @@ def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
             out += [(f"不用否決：{i}", {"_drop": [i]}) for i in ids]
             if ids:
                 out.append(("不用任何否決", {"_drop": ids}))
-        elif n == "inst5d":
-            out.append(("法人看 5 日累計", {"_replace": {"instBuy": "inst5dBuy", "trustSellConflict": "trustSellConflict5d",
-                                                     "trustBuyConflict": "trustBuyConflict5d"}}))
-        elif n == "v04":
-            from .rules import v04_playbooks
-            out.append(("v0.4 候選", {"_playbooks": v04_playbooks()}))
+        elif n == "inst1d":
+            out.append(("法人看單日", {"_replace": {"inst5dBuy": "instBuy", "trustBuyConflict5d": "trustBuyConflict"}}))
+        elif n == "v03":
+            from .rules import v03_playbooks
+            out.append(("v0.3（前一版）", {"_playbooks": v03_playbooks()}))
         elif n == "market":
             out.append(("不用大盤逆風", {"_drop": ["marketWeak"]}))
         else:
-            raise ValueError(f"未知的對照組：{n}（可用：veto、inst5d、market、v04）")
+            raise ValueError(f"未知的對照組：{n}（可用：veto、inst1d、market、v03）")
     return out
 
 
