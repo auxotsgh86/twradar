@@ -583,6 +583,15 @@ def market_bull(c: Ctx) -> Res:
     return Res(PASS, "大盤多頭") if x >= ma and ma >= prev else Res(FAIL)
 
 
+@condition("marketNotBull", "大盤非多頭", "any", (), ("mktClose", "mktMa20", "mktMa20Prev"),
+           "大盤不是多頭；大盤資料不足時也算（保守：照一般規則停損、減碼）")
+def market_not_bull(c: Ctx) -> Res:
+    x, ma, prev = c.g("mktClose"), c.g("mktMa20"), c.g("mktMa20Prev")
+    if None in (x, ma, prev):
+        return Res(PASS, "大盤資料不足，視為非多頭")
+    return Res(FAIL) if x >= ma and ma >= prev else Res(PASS, "大盤非多頭")
+
+
 @condition("biasMa5Ok", "未追高（5 日線乖離）", "entry", ("maxBiasMa5Pct",), ("close", "ma5"), "收盤距 5 日線不超過設定幅度")
 def bias_ma5_ok(c: Ctx) -> Res:
     close, ma5 = c.g("close"), c.g("ma5")

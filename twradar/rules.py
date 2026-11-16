@@ -28,7 +28,7 @@ LIGHT_LABEL = {"go": "加碼訊號", "wait": "觀察中", "stop": "不宜加碼"
 CHIP_CONDS = ("inst", "main", "retail")
 
 
-RULES_VERSION = 4
+RULES_VERSION = 5
 
 
 def v03_playbooks() -> dict:
@@ -63,7 +63,13 @@ def v03_playbooks() -> dict:
 
 
 def default_playbooks() -> dict:
-    """預設規則 v0.4（2026-11-16，依回溯的規則對照與條件研究，見 docs/STRATEGY.md 第 10 節）。與 v0.3 的差別：
+    """預設規則 v0.5（2026-11-16，見 docs/STRATEGY.md 第 11 節）：v0.4 ＋ 大盤多頭時放寬月線停損
+    （不因「跌破月線＋法人當日賣超」停損；跌破下彎月線超過 breakMaBullPct 才停損）。"""
+    return bull_playbooks(stop=True)
+
+
+def v04_playbooks() -> dict:
+    """v0.4（2026-11-16，依回溯的規則對照與條件研究，見 docs/STRATEGY.md 第 10 節）。與 v0.3 的差別：
     - 法人條件改看 5 日累計（instBuy／trustBuyConflict → 5 日版）。
     - 否決只留「跌破月線」「融資追價過熱」；拿掉「外資買、投信賣」「籌碼背離」「法人賣、融資接」。
     - 「爆量長黑」從否決移到持有面的出貨警訊。"""
@@ -105,10 +111,10 @@ def trial_playbooks() -> dict:
 
 
 def bull_playbooks(hold: bool = False, stop: bool = False) -> dict:
-    """依大盤環境調整出場。hold：大盤多頭時不因出貨警訊、獲利保護減碼；
-    stop：大盤多頭時，跌破月線要超過較寬的幅度才停損，且不因「跌破月線＋法人當日賣超」停損。"""
-    pb = default_playbooks()
-    not_bull = {"not": "marketBull"}
+    """以 v0.4 為底，依大盤環境調整出場。hold：大盤多頭時不因出貨警訊、獲利保護減碼；
+    stop：大盤多頭時，跌破月線要超過較寬的幅度才停損，且不因「跌破月線＋法人當日賣超」停損（v0.5 採用）。"""
+    pb = v04_playbooks()
+    not_bull = "marketNotBull"   # 大盤資料不足時視為非多頭，停損照舊
     out = []
     for r in pb["hold"]:
         if hold and r.get("label") in ("出貨警訊", "獲利保護"):
@@ -209,7 +215,7 @@ def upgrade(s: dict) -> dict:
         return s
     pb = s.get("playbooks")
     if isinstance(pb, dict):
-        olds = [p3_playbooks(), v03_playbooks()] if v < 3 else [v03_playbooks()]
+        olds = [p3_playbooks(), v03_playbooks(), v04_playbooks()] if v < 3 else [v03_playbooks(), v04_playbooks()]
         for k in ("entry", "hold"):
             if not pb.get(k) or any(pb.get(k) == old[k] for old in olds):
                 pb[k] = default_playbooks()[k]

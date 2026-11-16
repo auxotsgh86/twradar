@@ -511,7 +511,7 @@ def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
     """內建的規則對照組：
     trial   加「試單」規則（另一組同時拿掉大盤逆風）
     bullhold／bullstop／bull  大盤多頭時不因警訊減碼／放寬月線停損／兩者都做
-    v03     前一版規則 v0.3（整套換掉）
+    v04／v03  前幾版規則（整套換掉）
     veto    否決條件逐條拿掉（每條一組），再加「全部拿掉」
     inst1d  法人條件改回看單日
     market  拿掉「大盤逆風」"""
@@ -524,9 +524,12 @@ def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
                 out.append(("不用任何否決", {"_drop": ids}))
         elif n == "inst1d":
             out.append(("法人看單日", {"_replace": {"inst5dBuy": "instBuy", "trustBuyConflict5d": "trustBuyConflict"}}))
+        elif n == "v04":
+            from .rules import v04_playbooks
+            out.append(("v0.4（前一版）", {"_playbooks": v04_playbooks()}))
         elif n == "v03":
             from .rules import v03_playbooks
-            out.append(("v0.3（前一版）", {"_playbooks": v03_playbooks()}))
+            out.append(("v0.3", {"_playbooks": v03_playbooks()}))
         elif n == "trial":
             from .rules import trial_playbooks
             out.append(("加試單", {"_playbooks": trial_playbooks()}))
@@ -536,11 +539,11 @@ def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
             name = {"bullhold": "多頭不因警訊減碼", "bullstop": "多頭放寬月線停損", "bull": "多頭不減碼＋放寬停損"}[n]
             out.append((name, {"_playbooks": bull_playbooks(hold=n != "bullstop", stop=n != "bullhold")}))
         elif n == "bullstop-grid":   # 穩健性：放寬幅度換成相鄰數值，以及只放寬幅度（保留「跌破月線＋法人賣超」停損）
-            from .rules import bull_playbooks, default_playbooks
+            from .rules import bull_playbooks, v04_playbooks
             for v in (2, 2.5, 3, 4, 5):
                 out.append((f"多頭放寬月線停損 {v}%", {"_playbooks": bull_playbooks(stop=True), "breakMaBullPct": v}))
             pb = bull_playbooks(stop=True)
-            base = next(r for r in default_playbooks()["hold"] if r.get("label") == "停損")["when"]["any"]
+            base = next(r for r in v04_playbooks()["hold"] if r.get("label") == "停損")["when"]["any"]
             for r in pb["hold"]:
                 if r.get("label") == "停損":
                     r["when"]["any"] = [x if not (isinstance(x, dict) and "instNetSell" in (x.get("all") or [])) else
@@ -550,7 +553,7 @@ def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
         elif n == "market":
             out.append(("不用大盤逆風", {"_drop": ["marketWeak"]}))
         else:
-            raise ValueError(f"未知的對照組：{n}（可用：trial、bullhold、bullstop、bullstop-grid、bull、veto、inst1d、market、v03）")
+            raise ValueError(f"未知的對照組：{n}（可用：trial、bullhold、bullstop、bullstop-grid、bull、veto、inst1d、market、v04、v03）")
     return out
 
 

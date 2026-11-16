@@ -426,6 +426,11 @@ class Provider:
 - `bullstop`：大盤多頭時，跌破下彎月線要超過 `breakMaBullPct`（3%）才停損，且不因「跌破月線＋法人當日賣超」停損。`bull` ＝兩者都做。
 - 採用標準同 v0.4：樣本內、樣本外都不比目前設定差。
 
+## 9.7.1 規則 v0.5（2026-11-16）
+
+`RULES_VERSION = 5`；`default_playbooks()` ＝ `bull_playbooks(stop=True)`，以 `v04_playbooks()` 為底。設定與 v0.3、v0.4 預設相同者自動升級。
+多頭判斷用 `marketNotBull`：大盤資料不足時視為非多頭（停損照舊），避免資料缺漏時停損失效。依據見 STRATEGY.md 第 11 節。
+
 ## 9.8 注意股、處置股（2026-11-16）
 
 - 來源（`twradar/providers/alerts.py`，格式依 2026/11 實際回應）：證交所 `announcement/notice`、`announcement/punish`；

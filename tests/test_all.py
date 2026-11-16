@@ -1127,8 +1127,8 @@ class V3RulesTests(unittest.TestCase):
         path.write_text(json.dumps(data), encoding="utf-8")
         s = SettingsStore(path, 50).get()
         self.assertEqual(s["playbooks"]["entry"][1]["label"], "自訂")
-        self.assertEqual(s["rulesVersion"], 4)
-        # v0.3 預設 → 升級為 v0.4；參數不再重設
+        self.assertEqual(s["rulesVersion"], 5)
+        # v0.3 預設 → 升級為目前預設；參數不再重設
         from twradar.rules import v03_playbooks
         data["playbooks"], data["rulesVersion"] = v03_playbooks(), 3
         for p_ in data["params"]:
@@ -1136,7 +1136,12 @@ class V3RulesTests(unittest.TestCase):
                 p_["value"] = 20
         path.write_text(json.dumps(data), encoding="utf-8")
         s = SettingsStore(path, 50).get()
-        self.assertEqual((s["playbooks"], s["rulesVersion"]), (default_playbooks(), 4))
+        self.assertEqual((s["playbooks"], s["rulesVersion"]), (default_playbooks(), 5))
+        # v0.4 預設 → v0.5
+        from twradar.rules import v04_playbooks
+        data["playbooks"], data["rulesVersion"] = v04_playbooks(), 4
+        path.write_text(json.dumps(data), encoding="utf-8")
+        self.assertEqual(SettingsStore(path, 50).get()["playbooks"], default_playbooks())
         self.assertEqual({p_["id"]: p_["value"] for p_ in s["params"]}["profitTargetPct"], 20)
         self.assertIn("inst5dPct", {p_["id"] for p_ in s["params"]})
 
@@ -1363,7 +1368,7 @@ class BacktestTests(unittest.TestCase):
         veto = B._veto_ids(S)
         self.assertEqual(veto, ["belowMa20", "marginExcess"])
         vs = B.preset_variants(["v03,veto", "inst1d,market"], S)
-        self.assertEqual([n for n, _ in vs], ["v0.3（前一版）", "不用否決：belowMa20", "不用否決：marginExcess", "不用任何否決",
+        self.assertEqual([n for n, _ in vs], ["v0.3", "不用否決：belowMa20", "不用否決：marginExcess", "不用任何否決",
                                              "法人看單日", "不用大盤逆風"])
         with self.assertRaises(ValueError):
             B.preset_variants(["nope"], S)
@@ -1445,11 +1450,15 @@ class BacktestTests(unittest.TestCase):
         hold = {"code": "X", "holding": True, "cost": 100.0}
         r2 = {"close": 98.0, "ma20": 100.0, "ma20Prev": 100.5, "ma5": 99.0, "vol": 100, "vol5": 100, "instNet": -50,
               "mktClose": 100, "mktMa20": 99, "mktMa20Prev": 98}
-        Sb = {**S, "playbooks": bull_playbooks(stop=True)}
+        from twradar.rules import v04_playbooks
+        Sb, S = S, {**S, "playbooks": v04_playbooks()}   # 預設（v0.5）就是多頭放寬停損
+        self.assertEqual(Sb["playbooks"], bull_playbooks(stop=True))
         self.assertEqual(evaluate(r2, hold, P, S)["hold"]["light"], "exit")
         self.assertEqual(evaluate(r2, hold, P, Sb)["hold"]["light"], "keep")
         self.assertEqual(evaluate({**r2, "close": 96.5}, hold, P, Sb)["hold"]["light"], "exit")            # 超過 3%
         self.assertEqual(evaluate({**r2, "mktClose": 97, "mktMa20Prev": 99.5}, hold, P, Sb)["hold"]["light"], "exit")  # 大盤不是多頭
+        nomkt = {k: v for k, v in r2.items() if not k.startswith("mkt")}
+        self.assertEqual(evaluate(nomkt, hold, P, Sb)["hold"]["light"], "exit")   # 大盤資料不足：照一般規則停損
         # 多頭不因警訊減碼：爆量長黑
         r3 = {"close": 120.0, "ma20": 110.0, "ma20Prev": 109.0, "ma5": 121.0, "chgPct": -4.0, "vol": 300, "vol5": 100,
               "mktClose": 100, "mktMa20": 99, "mktMa20Prev": 98}

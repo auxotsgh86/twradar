@@ -22,7 +22,7 @@ SEPARATE=0
 DAYS=560
 INTERVAL=""
 SKIP=0
-GRID=(--compare trial,bullhold,bullstop,bull,market,v03)
+GRID=(--compare v04,veto,inst1d,market)
 EXTRA=()
 while [ $# -gt 0 ]; do
   case "$1" in
