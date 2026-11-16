@@ -1,11 +1,12 @@
 """注意股、處置股（證交所、櫃買中心公告）。欄位格式已依 2026/11 實際回應確認。
 
 - 證交所注意：announcement/notice   欄位：編號, 證券代號, 證券名稱, 累計次數, 注意交易資訊, 日期, 收盤價, 本益比
+  （日期格式是「115.11.13」；查詢要帶 querytype=1 等參數，否則回傳空資料）
 - 證交所處置：announcement/punish   欄位：編號, 公布日期, 證券代號, 證券名稱, 累計, 處置條件, 處置起迄時間, 處置措施, 處置內容, 備註
 - 櫃買注意：bulletin/attention       tables[0] 欄位：編號, 證券代號, 證券名稱, 累計, 注意交易資訊, 公告日期, 收盤價, 本益比, link
 - 櫃買處置：bulletin/disposal        tables[0] 欄位：編號, 公布日期, 證券代號, 證券名稱, 累計, 處置起訖時間, 處置原因, 處置措施, 處置內容, …
   （沒有處置的日子會有「本日無處置資料」的空列；證券名稱後面可能帶連結，例如「霖宏二(../../…)」）
-日期為民國年（115/11/10）。處置期間例如「115/11/11～115/11/17」或「115/11/12~115/11/18」。
+日期為民國年（115/11/10 或 115.11.13）。處置期間例如「115/11/11～115/11/17」或「115/11/12~115/11/18」。
 """
 from __future__ import annotations
 
@@ -20,8 +21,8 @@ TPEX = "https://www.tpex.org.tw/www/zh-tw/bulletin"
 
 
 def _roc(s) -> str | None:
-    """民國年 '115/11/10' → '20261110'；格式不對回傳 None。"""
-    m = re.fullmatch(r"\s*(\d{2,3})/(\d{1,2})/(\d{1,2})\s*", str(s or ""))
+    """民國年 '115/11/10'、'115.11.13' → 'YYYYMMDD'；格式不對回傳 None。"""
+    m = re.fullmatch(r"\s*(\d{2,3})[/.\-](\d{1,2})[/.\-](\d{1,2})\s*", str(s or ""))
     if not m:
         return None
     return f"{int(m[1]) + 1911:04d}{int(m[2]):02d}{int(m[3]):02d}"
@@ -73,12 +74,16 @@ def parse_twse_notice(js) -> list[dict]:
     ic, iname, icnt, iwhy, idate = (_ix(f, "證券代號"), _ix(f, "證券名稱"), _ix(f, "累計"), _ix(f, "注意交易資訊"), _ix(f, "日期"))
     if None in (ic, iname, iwhy, idate):
         raise FetchError("parse", f"證交所注意股欄位改變：{f}")
-    out = []
+    out, bad = [], 0
     for r in js.get("data") or []:
+        if not _roc(r[idate]):
+            bad += 1
         x = _row("注意", "TWSE", r[ic], _name(r[iname]), _roc(r[idate]), inum(r[icnt]) if icnt is not None else None,
                  _text(r[iwhy]), src="TWSE notice")
         if x:
             out.append(x)
+    if bad and not out:
+        raise FetchError("parse", f"證交所注意股日期格式無法解析（{bad} 筆）")
     return out
 
 
@@ -150,7 +155,7 @@ class Alerts:
     def urls(self, start: str, end: str) -> list[tuple[str, str, callable]]:
         TWSE, TPEX = self.twse, self.tpex  # noqa: N806
         return [
-            ("證交所注意股", f"{TWSE}/notice?response=json&startDate={start}&endDate={end}",
+            ("證交所注意股", f"{TWSE}/notice?response=json&startDate={start}&endDate={end}&querytype=1&stockNo=&selectType=&sortKind=STKNO",
              parse_twse_notice),
             ("證交所處置股", f"{TWSE}/punish?response=json&startDate={start}&endDate={end}",
              parse_twse_punish),

@@ -1582,7 +1582,8 @@ class AlertsTests(unittest.TestCase):
                              "１處置原因：…\n３處置措施：\nａ以人工管制之撮合終端機執行撮合作業（約每二分鐘撮合一次）。", ""]]}
     TWSE_NOTICE = {"stat": "OK", "title": "公布注意有價證券資訊",
                    "fields": ["編號", "證券代號", "證券名稱", "累計次數", "注意交易資訊", "日期", "收盤價", "本益比"],
-                   "data": [[1, "6108", "競國", 3, "最近六個營業日累積之最後成交價漲幅達 52%（第一款）", "115/11/13", "41.00", "20.1"]]}
+                   "data": [[1, "6108", "競國", "3", "最近六個營業日累積之最後成交價漲幅達 52%（第一款）", "115.11.13", "41.00", "20.1"],
+                            [2, "030039", "騰輝電群益65購02", "1", "最近六個營業日累積收盤價漲幅達34.58%﹝第一款﹞。", "115.11.13", "8.00", "-----"]]}
     TPEX_DISP = {"tables": [{"title": "上櫃處置有價證券",
                              "fields": ["編號", "公布日期", "證券代號", "證券名稱", "累計", "處置起訖時間", "處置原因", "處置措施", "處置內容",
                                         "收    ", "本益比", " "],
@@ -1603,6 +1604,9 @@ class AlertsTests(unittest.TestCase):
         self.assertIn("最近十個營業日已有六次", p[0]["reason"])
         n = A.parse_twse_notice(self.TWSE_NOTICE)
         self.assertEqual((n[0]["code"], n[0]["date"], n[0]["count"], n[0]["kind"]), ("6108", "20261113", 3, "注意"))
+        self.assertEqual(len(n), 2)
+        with self.assertRaises(FetchError):   # 日期全部讀不出來：當成格式改版，不要默默變成 0 筆
+            A.parse_twse_notice({**self.TWSE_NOTICE, "data": [[1, "6108", "競國", "3", "x", "2026年11月13日", "41", ""]]})
         d = A.parse_tpex_disposal(self.TPEX_DISP)
         self.assertEqual([(r["code"], r["name"], r["start"], r["end"], r["measure"], r["market"]) for r in d],
                          [("6425", "易發", "20261112", "20261118", "每五分鐘撮合", "TPEx")])
@@ -1633,9 +1637,9 @@ class AlertsTests(unittest.TestCase):
                 return s.p.TPEX_DISP
         t = T(self)
         rows, errs = Alerts(t).fetch("20261004", "20261113")
-        self.assertEqual(len(rows), 3)
+        self.assertEqual(len(rows), 4)
         self.assertEqual(len(errs), 1)
-        self.assertIn("startDate=20261004&endDate=20261113", t.urls[0])
+        self.assertIn("startDate=20261004&endDate=20261113&querytype=1", t.urls[0])
         self.assertIn("startDate=2026/10/04&endDate=2026/11/13", t.urls[2])
         db = DB(Path(tempfile.mkdtemp()) / "a.sqlite3")
         with db.tx() as c:
@@ -1645,7 +1649,8 @@ class AlertsTests(unittest.TestCase):
         a = db.alerts_for(None, "20261113")
         self.assertEqual(a["2455"]["disposal"]["end"], "20261117")
         self.assertEqual(a["6425"]["disposal"]["measure"], "每五分鐘撮合")
-        self.assertEqual((a["6108"]["notices10"], a["6108"]["notice"]["count"]), (1, 3))
+        self.assertEqual((a["6108"]["notices10"], a["6108"]["notice"]["count"], a["6108"]["name"]), (1, 3, "競國"))
+        self.assertEqual(a["6425"]["name"], "易發")
         self.assertNotIn("disposal", db.alerts_for(None, "20261120").get("2455", {}))
         self.assertEqual(set(db.alerts_for(["6108"], "20261113")), {"6108"})
         self.assertEqual(db.alerts_for([], "20261113"), {})

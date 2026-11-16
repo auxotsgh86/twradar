@@ -151,16 +151,24 @@ def run_alerts(cfg, args) -> int:
         print(f"抓取 {start}～{d}：{len(rows)} 筆（{'、'.join(f'{k} {v}' for k, v in by.items()) or '無'}）")
         for e in errs:
             print("  失敗：" + e)
+    import re
     a = db.alerts_for(None, d)
+    stock = lambda c: re.fullmatch(r"\d{4}", c) is not None   # 一般股票；權證、可轉債等只計數
+    mkt = {r["code"]: r["market"] for r in db.q("SELECT code, market FROM alerts WHERE code IN (%s)" % ",".join("?" * len(a)),
+                                                tuple(a))} if a else {}
     disp = sorted((c, x) for c, x in a.items() if x.get("disposal"))
-    print(f"\n{d} 處置中：{len(disp)} 檔")
-    for c, x in disp:
+    ds = [(c, x) for c, x in disp if stock(c)]
+    print(f"\n{d} 處置中：股票 {len(ds)} 檔（另有權證、可轉債等 {len(disp) - len(ds)} 檔）")
+    for c, x in ds:
         p = x["disposal"]
-        print(f"  {c}\t{p['start']}～{p['end']}\t{p.get('measure') or ''}\t{p.get('reason') or ''}"[:160])
+        print(f"  {c} {x.get('name') or ''}（{'上櫃' if mkt.get(c) == 'TPEx' else '上市'}）\t{p['start']}～{p['end']}\t"
+              f"{p.get('measure') or ''}\t{p.get('reason') or ''}"[:160])
     note = sorted((c, x) for c, x in a.items() if x.get("notice"))
-    print(f"\n{d} 當天注意：{len(note)} 檔")
-    for c, x in note[:60]:
-        print(f"  {c}\t近10日 {x.get('notices10', 0)} 次\t{x['notice'].get('reason') or ''}"[:160])
+    ns = [(c, x) for c, x in note if stock(c)]
+    print(f"\n{d} 當天注意：股票 {len(ns)} 檔（另有權證、可轉債等 {len(note) - len(ns)} 檔）")
+    for c, x in ns:
+        print(f"  {c} {x.get('name') or ''}（{'上櫃' if mkt.get(c) == 'TPEx' else '上市'}）\t近10日 {x.get('notices10', 0)} 次\t"
+              f"{x['notice'].get('reason') or ''}"[:160])
     return 0
 
 

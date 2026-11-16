@@ -180,13 +180,15 @@ class DB:
             cond, args = f" AND code IN ({','.join('?' * len(codes))})", tuple(codes)
         out: dict[str, dict] = {}
         for r in self.q(f"SELECT * FROM alerts WHERE kind='處置' AND start<=? AND end>=?{cond} ORDER BY date", (d, d, *args)):
-            out.setdefault(r["code"], {})["disposal"] = {"start": r["start"], "end": r["end"], "count": r["count"],
+            out.setdefault(r["code"], {})["name"] = r["name"]
+            out[r["code"]]["disposal"] = {"start": r["start"], "end": r["end"], "count": r["count"],
                                                          "measure": r["measure"], "reason": r["reason"]}
         for r in self.q(f"SELECT code, COUNT(*) AS n, MAX(date) AS last FROM alerts WHERE kind='注意' AND date>=? AND date<=?{cond} "
                         "GROUP BY code", (since, d, *args)):
             out.setdefault(r["code"], {})["notices10"] = r["n"]
         for r in self.q(f"SELECT * FROM alerts WHERE kind='注意' AND date=?{cond}", (d, *args)):
             out.setdefault(r["code"], {})["notice"] = {"count": r["count"], "reason": r["reason"]}
+            out[r["code"]].setdefault("name", r["name"])
         return out
 
     def holders_latest(self) -> str | None:
