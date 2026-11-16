@@ -101,12 +101,23 @@ def v04_playbooks() -> dict:
 
 # ---- 回溯對照用的候選規則（尚未採用） ----
 
-def trial_playbooks() -> dict:
-    """試單：月線還沒翻揚，但帶量紅 K 站上 5 日線與月線、法人 5 日買超、離 5 日線不遠 → 先進場（排在上車之後）。"""
+def trial_playbooks(settled: bool = False) -> dict:
+    """試單：月線還沒翻揚，但帶量紅 K 站上 5 日線與月線、法人 5 日買超、離 5 日線不遠 → 先進場（排在上車之後）。
+    settled：試單另外要求「起漲前籌碼沉澱」（橫盤、融資低檔且未增加）。"""
     pb = default_playbooks()
     i = next(k for k, r in enumerate(pb["entry"]) if r.get("label") == "上車") + 1
-    pb["entry"].insert(i, {"light": "add", "label": "試單", "lightLabel": "試單訊號",
-                           "when": {"all": ["notHolding", "redVolK", "aboveMa5And20", "inst5dBuy", "biasMa5Ok"]}})
+    conds = ["notHolding", "redVolK", "aboveMa5And20", "inst5dBuy", "biasMa5Ok"] + (["baseSettled"] if settled else [])
+    pb["entry"].insert(i, {"light": "add", "label": "試單", "lightLabel": "試單訊號", "when": {"all": conds}})
+    return pb
+
+
+def settled_playbooks() -> dict:
+    """上車另外要求「起漲前籌碼沉澱」。"""
+    pb = default_playbooks()
+    for r in pb["entry"]:
+        if r.get("label") == "上車":
+            w = r["when"]
+            r["when"] = {"all": [*(w["all"] if isinstance(w, dict) and "all" in w else [w]), "baseSettled"]}
     return pb
 
 
@@ -164,6 +175,8 @@ ENGINE_PARAMS = [
     {"id": "marginInstRatio", "label": "融資健康：融資增加 < 法人買超的", "value": 30, "unit": "%", "min": 0, "max": 1000, "note": ""},
     {"id": "inst5dPct", "label": "法人 5 日累計：佔近 5 日成交量 ≥", "value": 3, "unit": "%", "min": 0, "max": 100, "note": "5 日版的法人條件用"},
     {"id": "maxBiasMa5Pct", "label": "試單：收盤距 5 日線 ≤", "value": 5, "unit": "%", "min": 0, "max": 50, "note": "對照組「試單」用，不追高"},
+    {"id": "baseRangePct", "label": "籌碼沉澱：起漲前整理區間高低差 ≤", "value": 25, "unit": "%", "min": 0, "max": 200, "note": "對照組「沉澱」用"},
+    {"id": "baseMarginPos", "label": "籌碼沉澱：融資在近 60 日區間的位置 ≤", "value": 40, "unit": "%", "min": 0, "max": 100, "note": "0＝最低、100＝最高"},
     {"id": "breakMaBullPct", "label": "停損（大盤多頭時）：跌破下彎月線超過", "value": 3, "unit": "%", "min": 0, "max": 20, "note": "對照組「多頭放寬停損」用"},
     {"id": "addMinProfit", "label": "加碼前提：底倉獲利 ≥", "value": 3, "unit": "%", "min": 0, "max": 100, "note": "不攤平"},
     {"id": "pullbackDays", "label": "上車：回測觀察天數", "value": 10, "unit": "日", "min": 1, "max": 40, "note": ""},

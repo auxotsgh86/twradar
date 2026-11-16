@@ -592,6 +592,27 @@ def market_not_bull(c: Ctx) -> Res:
     return Res(FAIL) if x >= ma and ma >= prev else Res(PASS, "大盤非多頭")
 
 
+@condition("baseSettled", "起漲前籌碼沉澱", "entry", ("baseRangePct", "baseMarginPos"),
+           ("baseRangePct", "marginPos60", "marginChg20Pct"),
+           "起漲前約 55 日橫盤（高低差 ≤ 設定）、融資在近 60 日的低檔（位置 ≤ 設定）且近 20 日沒有增加")
+def base_settled(c: Ctx) -> Res:
+    rng, pos, chg = c.g("baseRangePct"), c.g("marginPos60"), c.g("marginChg20Pct")
+    if rng is None:
+        return Res(NA)
+    lack = []
+    if rng > c.P["baseRangePct"]:
+        lack.append(f"整理區間高低差 {rng:.0f}%（上限 {fmt(c.P['baseRangePct'], 0)}%）")
+    if pos is not None and pos > c.P["baseMarginPos"]:
+        lack.append(f"融資在近 60 日的 {pos:.0f}% 位置（上限 {fmt(c.P['baseMarginPos'], 0)}%）")
+    if chg is not None and chg > 0:
+        lack.append(f"融資近 20 日增加 {chg:+.1f}%")
+    if lack:
+        return Res(FAIL, need="起漲前籌碼沉澱：" + "；".join(lack))
+    if pos is None and chg is None:   # 沒有融資資料（不能信用交易的股票）：只看橫盤
+        return Res(PASS, f"整理區間高低差 {rng:.0f}%（無融資資料）")
+    return Res(PASS, f"整理區間高低差 {rng:.0f}%、融資低檔且未增加")
+
+
 @condition("biasMa5Ok", "未追高（5 日線乖離）", "entry", ("maxBiasMa5Pct",), ("close", "ma5"), "收盤距 5 日線不超過設定幅度")
 def bias_ma5_ok(c: Ctx) -> Res:
     close, ma5 = c.g("close"), c.g("ma5")

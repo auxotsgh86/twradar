@@ -431,6 +431,14 @@ class Provider:
 `RULES_VERSION = 5`；`default_playbooks()` ＝ `bull_playbooks(stop=True)`，以 `v04_playbooks()` 為底。設定與 v0.3、v0.4 預設相同者自動升級。
 多頭判斷用 `marketNotBull`：大盤資料不足時視為非多頭（停損照舊），避免資料缺漏時停損失效。依據見 STRATEGY.md 第 11 節。
 
+## 9.7.2 起漲前籌碼沉澱（2026-11-17，對照組，尚未採用）
+
+假設：試單（起漲第一棒）失敗的主因是假突破；先經過籌碼沉澱的第一棒才有效。
+- 條件 `baseSettled`：最近 5 日之前約 55 日的收盤高低差 ≤ `baseRangePct`（25%）、融資在近 60 日區間的位置 ≤ `baseMarginPos`（40%）、
+  融資近 20 個交易日沒有增加（`marginChg20Pct` ≤ 0）。沒有融資資料的股票只看橫盤。
+- 對照組 `settled`：加試單、加試單（須沉澱）、上車須沉澱。條件研究也會列出它的區分力。
+- 下一階段：集保歷史回補後，加入「大戶比例連續上升、股東人數下降」。
+
 ## 9.8 注意股、處置股（2026-11-16）
 
 - 來源（`twradar/providers/alerts.py`，格式依 2026/11 實際回應）：證交所 `announcement/notice`、`announcement/punish`；

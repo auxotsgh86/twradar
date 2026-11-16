@@ -1473,6 +1473,37 @@ class BacktestTests(unittest.TestCase):
         self.assertEqual(evaluate(r3, hold, P, Sh)["hold"]["light"], "keep")
         self.assertEqual(evaluate({**r3, "mktClose": 97, "mktMa20Prev": 99.5}, hold, P, Sh)["hold"]["light"], "reduce")
 
+    def test_base_settled(self):
+        """起漲前籌碼沉澱：橫盤、融資低檔且近 20 日未增加；對照組可用、試單另外要求沉澱。"""
+        from twradar import backtest as B
+        from twradar.settings import validate
+        S = self.st.get()
+        P = {**DEFAULT_RULES, **{p["id"]: p["value"] for p in S["params"]}}
+        ok = {"baseRangePct": 18.0, "marginPos60": 20.0, "marginChg20Pct": -3.0}
+        from twradar.conditions import BUILTIN, Ctx, FAIL, NA, PASS
+        f = BUILTIN["baseSettled"].fn
+        st = lambda rec: f(Ctx(rec, {"code": "X"}, P)).state   # noqa: E731
+        self.assertEqual(st(ok), PASS)
+        self.assertEqual(st({**ok, "baseRangePct": 40.0}), FAIL)
+        self.assertEqual(st({**ok, "marginPos60": 80.0}), FAIL)
+        self.assertEqual(st({**ok, "marginChg20Pct": 5.0}), FAIL)
+        self.assertEqual(st({"baseRangePct": 18.0}), PASS)            # 無融資資料：只看橫盤
+        self.assertEqual(st({}), NA)
+        self.assertIn("融資近 20 日增加", f(Ctx({**ok, "marginChg20Pct": 5.0}, {"code": "X"}, P)).need)
+        vs = dict(B.preset_variants(["settled"], S))
+        self.assertEqual(list(vs), ["加試單", "加試單（須籌碼沉澱）", "上車須籌碼沉澱"])
+        for over in vs.values():
+            self.assertEqual(validate(B.apply_variant(S, over)[0]), [])
+        trial = next(r for r in vs["加試單（須籌碼沉澱）"]["_playbooks"]["entry"] if r["label"] == "試單")
+        self.assertIn("baseSettled", trial["when"]["all"])
+        car = next(r for r in vs["上車須籌碼沉澱"]["_playbooks"]["entry"] if r["label"] == "上車")
+        self.assertIn("baseSettled", car["when"]["all"])
+        # 指標：股票池的紀錄有整理區間與融資 20 日變化
+        from twradar.backtest import History
+        rec = History(self.db, ["2330"], self.dates[-1]).rec("2330", self.dates[100], P)
+        self.assertIn("baseRangePct", rec)
+        self.assertIn("marginChg20Pct", rec)
+
     def test_condition_study(self):
         from twradar import backtest as B
         conf = B.BTConfig(start=self.dates[70], end=self.dates[-1], split=self.dates[110], study=True)

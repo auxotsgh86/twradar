@@ -293,6 +293,9 @@ def _indicators(q: list, ins: list, m, srcs: set | None, d: str, mh: list | None
             rec["ma20Prev"] = round(sum(closes[1:21]) / 20, 2)
         if len(closes) >= 60:
             rec["ma60"] = round(sum(closes[:60]) / 60, 2)
+        base = [r["close"] for r in q[5:61] if r["close"] is not None]   # 最近 5 日之前的約 55 日：起漲前的整理區間
+        if len(base) >= 50 and min(base) > 0:
+            rec["baseRangePct"] = round((max(base) / min(base) - 1) * 100, 1)
         p20 = [r["close"] for r in q[1:21] if r["close"] is not None]
         if len(p20) == 20:
             rec["prevHigh"] = round(max(p20), 2)
@@ -371,6 +374,8 @@ def _indicators(q: list, ins: list, m, srcs: set | None, d: str, mh: list | None
                 lo, hi = min(bals), max(bals)
                 rec["marginRange60"] = hi - lo
                 rec["marginPos60"] = round((m["margin_bal"] - lo) / (hi - lo) * 100, 1) if hi > lo else 0.0
+            if len(mh) > 20 and mh[20]["margin_bal"] and m["margin_bal"] is not None:   # 近 20 個交易日融資變化
+                rec["marginChg20Pct"] = round((m["margin_bal"] / mh[20]["margin_bal"] - 1) * 100, 1)
     if srcs:
         rec["source"] = "、".join(sorted(srcs))
     return {k: v for k, v in rec.items() if v is not None}
