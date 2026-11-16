@@ -225,8 +225,7 @@ async function viewStock(code) {
    ${rows.slice(-20).reverse().map(r => `<tr><td class="l num">${r.date}</td><td class="num">${fmt(r.close, pd(r.close))}</td><td class="num ${cls(r.change)}">${fmtS(r.change, pd(r.close))}</td><td class="num">${fmt(r.volume)}</td><td class="num">${fmt(r.ma20, 2)}</td><td class="num">${fmt(r.ma60, 2)}</td><td class="num ${cls(r.foreign)}">${fmtS(r.foreign)}</td><td class="num ${cls(r.trust)}">${fmtS(r.trust)}</td><td class="num">${fmtS(r.dealer)}</td><td class="num">${fmtS(r.marginChg)}</td><td class="num">${fmt(r.marginBal)}</td></tr>`).join("")}
    </tbody></table></div>`;
   const add = $("#addThis");
-  if (add) add.onclick = async () => { try { const j = await api("/watchlist", {method: "POST", body: JSON.stringify({code})});
-    toast(`已加入 ${j.stock.code} ${j.stock.name}，歷史資料會在背景補齊`); add.remove(); } catch (err) { toast(err.message); } };
+  if (add) add.onclick = () => addStockDialog({code, name: h.name, market: h.market}, () => viewStock(code));
 }
 
 /* ---------- 頁面：報表 ---------- */
@@ -391,11 +390,12 @@ function bindWatchPanel(wl, labels, rules) {
   const q = $("#addQ"), sug = $("#addSug"); let timer = 0, seq = 0;
   q.addEventListener("input", () => { clearTimeout(timer); const v = q.value.trim(); if (!v) { sug.hidden = true; return; }
     timer = setTimeout(async () => { const my = ++seq; let hits = []; try { hits = await api("/stocks/search?q=" + encodeURIComponent(v)); } catch (e) {} if (my !== seq) return;
-      sug.innerHTML = hits.length ? hits.map(h => `<button type="button" data-code="${esc(h.code)}"${h.inWatchlist ? " disabled" : ""}><b class="num">${esc(h.code)}</b> ${esc(h.name)} <span class="small muted">${mktName(h.market)}${h.inWatchlist ? "・已在清單" : ""}</span></button>`).join("")
+      sug.innerHTML = hits.length ? hits.map(h => `<button type="button" data-code="${esc(h.code)}" data-name="${esc(h.name)}" data-market="${esc(h.market)}"${h.inWatchlist ? " disabled" : ""}><b class="num">${esc(h.code)}</b> ${esc(h.name)} <span class="small muted">${mktName(h.market)}${h.inWatchlist ? "・已在清單" : ""}</span></button>`).join("")
         : `<div class="small muted" style="padding:8px 10px">找不到「${esc(v)}」。資料庫裡沒有這檔的行情時，按 Enter 也無法加入。</div>`;
       sug.hidden = false; }, 180); });
   q.addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); const first = sug.querySelector("button:not([disabled])"); if (!sug.hidden && first && sug.querySelectorAll("button").length === 1) addStock({code: first.dataset.code}); else if (q.value.trim()) addStock({q: q.value.trim()}); } else if (ev.key === "Escape") sug.hidden = true; });
-  sug.addEventListener("click", ev => { const b = ev.target.closest("button[data-code]"); if (b) addStock({code: b.dataset.code}); });
+  sug.addEventListener("click", ev => { const b = ev.target.closest("button[data-code]"); if (!b) return;
+    sug.hidden = true; addStockDialog({code: b.dataset.code, name: b.dataset.name, market: b.dataset.market}, reload); });
   /* 標籤篩選 */
   const active = new Set();
   document.querySelectorAll("#lblFilter [data-f]").forEach(b => b.onclick = () => { active.has(b.dataset.f) ? active.delete(b.dataset.f) : active.add(b.dataset.f); b.classList.toggle("on");
@@ -438,10 +438,17 @@ function editStrategy(l, labels, rules, putLabels, plain) {
       s.querySelector("#stSave").onclick = () => { if (Object.values(ov).some(v => !isFinite(v))) { toast("覆寫的值必須是數字"); return; }
         putLabels(labels.map(x => x.name === l.name ? {...plain(x), params: ov, allowAdd: s.querySelector("#stAdd").checked} : plain(x)), null, "已儲存策略並重新分析"); }; });
 }
+/* 加入觀察：和設定頁的編輯視窗相同，可直接填標籤、持有、成本等 */
+async function addStockDialog(base, onDone) {
+  const labels = await loadLabels();
+  editStock({code: base.code, name: base.name || "", market: base.market || "TWSE", labels: [], note: "", keyLevel: null, holding: false,
+    cost: null, shares: null, buyDate: null, isNew: true}, labels, null, onDone || (() => {}));
+}
 function editStock(w, labels, rules, reload) {
   let cur = [...w.labels];
   sheet(`<div class="row between"><h2><span class="num">${esc(w.code)}</span> ${esc(w.name)}</h2><span class="small muted">${mktName(w.market)}</span></div>
-    <div class="tabs2" role="tablist"><button type="button" role="tab" data-tab="base" class="on">基本</button><button type="button" role="tab" data-tab="rules">規則</button><button type="button" role="tab" data-tab="trial">試算</button></div>
+    ${w.isNew ? `<div class="small muted">加入觀察清單：以下都可以之後再改；標籤裡貼「策略::名稱」會套用那個策略的規則。</div>` : ""}
+    <div class="tabs2" role="tablist"${w.isNew ? " hidden" : ""}><button type="button" role="tab" data-tab="base" class="on">基本</button><button type="button" role="tab" data-tab="rules">規則</button><button type="button" role="tab" data-tab="trial">試算</button></div>
     <form id="pane-base" style="display:flex;flex-direction:column;gap:10px">
       <div class="field"><label>標籤</label><div id="eLabels" class="row"></div>
         <input id="eLabelIn" list="eLabelList" placeholder="輸入後按 Enter；策略::名稱 會套用那個策略的規則" maxlength="30"><datalist id="eLabelList">${labels.map(l => `<option value="${esc(l.name)}">`).join("")}</datalist></div>
@@ -453,7 +460,7 @@ function editStock(w, labels, rules, reload) {
        <div class="field"><label for="e-buy">買進日期（保本線、除權息調整成本用）</label><input id="e-buy" type="date" value="${w.buyDate ? esc(w.buyDate.replace(/^(\d{4})-?(\d{2})-?(\d{2})$/, "$1-$2-$3")) : ""}"></div>
        <div class="field"><label for="e-name">名稱</label><input id="e-name" value="${esc(w.name)}"></div></div>
       <div class="small muted">持有中要填成本，停損與出場的提示才會啟動；填了買進日期，之後的除權息、減資、分割會自動調整成本。</div>
-      <div class="row" style="justify-content:flex-end"><button type="button" data-close>取消</button><button class="primary">儲存</button></div></form>
+      <div class="row" style="justify-content:flex-end"><button type="button" data-close>取消</button><button class="primary">${w.isNew ? "加入觀察" : "儲存"}</button></div></form>
     <div id="pane-rules" hidden></div><div id="pane-trial" hidden></div>`,
     s => { const q = x => s.querySelector(x);
       const draw = () => { q("#eLabels").innerHTML = cur.map(n => chip(n, `<button type="button" class="x" data-x="${esc(n)}" aria-label="移除 ${esc(n)}">×</button>`)).join(" ") || `<span class="small muted">沒有標籤</span>`;
@@ -465,7 +472,7 @@ function editStock(w, labels, rules, reload) {
       q("#pane-base").addEventListener("submit", async ev => { ev.preventDefault(); add(q("#eLabelIn").value);
         const b = {code: w.code, name: q("#e-name").value.trim() || w.name, market: w.market, labels: cur, note: q("#e-note").value.trim(), keyLevel: q("#e-key").value ? Number(q("#e-key").value) : null,
           holding: q("#e-hold").value === "1", cost: q("#e-cost").value ? Number(q("#e-cost").value) : null, shares: q("#e-shares").value ? parseInt(q("#e-shares").value, 10) : null, buyDate: q("#e-buy").value || null};
-        try { await api("/watchlist", {method: "POST", body: JSON.stringify(b)}); await api("/analyze", {method: "POST", body: "{}"}).catch(() => {}); $("#layer").innerHTML = ""; toast("已儲存 " + w.code); reload(); } catch (err) { toast(err.message); } });
+        try { await api("/watchlist", {method: "POST", body: JSON.stringify(b)}); await api("/analyze", {method: "POST", body: "{}"}).catch(() => {}); $("#layer").innerHTML = ""; toast((w.isNew ? "已加入 " : "已儲存 ") + w.code + (w.isNew ? "，歷史資料會在背景補齊" : "")); reload(); } catch (err) { toast(err.message); } });
       const dirty = () => JSON.stringify(cur) !== JSON.stringify(w.labels) ? `<div class="banner warn small">標籤有變更但還沒儲存；這裡顯示的是儲存前的狀態。</div>` : "";
       const st = {pass: "✓", fail: "✕", na: "?"};
       const load = {
@@ -517,8 +524,8 @@ async function viewScan() {
         「注意」「處置中」為交易所公告（處置期間改為分盤撮合，大量委託須預收款券，流動性大減）。名單只依公開資料機械式篩選，未考慮基本面與個別風險，不構成投資建議。</div></section>`;
     $("#scanM").onchange = ev => { scanMethod = ev.target.value; draw(); applySorts(); };
     document.querySelectorAll("[data-from=scan]").forEach(x => x.onclick = () => { try { sessionStorage.setItem("twradar-from", "scan"); } catch (e) {} });
-    document.querySelectorAll("[data-add]").forEach(b => b.onclick = async () => { try { const j = await api("/watchlist", {method: "POST", body: JSON.stringify({code: b.dataset.add})});
-      toast(`已加入 ${j.stock.code} ${j.stock.name}`); b.outerHTML = `<span class="small muted">已在清單</span>`; } catch (err) { toast(err.message); } });
+    document.querySelectorAll("[data-add]").forEach(b => b.onclick = () => { const r = m.rows.find(x => x.code === b.dataset.add);
+      addStockDialog({code: r.code, name: r.name, market: r.market}, () => { r.inWatchlist = true; b.outerHTML = `<span class="small muted">已在清單</span>`; }); });
   };
   draw();
 }
