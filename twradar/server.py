@@ -256,10 +256,21 @@ class App:
         return [{**lb, "count": n.get(lb["name"], 0), "scope": L.scope_of(lb["name"]),
                  "strategy": L.is_strategy(lb["name"])} for lb in S["labels"]]
 
-    def stock_rules(self, code: str) -> dict | None:
+    def _stock_for(self, S: dict, code: str, labels: list[str] | None = None) -> dict | None:
+        """觀察清單裡的設定；不在清單但資料庫有行情的股票，當成沒有標籤的新股票。labels：用編輯中（還沒儲存）的標籤。"""
+        w = next((x for x in S["watchlist"] if x["code"] == code), None)
+        if w is None:
+            if not self.db.one("SELECT 1 AS x FROM quotes WHERE code=? LIMIT 1", (code,)):
+                return None
+            w = {"code": code, "labels": []}
+        if labels is not None:
+            w = {**w, "labels": L.clean(labels)}
+        return w
+
+    def stock_rules(self, code: str, labels: list[str] | None = None) -> dict | None:
         """這檔股票實際套用的參數，以及每個值來自策略標籤還是全域預設。"""
         S = self.settings.get()
-        w = next((x for x in S["watchlist"] if x["code"] == code), None)
+        w = self._stock_for(S, code, labels)
         if not w:
             return None
         lb = L.strategy_of(S, w)
@@ -270,10 +281,10 @@ class App:
                             "value": ov.get(p["id"], p["value"]), "source": "label" if p["id"] in ov else "default"}
                            for p in S["params"]]}
 
-    def stock_trial(self, code: str) -> dict | None:
+    def stock_trial(self, code: str, labels: list[str] | None = None) -> dict | None:
         """用最近一個交易日的資料試算，逐條列出條件是否成立。"""
         S = self.settings.get()
-        w = next((x for x in S["watchlist"] if x["code"] == code), None)
+        w = self._stock_for(S, code, labels)
         d = self.latest_date()
         if not w or not d:
             return None
@@ -635,7 +646,10 @@ def make_handler(app: App):
 
             if head == "watchlist" and len(parts) == 3 and parts[2] in ("rules", "trial") and method == "GET":
                 code = parts[1].upper()
-                out = app.stock_rules(code) if parts[2] == "rules" else app.stock_trial(code)
+                # labels= 空字串（parse_qs 會丟掉）＝編輯中把標籤都拿掉了
+                labs = ([x for x in qs["labels"][0].split(",") if x] if "labels" in qs
+                        else [] if re.search(r"[?&]labels=(&|$)", self.path) else None)
+                out = app.stock_rules(code, labs) if parts[2] == "rules" else app.stock_trial(code, labs)
                 return self.json(out) if out else self.err(404, f"{code} 不在觀察清單，或還沒有資料")
 
             if head == "stocks" and len(parts) >= 3 and parts[2] == "history" and method == "GET":

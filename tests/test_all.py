@@ -674,6 +674,12 @@ class AuthApiTests(unittest.TestCase):
         self.assertEqual((prm["stopLossPct"]["value"], prm["stopLossPct"]["source"], prm["stopLossPct"]["default"]), (6, "label", 10))
         self.assertEqual(prm["profitTargetPct"]["source"], "default")
         self.assertIsNone(self.call("/api/v1/watchlist/3163/rules", headers=R)[1]["strategy"])
+        # 還沒加入的股票（資料庫有行情）也能看規則與試算；labels 參數＝編輯中還沒儲存的標籤
+        st, js, _ = self.call("/api/v1/watchlist/2308/rules?labels=" + urllib.parse.quote("策略::穩健"), headers=R)
+        self.assertEqual((st, js["strategy"]), (200, "策略::穩健"))
+        self.assertIsNone(self.call("/api/v1/watchlist/2308/rules", headers=R)[1]["strategy"])
+        self.assertEqual(self.call("/api/v1/watchlist/3017/rules?labels=", headers=R)[1]["strategy"], None)
+        self.assertEqual(self.call("/api/v1/watchlist/9999/rules", headers=R)[0], 404)
         # 改名跟著改；刪掉的標籤從個股拿掉
         new2 = [{"name": "策略::保守", "color": "#1f75cb", "params": {"stopLossPct": 6}}]
         st, js, _ = self.call("/api/v1/labels", "PUT", {"labels": new2, "renames": {"策略::穩健": "策略::保守"}}, A)

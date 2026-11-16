@@ -448,7 +448,7 @@ function editStock(w, labels, rules, reload) {
   let cur = [...w.labels];
   sheet(`<div class="row between"><h2><span class="num">${esc(w.code)}</span> ${esc(w.name)}</h2><span class="small muted">${mktName(w.market)}</span></div>
     ${w.isNew ? `<div class="small muted">加入觀察清單：以下都可以之後再改；標籤裡貼「策略::名稱」會套用那個策略的規則。</div>` : ""}
-    <div class="tabs2" role="tablist"${w.isNew ? " hidden" : ""}><button type="button" role="tab" data-tab="base" class="on">基本</button><button type="button" role="tab" data-tab="rules">規則</button><button type="button" role="tab" data-tab="trial">試算</button></div>
+    <div class="tabs2" role="tablist"><button type="button" role="tab" data-tab="base" class="on">基本</button><button type="button" role="tab" data-tab="rules">規則</button><button type="button" role="tab" data-tab="trial">試算</button></div>
     <form id="pane-base" style="display:flex;flex-direction:column;gap:10px">
       <div class="field"><label>標籤</label><div id="eLabels" class="row"></div>
         <input id="eLabelIn" list="eLabelList" placeholder="輸入後按 Enter；策略::名稱 會套用那個策略的規則" maxlength="30"><datalist id="eLabelList">${labels.map(l => `<option value="${esc(l.name)}">`).join("")}</datalist></div>
@@ -473,15 +473,17 @@ function editStock(w, labels, rules, reload) {
         const b = {code: w.code, name: q("#e-name").value.trim() || w.name, market: w.market, labels: cur, note: q("#e-note").value.trim(), keyLevel: q("#e-key").value ? Number(q("#e-key").value) : null,
           holding: q("#e-hold").value === "1", cost: q("#e-cost").value ? Number(q("#e-cost").value) : null, shares: q("#e-shares").value ? parseInt(q("#e-shares").value, 10) : null, buyDate: q("#e-buy").value || null};
         try { await api("/watchlist", {method: "POST", body: JSON.stringify(b)}); await api("/analyze", {method: "POST", body: "{}"}).catch(() => {}); $("#layer").innerHTML = ""; toast((w.isNew ? "已加入 " : "已儲存 ") + w.code + (w.isNew ? "，歷史資料會在背景補齊" : "")); reload(); } catch (err) { toast(err.message); } });
-      const dirty = () => JSON.stringify(cur) !== JSON.stringify(w.labels) ? `<div class="banner warn small">標籤有變更但還沒儲存；這裡顯示的是儲存前的狀態。</div>` : "";
+      const dirty = () => w.isNew ? `<div class="small muted">還沒加入觀察清單：以目前選的標籤試算，持有、成本等要加入後才會納入。</div>`
+        : JSON.stringify(cur) !== JSON.stringify(w.labels) ? `<div class="small muted">以目前選的標籤（還沒儲存）計算。</div>` : "";
+      const lq = () => "?labels=" + encodeURIComponent(cur.join(","));
       const st = {pass: "✓", fail: "✕", na: "?"};
       const load = {
-        rules: async el => { const r = await api(`/watchlist/${w.code}/rules`); const ov = r.params.filter(p => p.source === "label"), rest = r.params.filter(p => p.source !== "label");
+        rules: async el => { const r = await api(`/watchlist/${w.code}/rules` + lq()); const ov = r.params.filter(p => p.source === "label"), rest = r.params.filter(p => p.source !== "label");
           el.innerHTML = `${dirty()}<div>${r.strategy ? `套用 ${chip(r.strategy)} <span class="small muted">共 ${r.affected} 檔使用</span>` : `套用<b>全域預設</b> <span class="small muted">（沒有貼「策略::」標籤）</span>`}${r.allowAdd ? "" : "　<b>不加碼</b>"}</div>
             <div class="small muted">規則跟著標籤走，個股本身不放規則。要調整請編輯策略標籤（設定頁「標籤」），會影響所有貼了它的股票。</div>
             <div class="tablewrap"><table><thead><tr><th class="l">參數</th><th>套用值</th><th class="l">來源</th></tr></thead><tbody>
             ${[...ov, ...rest].map(p => `<tr><td class="l" style="white-space:normal">${esc(p.label)}</td><td class="num">${p.value}${esc(p.unit || "")}</td><td class="l">${p.source === "label" ? `<b>策略標籤</b> <span class="small muted">預設 ${p.default}</span>` : `<span class="muted">預設</span>`}</td></tr>`).join("")}</tbody></table></div>`; },
-        trial: async el => { const t = await api(`/watchlist/${w.code}/trial`); const h = t.hold;
+        trial: async el => { const t = await api(`/watchlist/${w.code}/trial` + lq()); const h = t.hold;
           el.innerHTML = `${dirty()}<div class="row">${badge(t.light, t.lightLabel)}${h ? badge(h.light) : ""}<span class="small muted">資料日 ${esc(t.date)}・${t.strategy ? esc(t.strategy) : "全域預設"}${t.rule ? "・觸發規則：" + esc(t.rule) : ""}</span></div>
             ${t.needs.length ? `<div class="small"><b>還差：</b>${esc(t.needs.join("；"))}</div>` : ""}${t.warnings.length ? `<div class="small"><b>原因：</b>${esc(t.warnings.join("；"))}</div>` : ""}
             ${h ? `<div class="small"><b>持有：</b>${esc(holdLine(h))}</div>` : ""}${t.missing.length ? `<div class="small"><b>未取得：</b>${esc(t.missing.join("、"))}</div>` : ""}
