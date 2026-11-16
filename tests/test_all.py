@@ -1515,6 +1515,21 @@ class BacktestTests(unittest.TestCase):
         self.assertEqual((snap["regime"], SC.DEFAULT_METHOD), ("多頭", "法人"))
         from twradar.server import App
         app = App(self.cfg, self.db, self.st, start_background=False)
+        # 不在觀察清單的股票也能看走勢與籌碼，並附雷達判定
+        saved = self.st.get()["watchlist"]
+        self.st.update(lambda x: x.__setitem__("watchlist", [w for w in x["watchlist"] if w["code"] != "2454"]))
+        try:
+            info = app.stock_info("2454")
+            self.assertEqual((info["name"], info["market"], info["inWatchlist"]), ("聯發科", "TWSE", False))
+            self.assertIn(info["signal"]["light"], ("go", "wait", "stop", "na"))
+            self.assertIsNone(info["signal"]["hold"])
+            hist = app.history("2454", 60)
+            self.assertEqual(len(hist), 60)
+            self.assertTrue(any(r["foreign"] is not None for r in hist))
+            self.assertTrue(app.stock_info("2330")["inWatchlist"])
+            self.assertIsNone(app.stock_info("9999")["signal"])
+        finally:
+            self.st.update(lambda x: x.__setitem__("watchlist", saved))
         api = app.scan(d)
         self.assertIn("inWatchlist", api["methods"]["相對強度"]["rows"][0])
         self.assertIs(app._scan_cache[d], app._scan_cache[d])

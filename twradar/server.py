@@ -182,6 +182,29 @@ class App:
                         "ma60": round(sum(c60) / 60, 2) if len(c60) == 60 else None})
         return out[-days:]
 
+    def stock_info(self, code: str) -> dict:
+        """個股頁的標頭：名稱、市場、是否在觀察清單、注意／處置，以及雷達對它的判定（以未持有判定；觀察清單的股票照它的設定）。"""
+        S = self.settings.get()
+        w = next((x for x in S["watchlist"] if x["code"] == code), None)
+        q = self.db.one("SELECT name, market FROM quotes WHERE code=? ORDER BY date DESC LIMIT 1", (code,))
+        d = self.latest_date()
+        out = {"name": (w or {}).get("name") or (q["name"] if q else None), "market": (w or {}).get("market") or (q["market"] if q else None),
+               "inWatchlist": w is not None, "date": d, "alert": None, "signal": None}
+        if not d or not q:
+            return out
+        out["alert"] = self.db.alerts_for([code], d).get(code)
+        try:
+            R = rules_of(self.settings)
+            stock = w or {"code": code, "labels": []}
+            Pw, Sw, strat = L.resolve(S, stock, R)
+            rec = indicators_many(self.db, [code], d, R, {code: stock})[code]
+            sig = evaluate(rec, stock, Pw, Sw)
+            out["signal"] = {k: sig.get(k) for k in ("light", "lightLabel", "rule", "needs", "warnings", "missing", "hold")}
+            out["signal"]["strategy"] = strat
+        except Exception:  # noqa: BLE001  判定失敗不影響圖表
+            log.exception("stock_info %s", code)
+        return out
+
     def lookup(self, q: str, limit: int = 12) -> list[dict]:
         """用代號或名稱找股票（資料庫裡最近幾個交易日的全市場行情，不連外）。"""
         q = q.strip().upper()
@@ -621,8 +644,7 @@ def make_handler(app: App):
                 rows = app.history(code, days)
                 if fmt == "csv":
                     return self.csv_out(rows, list(rows[0].keys()) if rows else ["date"], f"twradar-{code}-history.csv")
-                w = next((x for x in app.settings.watchlist() if x["code"] == code), None)
-                return self.json({"code": code, "name": w["name"] if w else None, "days": len(rows), "rows": rows})
+                return self.json({"code": code, **app.stock_info(code), "days": len(rows), "rows": rows})
 
             if head == "settings":
                 return self.settings_api(method, parts, qs)

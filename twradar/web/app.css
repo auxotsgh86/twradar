@@ -121,3 +121,4 @@ table.sortable thead th:not([data-nosort]){cursor:pointer;user-select:none}
 table.sortable thead th[aria-sort=ascending]::after{content:" ▲";font-size:9px}table.sortable thead th[aria-sort=descending]::after{content:" ▼";font-size:9px}
 input[type=color]{padding:2px;width:36px;height:28px}
 [hidden]{display:none!important}
+a.plain{color:inherit;text-decoration:none}a.plain:hover{text-decoration:underline}

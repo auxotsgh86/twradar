@@ -208,9 +208,14 @@ async function viewStock(code) {
   const days = 120;
   const h = await api(`/stocks/${code}/history?days=${days}`);
   const rows = h.rows, L = rows.map(r => r.date), last = rows[rows.length - 1] || {};
-  const r60 = rows.slice(-60), L60 = r60.map(r => r.date);
+  const r60 = rows.slice(-60), L60 = r60.map(r => r.date), g = h.signal;
+  const back = (document.referrer || "").includes("#/scan") || sessionStorage.getItem("twradar-from") === "scan" ? "#/scan" : "#/";
   $("#view").innerHTML = `
-   <div class="row between"><h1>${esc(code)} ${esc(h.name || "")}</h1><div class="row"><a class="btn" href="#/">← 總覽</a><a class="btn" href="${withTok(`/api/v1/stocks/${code}/history?days=250&format=csv`)}">下載歷史 CSV</a></div></div>
+   <div class="row between"><div><h1>${esc(code)} ${esc(h.name || "")}</h1><div class="small muted">${h.market ? mktName(h.market) : ""} ${alertBadge(h.alert)}</div></div>
+     <div class="row"><a class="btn" href="${back}">← ${back === "#/scan" ? "全市場" : "總覽"}</a>${h.inWatchlist ? "" : `<button class="primary" id="addThis">加入觀察</button>`}<a class="btn" href="${withTok(`/api/v1/stocks/${code}/history?days=250&format=csv`)}">下載歷史 CSV</a></div></div>
+   ${g ? `<section class="panel" style="display:flex;flex-direction:column;gap:6px"><div class="row">${badge(g.light, g.lightLabel)}${g.hold ? badge(g.hold.light) : ""}<span class="small muted">雷達判定（資料日 ${esc(h.date || "")}${h.inWatchlist ? "" : "，不在觀察清單，以未持有、全域預設規則判定"}${g.rule ? "・" + esc(g.rule) : ""}）</span></div>
+     ${g.needs && g.needs.length ? `<div class="small"><b>還差：</b>${esc(g.needs.join("；"))}</div>` : ""}${g.warnings && g.warnings.length ? `<div class="small"><b>原因：</b>${esc(g.warnings.join("；"))}</div>` : ""}
+     ${g.missing && g.missing.length ? `<div class="small muted">未取得：${esc(g.missing.join("、"))}${h.inWatchlist ? "" : "（集保大戶、散戶資料只抓觀察清單的股票）"}</div>` : ""}</section>` : ""}
    <section class="panel"><div class="row between"><h2>收盤價與均線（近 ${rows.length} 日）</h2><div class="legend"><span><i style="background:var(--fg)"></i>收盤</span><span><i style="background:var(--c-ma20)"></i>月線 MA20</span><span><i style="background:var(--c-ma60)"></i>季線 MA60</span></div></div>
     ${lineChart(L, [{values: rows.map(r => r.close), color: "var(--fg)", width: 2, dot: true}, {values: rows.map(r => r.ma20), color: "var(--c-ma20)"}, {values: rows.map(r => r.ma60), color: "var(--c-ma60)"}], {h: 300, bars: rows.map(r => r.volume)})}</section>
    <section class="panel"><div class="row between"><h2>外資／投信買賣超（張，近 60 日）</h2><div class="legend"><span><i style="background:var(--c-foreign)"></i>外資</span><span><i style="background:var(--c-trust)"></i>投信</span></div></div>
@@ -219,6 +224,9 @@ async function viewStock(code) {
    <h2>近 20 日明細</h2><div class="tablewrap"><table><thead><tr><th class="l">日期</th><th>收盤</th><th>漲跌</th><th>成交量</th><th>月線</th><th>季線</th><th>外資</th><th>投信</th><th>自營</th><th>融資增減</th><th>融資餘額</th></tr></thead><tbody>
    ${rows.slice(-20).reverse().map(r => `<tr><td class="l num">${r.date}</td><td class="num">${fmt(r.close, pd(r.close))}</td><td class="num ${cls(r.change)}">${fmtS(r.change, pd(r.close))}</td><td class="num">${fmt(r.volume)}</td><td class="num">${fmt(r.ma20, 2)}</td><td class="num">${fmt(r.ma60, 2)}</td><td class="num ${cls(r.foreign)}">${fmtS(r.foreign)}</td><td class="num ${cls(r.trust)}">${fmtS(r.trust)}</td><td class="num">${fmtS(r.dealer)}</td><td class="num">${fmtS(r.marginChg)}</td><td class="num">${fmt(r.marginBal)}</td></tr>`).join("")}
    </tbody></table></div>`;
+  const add = $("#addThis");
+  if (add) add.onclick = async () => { try { const j = await api("/watchlist", {method: "POST", body: JSON.stringify({code})});
+    toast(`已加入 ${j.stock.code} ${j.stock.name}，歷史資料會在背景補齊`); add.remove(); } catch (err) { toast(err.message); } };
 }
 
 /* ---------- 頁面：報表 ---------- */
@@ -497,7 +505,7 @@ async function viewScan() {
         ${weak ? "<br><b>這個排序在樣本外沒有勝過全市場，名單僅供對照。</b>" : ""}${!weak && reg !== null && reg < 0 ? `<br><b>這個排序在大盤${esc(s.regime)}時落後全市場。</b>` : ""}` : "還沒有回溯驗證結果（執行 deploy/backtest.sh 後會顯示）。"}
         <br>買賣一趟的費用與稅約 0.6%，超額報酬扣掉後所剩不多：這是研究名單，不是買進建議。</div>
       ${m.rows.length ? `<div class="tablewrap"><table class="sortable" data-sort="scan-${esc(scanMethod)}"><thead><tr><th>#</th><th class="l">代號</th><th class="l">名稱</th><th class="l">市場</th><th>收盤</th><th>法人 5 日買超<br>佔成交量</th><th>20 日<br>贏大盤</th><th>60 日<br>贏大盤</th><th>5 日線<br>乖離</th><th class="l">當日<br>轉弱</th><th>月線<br>乖離</th><th>日均額<br>（億）</th><th data-nosort></th></tr></thead><tbody>
-        ${m.rows.map((r, i) => `<tr><td class="num">${i + 1}</td><td class="l num">${r.inWatchlist ? `<a href="#/stock/${esc(r.code)}">${esc(r.code)}</a>` : esc(r.code)}</td><td class="l">${esc(r.name)}${r.alert ? " " + alertBadge(r.alert) : ""}</td><td class="l">${mktName(r.market)}</td><td class="num">${fmt(r.close, pd(r.close))}</td>
+        ${m.rows.map((r, i) => `<tr><td class="num">${i + 1}</td><td class="l num"><a href="#/stock/${esc(r.code)}" data-from="scan" title="看走勢與籌碼">${esc(r.code)}</a></td><td class="l"><a href="#/stock/${esc(r.code)}" data-from="scan" class="plain">${esc(r.name)}</a>${r.alert ? " " + alertBadge(r.alert) : ""}</td><td class="l">${mktName(r.market)}</td><td class="num">${fmt(r.close, pd(r.close))}</td>
           <td class="num ${cls(r.inst5Pct)}">${isNum(r.inst5Pct) ? fmtS(r.inst5Pct, 1) + "%" : "—"}</td><td class="num ${cls(r.rs20)}">${fmtS(r.rs20, 1)}%</td><td class="num ${cls(r.rs60)}">${fmtS(r.rs60, 1)}%</td>
           <td class="num" data-v="${isNum(r.bias5) ? r.bias5 : ""}">${isNum(r.bias5) ? fmtS(r.bias5, 1) + "%" : "—"}${r.hot ? ` <span class="badge wait" title="5 日乖離在這檔自己近一年的前 10%">偏熱</span>` : ""}</td>
           <td class="l" data-v="${r.weak ? 0 : 1}">${r.weak ? `<span class="badge stop" title="當天${esc(r.weak)}（${fmtP(r.chgPct)}、量比 ${fmt(r.volRatio, 1)}）：賣壓大於買盤">${esc(r.weak)}</span>` : ""}</td>
@@ -508,6 +516,7 @@ async function viewScan() {
         「法人」依外資＋投信近 5 日累計買超佔成交量排序；「相對強度」依近 20、60 日漲幅勝過加權指數的幅度；「不追高」排除標示偏熱的股票；「當日轉弱」＝爆量長黑（跌 ≥ 3%、量比 ≥ 1.5）或爆量長上影黑 K，「排除轉弱」的排序會拿掉這些股票。
         「注意」「處置中」為交易所公告（處置期間改為分盤撮合，大量委託須預收款券，流動性大減）。名單只依公開資料機械式篩選，未考慮基本面與個別風險，不構成投資建議。</div></section>`;
     $("#scanM").onchange = ev => { scanMethod = ev.target.value; draw(); applySorts(); };
+    document.querySelectorAll("[data-from=scan]").forEach(x => x.onclick = () => { try { sessionStorage.setItem("twradar-from", "scan"); } catch (e) {} });
     document.querySelectorAll("[data-add]").forEach(b => b.onclick = async () => { try { const j = await api("/watchlist", {method: "POST", body: JSON.stringify({code: b.dataset.add})});
       toast(`已加入 ${j.stock.code} ${j.stock.name}`); b.outerHTML = `<span class="small muted">已在清單</span>`; } catch (err) { toast(err.message); } });
   };
@@ -521,6 +530,7 @@ async function route() {
   document.querySelectorAll("#tabs a").forEach(a => a.classList.toggle("on", a.dataset.tab === (["report", "settings", "scan"].includes(page) ? page : "home")));
   try {
     if (page !== "settings" && !Object.keys(LABELS).length) await loadLabels();
+    if (page !== "stock") { try { sessionStorage.removeItem("twradar-from"); } catch (e) {} }
     if (page === "report") await viewReport(arg);
     else if (page === "settings") await viewSettings();
     else if (page === "scan") await viewScan();
