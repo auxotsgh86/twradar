@@ -1504,6 +1504,35 @@ class BacktestTests(unittest.TestCase):
         self.assertIn("baseRangePct", rec)
         self.assertIn("marginChg20Pct", rec)
 
+    def test_scan_live_tracking(self):
+        """全市場清單上線後追蹤：記錄股票池與名次、回填報酬（定義同回溯）、摘要。"""
+        from twradar import scan as SC
+        from twradar import scantrack as T
+        from twradar.backtest import History
+        cfg = SC.ScanConfig(top=2, min_value=0)
+        ds = self.dates[100:125]
+        try:
+            self.assertEqual(T.summary(self.db)["days"], 0)
+            for d in ds:
+                T.record(self.db, d, cfg)
+            r = self.db.one("SELECT * FROM scan_track WHERE date=? AND code='2330'", (self.dates[119],))
+            self.assertEqual(r["trend"], 1)
+            self.assertEqual(json.loads(r["ranks"])["相對強度"], 1)
+            self.assertIsNone(r["f5"])                       # 記錄時不知道未來
+            self.assertGreater(T.update_forward(self.db, self.dates[-1]), 0)
+            r = self.db.one("SELECT * FROM scan_track WHERE date=? AND code='2330'", (self.dates[119],))
+            self.assertAlmostEqual(r["f5"], History(self.db, ["2330"], self.dates[-1]).fwd("2330", self.dates[119])[5], 3)
+            s = T.refresh(self.db)
+            self.assertEqual((s["since"], s["days"]), (ds[0], len(ds)))
+            self.assertGreater(s["methods"]["相對強度"]["全市場"]["f5"]["days"], 0)
+            self.assertEqual(T.cached(self.db)["days"], len(ds))
+            T.record(self.db, ds[0], cfg)                   # 重跑同一天：覆蓋、不重複
+            self.assertEqual(self.db.one("SELECT COUNT(DISTINCT date) AS n FROM scan_track")["n"], len(ds))
+        finally:
+            with self.db.tx() as c:
+                c.execute("DELETE FROM scan_track")
+            self.db.set_setting("scanTracking", None)
+
     def test_condition_study(self):
         from twradar import backtest as B
         conf = B.BTConfig(start=self.dates[70], end=self.dates[-1], split=self.dates[110], study=True)

@@ -169,6 +169,14 @@ class Crawler:
         except Exception as e:  # noqa: BLE001
             log.exception("追蹤 %s 失敗", d)
             self.db.log("warn", f"{d} 模型追蹤失敗：{e!r}")
+        # 全市場清單：只從上線後的日子往後記錄（補歷史時不記，避免把看過的資料當成新證據）
+        if (to_date(now_tw().strftime("%Y%m%d")) - to_date(d)).days <= 7:
+            from . import scantrack
+            try:
+                scantrack.daily(self.db, d)
+            except Exception as e:  # noqa: BLE001
+                log.exception("全市場追蹤 %s 失敗", d)
+                self.db.log("warn", f"{d} 全市場清單追蹤失敗：{e!r}")
 
     def crawl_weekly(self, d: str) -> str | None:
         """集保股權分散表：上次資料距今滿 7 天才抓（每週一次）；失敗只記錄，不影響當日狀態。"""

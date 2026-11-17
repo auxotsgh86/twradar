@@ -496,6 +496,12 @@ function editStock(w, labels, rules, reload) {
 }
 
 /* ---------- 全市場強勢注意清單 ---------- */
+function liveLine(live, m) {
+  if (!live || !live.since) return `<b>上線後追蹤：</b>從下一個交易日起每天記錄，滿 10 個交易日後開始顯示實際表現。`;
+  const x = ((live.methods || {})[m] || {})["全市場"] || {}, f = x.f10 || {};
+  if (!f.days) return `<b>上線後追蹤：</b>自 ${esc(mmdd(live.since))} 起已記錄 ${live.days} 天，還沒有滿 10 個交易日的紀錄。`;
+  return `<b>上線後追蹤（真正沒看過的資料，自 ${esc(mmdd(live.since))} 起）：</b>10 日後相對全市場 ${fmtS(f.excess, 2)}%${isNum(f.se) ? `（±${fmt(f.se, 2)}）` : ""}，勝出 ${fmt(f.hit, 0)}% 的日子，共 ${f.days} 天${f.days < 20 ? "；天數還少，僅供參考" : ""}。`;
+}
 let scanMethod = null;
 async function viewScan() {
   $("#view").innerHTML = `<div class="panel empty">掃描全市場中…（每個資料日第一次需要幾秒）</div>`;
@@ -512,6 +518,7 @@ async function viewScan() {
         <div class="row"><label class="small muted" for="scanM">排序</label><select id="scanM">${names.map(n => `<option${n === scanMethod ? " selected" : ""}>${esc(n)}</option>`).join("")}</select></div></div>
       <div class="banner ${weak || (reg !== null && reg < 0) ? "warn" : ""} small">${v ? `<b>回溯驗證（前 ${s.top} 名 10 日後，相對全市場平均）：</b>樣本內 ${vx("樣本內")}、樣本外 ${vx("樣本外")}；多頭 ${vx("多頭")}、盤整 ${vx("盤整")}、空頭 ${vx("空頭")}。
         ${weak ? "<br><b>這個排序在樣本外沒有勝過全市場，名單僅供對照。</b>" : ""}${!weak && reg !== null && reg < 0 ? `<br><b>這個排序在大盤${esc(s.regime)}時落後全市場。</b>` : ""}` : "還沒有回溯驗證結果（執行 deploy/backtest.sh 後會顯示）。"}
+        <br>${liveLine(s.live, scanMethod)}
         <br>買賣一趟的費用與稅約 0.6%，超額報酬扣掉後所剩不多：這是研究名單，不是買進建議。</div>
       ${m.rows.length ? `<div class="tablewrap"><table class="sortable" data-sort="scan-${esc(scanMethod)}"><thead><tr><th>#</th><th class="l">代號</th><th class="l">名稱</th><th class="l">市場</th><th>收盤</th><th>法人 5 日買超<br>佔成交量</th><th>20 日<br>贏大盤</th><th>60 日<br>贏大盤</th><th>5 日線<br>乖離</th><th class="l">當日<br>轉弱</th><th>月線<br>乖離</th><th>日均額<br>（億）</th><th data-nosort></th></tr></thead><tbody>
         ${m.rows.map((r, i) => `<tr><td class="num">${i + 1}</td><td class="l num"><a href="#/stock/${esc(r.code)}" data-from="scan" title="看走勢與籌碼">${esc(r.code)}</a></td><td class="l"><a href="#/stock/${esc(r.code)}" data-from="scan" class="plain">${esc(r.name)}</a>${r.alert ? " " + alertBadge(r.alert) : ""}</td><td class="l">${mktName(r.market)}</td><td class="num">${fmt(r.close, pd(r.close))}</td>

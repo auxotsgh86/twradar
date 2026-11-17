@@ -55,6 +55,9 @@ CREATE TABLE IF NOT EXISTS track (             -- 上線後追蹤（影子組合
   f5 REAL, f10 REAL, f20 REAL, PRIMARY KEY (date, code)
 );
 CREATE INDEX IF NOT EXISTS idx_track_kind ON track(kind, date);
+CREATE TABLE IF NOT EXISTS scan_track (        -- 全市場清單上線後追蹤：流動性合格的股票池、各排序方法的名次、之後的報酬
+  date TEXT NOT NULL, code TEXT NOT NULL, trend INTEGER, ranks TEXT, f5 REAL, f10 REAL, f20 REAL, PRIMARY KEY (date, code)
+);
 CREATE TABLE IF NOT EXISTS alerts (            -- 注意股、處置股公告（date＝公布日期）
   date TEXT NOT NULL, code TEXT NOT NULL, kind TEXT NOT NULL, market TEXT, name TEXT, count INTEGER, reason TEXT,
   start TEXT, end TEXT, measure TEXT, src TEXT, PRIMARY KEY (date, code, kind)

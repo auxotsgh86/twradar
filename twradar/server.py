@@ -243,7 +243,13 @@ class App:
         for m, v in ((sc or {}).get("methods") or {}).items():
             val[m] = {seg: {k: v["全市場"][seg]["f10"].get(k) for k in ("excess", "se", "hit", "days")}
                       for seg in ("樣本內", "樣本外", "多頭", "盤整", "空頭")}
-        return {**snap, "defaultMethod": SC.DEFAULT_METHOD, "validation": val, "validationRun": run,
+        from . import scantrack
+        try:
+            live = scantrack.cached(self.db)
+        except Exception:  # noqa: BLE001
+            log.exception("讀取全市場追蹤失敗")
+            live = None
+        return {**snap, "defaultMethod": SC.DEFAULT_METHOD, "validation": val, "validationRun": run, "live": live,
                 "methods": {m: {**x, "rows": [{**r, "inWatchlist": r["code"] in have, "alert": alerts.get(r["code"])} for r in x["rows"]]}
                             for m, x in snap["methods"].items()}}
 
@@ -318,7 +324,19 @@ class App:
                 "holdersLog": [dict(r) for r in self.db.q(
                     "SELECT * FROM events WHERE message LIKE '%集保%' ORDER BY id DESC LIMIT 5")],
                 "backtest": latest_backtest(),
-                "tracking": self.tracking()}
+                "tracking": self.tracking(),
+                "scanTracking": self.scan_tracking()}
+
+    def scan_tracking(self) -> dict | None:
+        from . import scan as SC
+        from . import scantrack
+        try:
+            s = scantrack.cached(self.db)
+        except Exception as e:  # noqa: BLE001
+            return {"error": repr(e)}
+        m = (s.get("methods") or {}).get(SC.DEFAULT_METHOD) or {}
+        return {"since": s.get("since"), "latest": s.get("latest"), "days": s.get("days"), "method": SC.DEFAULT_METHOD,
+                "vsMarket": m.get("全市場"), "vsTrend": m.get("趨勢股")}
 
     def tracking(self) -> dict | None:
         from . import tracking
