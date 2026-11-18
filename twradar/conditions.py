@@ -613,6 +613,24 @@ def base_settled(c: Ctx) -> Res:
     return Res(PASS, f"整理區間高低差 {rng:.0f}%、融資低檔且未增加")
 
 
+@condition("chipsGathering", "籌碼集中（集保）", "entry", ("whaleUpWeeksMin", "holdersDownWeeksMin"),
+           ("whaleUpWeeks", "holdersDownWeeks"),
+           "大戶持股比例連續上升達設定週數，且集保股東人數連續下降達設定週數（需要集保歷史）")
+def chips_gathering(c: Ctx) -> Res:
+    up, down = c.g("whaleUpWeeks"), c.g("holdersDownWeeks")
+    if up is None or down is None:
+        return Res(NA)
+    nu, nd = c.P["whaleUpWeeksMin"], c.P["holdersDownWeeksMin"]
+    if up >= nu and down >= nd:
+        return Res(PASS, f"大戶連升 {up} 週、股東人數連降 {down} 週")
+    lack = []
+    if up < nu:
+        lack.append(f"大戶連升 {up}/{fmt(nu, 0)} 週")
+    if down < nd:
+        lack.append(f"股東人數連降 {down}/{fmt(nd, 0)} 週")
+    return Res(FAIL, need="籌碼集中：" + "、".join(lack))
+
+
 @condition("biasMa5Ok", "未追高（5 日線乖離）", "entry", ("maxBiasMa5Pct",), ("close", "ma5"), "收盤距 5 日線不超過設定幅度")
 def bias_ma5_ok(c: Ctx) -> Res:
     close, ma5 = c.g("close"), c.g("ma5")

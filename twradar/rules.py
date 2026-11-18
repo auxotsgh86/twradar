@@ -111,13 +111,22 @@ def trial_playbooks(settled: bool = False) -> dict:
     return pb
 
 
-def settled_playbooks() -> dict:
-    """上車另外要求「起漲前籌碼沉澱」。"""
+def settled_playbooks(cond: str = "baseSettled") -> dict:
+    """上車另外要求某個條件（預設「起漲前籌碼沉澱」）。"""
     pb = default_playbooks()
     for r in pb["entry"]:
         if r.get("label") == "上車":
             w = r["when"]
-            r["when"] = {"all": [*(w["all"] if isinstance(w, dict) and "all" in w else [w]), "baseSettled"]}
+            r["when"] = {"all": [*(w["all"] if isinstance(w, dict) and "all" in w else [w]), cond]}
+    return pb
+
+
+def trial_with(cond: str) -> dict:
+    """試單另外要求某個條件。"""
+    pb = trial_playbooks()
+    for r in pb["entry"]:
+        if r.get("label") == "試單":
+            r["when"]["all"].append(cond)
     return pb
 
 
@@ -177,6 +186,8 @@ ENGINE_PARAMS = [
     {"id": "maxBiasMa5Pct", "label": "試單：收盤距 5 日線 ≤", "value": 5, "unit": "%", "min": 0, "max": 50, "note": "對照組「試單」用，不追高"},
     {"id": "baseRangePct", "label": "籌碼沉澱：起漲前整理區間高低差 ≤", "value": 25, "unit": "%", "min": 0, "max": 200, "note": "對照組「沉澱」用"},
     {"id": "baseMarginPos", "label": "籌碼沉澱：融資在近 60 日區間的位置 ≤", "value": 40, "unit": "%", "min": 0, "max": 100, "note": "0＝最低、100＝最高"},
+    {"id": "whaleUpWeeksMin", "label": "籌碼集中：大戶比例連續上升 ≥", "value": 3, "unit": "週", "min": 1, "max": 8, "note": "對照組「集保」用"},
+    {"id": "holdersDownWeeksMin", "label": "籌碼集中：股東人數連續下降 ≥", "value": 3, "unit": "週", "min": 0, "max": 8, "note": "0＝不看股東人數"},
     {"id": "breakMaBullPct", "label": "停損（大盤多頭時）：跌破下彎月線超過", "value": 3, "unit": "%", "min": 0, "max": 20, "note": "對照組「多頭放寬停損」用"},
     {"id": "addMinProfit", "label": "加碼前提：底倉獲利 ≥", "value": 3, "unit": "%", "min": 0, "max": 100, "note": "不攤平"},
     {"id": "pullbackDays", "label": "上車：回測觀察天數", "value": 10, "unit": "日", "min": 1, "max": 40, "note": ""},

@@ -1533,6 +1533,64 @@ class BacktestTests(unittest.TestCase):
                 c.execute("DELETE FROM scan_track")
             self.db.set_setting("scanTracking", None)
 
+    def test_holders_in_backtest_and_backfill_cli(self):
+        """集保歷史：回補指令可中斷續抓；回溯紀錄只用判定日之前公布的週別；籌碼集中條件。"""
+        from types import SimpleNamespace
+        from twradar import backtest as B
+        from twradar.analysis import DEFAULT_RULES as DR
+        from twradar.cli import run_holders_history
+        from twradar.dates import to_date
+        from twradar.providers import tdcc_history as H
+        wk = [d for d in self.dates if to_date(d).weekday() == 4][-6:][::-1]     # 最近 6 個週五，新到舊
+        people = {w: 1000 - 10 * (5 - k) for k, w in enumerate(wk)}               # 越近越少
+        calls = []
+
+        class FakeSession:
+            def __init__(self, *a, **k):
+                pass
+
+            def start(self):
+                return wk
+
+            def query(self, code, w):
+                calls.append((code, w))
+                if code == "9999":
+                    return None
+                html = _tdcc_page("t", wk, _tdcc_table(people[w], 40 + (5 - wk.index(w))))
+                return H.parse(html, code, w)
+        old, old_home = H.Session, os.environ.get("TWRADAR_HOME")
+        H.Session = FakeSession
+        os.environ["TWRADAR_HOME"] = self.cfg.home      # 指令會依 TWRADAR_HOME 開資料庫
+        try:
+            with self.db.tx() as c:
+                c.execute("DELETE FROM holders")
+            args = SimpleNamespace(codes="2330,9999", weeks=0, interval=0)
+            self.assertEqual(run_holders_history(self.cfg, args), 0)
+            self.assertEqual(len(calls), 12)
+            calls.clear()
+            run_holders_history(self.cfg, args)                 # 再跑一次：已抓過的不重抓（查無資料的會再試）
+            self.assertEqual([c for c, _ in calls], ["9999"] * 6)
+        finally:
+            H.Session = old
+            if old_home is None:
+                os.environ.pop("TWRADAR_HOME", None)
+            else:
+                os.environ["TWRADAR_HOME"] = old_home
+        P = {**DR, **{p["id"]: p["value"] for p in self.st.get()["params"]}, "whaleLots": 1000, "whaleAmount": 0}
+        h = B.History(self.db, ["2330"], self.dates[-1])
+        on_friday = h.rec("2330", wk[0], P)
+        self.assertEqual(on_friday["holdersDate"], wk[1])          # 週五當天還看不到當週資料
+        after = h.rec("2330", self.dates[-1], P) if self.dates[-1] > wk[0] else on_friday
+        self.assertEqual(after["holdersDate"], wk[0] if self.dates[-1] > wk[0] else wk[1])
+        self.assertGreaterEqual(after["whaleUpWeeks"], 4)
+        self.assertGreaterEqual(after["holdersDownWeeks"], 4)
+        from twradar.conditions import BUILTIN, Ctx, PASS
+        self.assertEqual(BUILTIN["chipsGathering"].fn(Ctx(after, {"code": "2330"}, P)).state, PASS)
+        vs = dict(B.preset_variants(["tdcc"], self.st.get()))
+        self.assertEqual(list(vs)[1:], ["加試單（須籌碼集中）", "上車須籌碼集中", "上車須大戶連升（不看股東人數）"])
+        with self.db.tx() as c:
+            c.execute("DELETE FROM holders WHERE src='TDCC 查詢'")
+
     def test_condition_study(self):
         from twradar import backtest as B
         conf = B.BTConfig(start=self.dates[70], end=self.dates[-1], split=self.dates[110], study=True)
@@ -1744,6 +1802,77 @@ class AlertsTests(unittest.TestCase):
         self.assertNotIn("disposal", db.alerts_for(None, "20261120").get("2455", {}))
         self.assertEqual(set(db.alerts_for(["6108"], "20261113")), {"6108"})
         self.assertEqual(db.alerts_for([], "20261113"), {})
+
+
+def _tdcc_page(token, weeks, table=None):
+    opts = "".join(f'<option value="{w}">{w}</option>' for w in weeks)
+    return (f'<form><input type="hidden" name="SYNCHRONIZER_TOKEN" value="{token}"><input type="hidden" name="SYNCHRONIZER_URI" '
+            f'value="/portal/zh/smWeb/qryStock"><input name="method" value="submit"><input name="firDate" value="{weeks[0]}">'
+            f'<select name="scaDate">{opts}</select><input name="sqlMethod" value="StockName"><input name="stockNo" value="">'
+            f'<input name="stockName" value=""></form><table><tr><td>資料日期</td><td>{" ".join(weeks)}</td></tr>{table or ""}</table>')
+
+
+def _tdcc_table(people17=1000, whale_pct=50.0, new_format=True):
+    rows = "".join(f"<tr><td>{i}</td><td>{i}-{i + 1}</td><td>{100 + i:,}</td><td>{1000 * i:,}</td>"
+                   f"<td>{(whale_pct if i == 15 else 1.0):.2f}</td></tr>" for i in range(1, 16))
+    if new_format:
+        rows += "<tr><td>16</td><td>差異數調整（說明4）</td><td></td><td>-20,000</td><td>-0.00</td></tr>"
+        rows += f"<tr><td>17</td><td>合　計</td><td>{people17:,}</td><td>9,999,999</td><td>100.00</td></tr>"
+    else:
+        rows += f"<tr><td>16</td><td>合 計</td><td>{people17:,}</td><td>9,999,999</td><td>100.00</td></tr>"
+    return rows
+
+
+class TdccHistoryTests(unittest.TestCase):
+    WEEKS = ["20261113", "20261106", "20261030", "20251121"]
+
+    def test_parse_both_formats(self):
+        from twradar.providers import tdcc_history as H
+        for new in (True, False):
+            rows = H.parse(_tdcc_page("t", self.WEEKS, _tdcc_table(1234, 60.5, new)), "2330", "20261113")
+            self.assertEqual([r["level"] for r in rows], list(range(1, 16)) + [17])
+            self.assertEqual((rows[-1]["people"], rows[-1]["pct"], rows[14]["pct"], rows[0]["people"]), (1234, 100.0, 60.5, 101))
+            self.assertEqual({r["src"] for r in rows}, {"TDCC 查詢"})
+        self.assertIsNone(H.parse(_tdcc_page("t", self.WEEKS, "<tr><td></td><td>查無此資料</td></tr>"), "9999", "20261113"))
+        with self.assertRaises(FetchError):
+            H.parse(_tdcc_page("t", self.WEEKS, "<tr><td>1</td><td>1-999</td><td>1</td><td>1</td><td>1</td></tr>"), "2330", "20261113")
+        self.assertEqual(H.weeks_of(_tdcc_page("t", self.WEEKS)), self.WEEKS)
+
+    def test_session_rotates_token_and_retries(self):
+        from twradar.providers import tdcc_history as H
+        seen, n = [], [0]
+
+        def open_fn(url, data=None):
+            n[0] += 1
+            if data is None:
+                return _tdcc_page(f"g{n[0]}", self.WEEKS)
+            form = dict(urllib.parse.parse_qsl(data.decode()))
+            seen.append((form["SYNCHRONIZER_TOKEN"], form["scaDate"], form["sqlMethod"], form["stockNo"]))
+            if form["SYNCHRONIZER_TOKEN"] == "bad":           # 失效的 token：回應沒有表格
+                return _tdcc_page("x", self.WEEKS)
+            return _tdcc_page(f"p{n[0]}", self.WEEKS, _tdcc_table())
+        s = H.Session(open_fn=open_fn, interval=0, sleep=lambda x: None)
+        self.assertEqual(s.start(), self.WEEKS)
+        s.query("2330", "20261113")
+        s.query("2330", "20261106")
+        self.assertEqual(seen[0][:4], ("g1", "20261113", "StockNo", "2330"))
+        self.assertEqual(seen[1][0], "p2")                    # 用上一次回應的新 token
+        s.form["SYNCHRONIZER_TOKEN"] = "bad"
+        rows = s.query("2330", "20261030")                    # 格式不對 → 重新取得 token 再試
+        self.assertEqual(len(rows), 16)
+        self.assertTrue(seen[-1][0].startswith("g"))
+
+    def test_streaks_and_backtest_no_lookahead(self):
+        """大戶連升、股東人數連降的週數；回溯只用判定日之前的週別。"""
+        from twradar.analysis import _holders
+        mk = lambda d, whale, people: {**{i: {"date": d, "people": 10, "shares": 10, "pct": 1.0} for i in range(1, 15)},  # noqa: E731
+                                       15: {"date": d, "people": 1, "shares": 1, "pct": whale},
+                                       17: {"date": d, "people": people, "shares": 100, "pct": 100.0}}
+        weeks = [mk("20261113", 60, 900), mk("20261106", 59, 950), mk("20261030", 58, 1000), mk("20261022", 59, 990)]
+        h = _holders(weeks, {"whaleLots": 1000}, {"whaleLots": 1000}, None)
+        self.assertEqual((h["whaleUpWeeks"], h["holdersDownWeeks"]), (2, 2))
+        h = _holders([weeks[0], mk("20261009", 50, 2000)], {"whaleLots": 1000}, {"whaleLots": 1000}, None)   # 中間缺週：不算
+        self.assertEqual((h["whaleUpWeeks"], h["holdersDownWeeks"]), (0, 0))
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

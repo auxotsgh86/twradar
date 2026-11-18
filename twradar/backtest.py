@@ -21,8 +21,10 @@ import json
 import math
 import statistics
 from dataclasses import dataclass, field
+from datetime import timedelta
 
-from .analysis import DEFAULT_RULES, _indicators, adjust_prices, evaluate
+from .analysis import DEFAULT_RULES, HOLDER_WEEKS, _holders, _indicators, adjust_prices, evaluate, whale_level
+from .dates import to_date
 from .db import DB
 
 HORIZONS = (5, 10, 20)
@@ -135,6 +137,18 @@ class History:
         self.raw = {c: {r["date"]: r for r in v} for c, v in self.q.items()}
         self.id_ = {c: [r["date"] for r in v] for c, v in self.ins.items()}
         self.md = {c: [r["date"] for r in v] for c, v in self.mh.items()}
+        # 集保：每週一筆；回溯時只用「判定日之前」公布的週別（週五的資料週六才公布）
+        self.hw: dict[tuple, dict] = {}
+        self.hd: dict[str, list[str]] = {c: [] for c in codes}
+        hsince = (to_date(since) - timedelta(days=70)).strftime("%Y%m%d") if since else ""
+        for r in db.q(f"SELECT code, date, level, people, shares, pct FROM holders WHERE code IN ({ph}) AND date>=? AND date<=? "
+                      f"ORDER BY code, date", (*codes, hsince, until)):
+            w = self.hw.get((r["code"], r["date"]))
+            if w is None:
+                w = self.hw[(r["code"], r["date"])] = {}
+                self.hd[r["code"]].append(r["date"])
+            w[r["level"]] = {"date": r["date"], "people": r["people"], "shares": r["shares"], "pct": r["pct"]}
+        self._hcache: dict[tuple, dict] = {}
         self.trading = [r["date"] for r in db.q("SELECT date FROM market WHERE taiex IS NOT NULL AND date>=? AND date<=? "
                                                 "ORDER BY date", rng)]
         self.taiex = {r["date"]: r["taiex"] for r in db.q("SELECT date, taiex FROM market WHERE taiex IS NOT NULL "
@@ -160,7 +174,22 @@ class History:
         rec = _indicators(q, ins, m, src or None, d, mh, P, trading or None)
         if rec:
             rec.update(self.market(d))
+            rec.update(self.holders(code, d, P, q))
         return rec
+
+    def holders(self, code: str, d: str, P: dict, q: list) -> dict:
+        ds = self.hd.get(code) or []
+        i = bisect.bisect_left(ds, d)          # 只取 d 之前的週別
+        if i == 0:
+            return {}
+        closes = [r["close"] for r in q if r.get("close") is not None]
+        avg = sum(closes) / len(closes) if closes else None
+        lvl = whale_level(P, {}, avg)[0]
+        key = (code, ds[i - 1], lvl)
+        if key not in self._hcache:
+            weeks = [self.hw[(code, x)] for x in reversed(ds[max(0, i - HOLDER_WEEKS):i])]
+            self._hcache[key] = _holders(weeks, P, {}, avg)
+        return self._hcache[key]
 
     def market(self, d: str) -> dict:
         i = bisect.bisect_right(self.trading, d)
@@ -509,6 +538,7 @@ def _veto_ids(settings: dict) -> list[str]:
 
 def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
     """內建的規則對照組：
+    tdcc    集保籌碼集中（大戶連升＋股東人數連降）：試單、試單須集中、上車須集中、上車須大戶連升
     settled 起漲前籌碼沉澱：試單、試單須沉澱、上車須沉澱
     trial   加「試單」規則（另一組同時拿掉大盤逆風）
     bullhold／bullstop／bull  大盤多頭時不因警訊減碼／放寬月線停損／兩者都做
@@ -540,6 +570,12 @@ def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
             out.append(("加試單", {"_playbooks": trial_playbooks()}))
             out.append(("加試單（須籌碼沉澱）", {"_playbooks": trial_playbooks(settled=True)}))
             out.append(("上車須籌碼沉澱", {"_playbooks": settled_playbooks()}))
+        elif n == "tdcc":
+            from .rules import settled_playbooks, trial_playbooks, trial_with
+            out.append(("加試單", {"_playbooks": trial_playbooks()}))
+            out.append(("加試單（須籌碼集中）", {"_playbooks": trial_with("chipsGathering")}))
+            out.append(("上車須籌碼集中", {"_playbooks": settled_playbooks("chipsGathering")}))
+            out.append(("上車須大戶連升（不看股東人數）", {"_playbooks": settled_playbooks("chipsGathering"), "holdersDownWeeksMin": 0}))
         elif n in ("bullhold", "bullstop", "bull"):
             from .rules import bull_playbooks
             name = {"bullhold": "多頭不因警訊減碼", "bullstop": "多頭放寬月線停損", "bull": "多頭不減碼＋放寬停損"}[n]
@@ -559,7 +595,7 @@ def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
         elif n == "market":
             out.append(("不用大盤逆風", {"_drop": ["marketWeak"]}))
         else:
-            raise ValueError(f"未知的對照組：{n}（可用：settled、trial、bullhold、bullstop、bullstop-grid、bull、veto、inst1d、market、v04、v03）")
+            raise ValueError(f"未知的對照組：{n}（可用：tdcc、settled、trial、bullhold、bullstop、bullstop-grid、bull、veto、inst1d、market、v04、v03）")
     return out
 
 

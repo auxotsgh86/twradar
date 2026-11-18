@@ -130,6 +130,68 @@ def probe(cfg, date: str | None = None) -> None:
         print()
 
 
+def holders_history_codes(db, st, which: str, weeks: list[str]) -> list[str]:
+    """回補的股票：觀察清單在前；universe 再加上這段期間每季回溯股票池（大型、中型、上櫃）。"""
+    from . import backtest as B
+    wl = [w["code"] for w in st.watchlist()]
+    if which == "watchlist":
+        return wl
+    if which != "universe":
+        return [c.strip().upper() for c in which.split(",") if c.strip()]
+    codes = dict.fromkeys(wl)
+    trading = [r["date"] for r in db.q("SELECT date FROM market WHERE taiex IS NOT NULL AND date>=? ORDER BY date", (min(weeks),))]
+    starts, seen = [], set()
+    for d in trading:
+        qk = (d[:4], (int(d[4:6]) - 1) // 3)
+        if qk not in seen:
+            seen.add(qk)
+            starts.append(d)
+    for d in starts:
+        for c in B.rank_universe(db, d, B.BTConfig("", "", "")):
+            codes.setdefault(c)
+    return list(codes)
+
+
+def run_holders_history(cfg, args) -> int:
+    import time as _t
+
+    from .net import FetchError
+    from .providers.tdcc_history import Session
+    db, st = open_all(cfg)
+    s = Session(cfg.user_agent, args.interval)
+    weeks = s.start()
+    if args.weeks:
+        weeks = weeks[:args.weeks]
+    codes = holders_history_codes(db, st, args.codes, weeks)
+    have = {(r["code"], r["date"]) for r in db.q("SELECT DISTINCT code, date FROM holders WHERE level=17")}
+    todo = [(c, w) for c in codes for w in weeks if (c, w) not in have]
+    total = len(todo)
+    print(f"集保歷史回補：{len(codes)} 檔 × {len(weeks)} 週（{min(weeks)}～{max(weeks)}），已有 {len(codes) * len(weeks) - total} 筆，"
+          f"待查 {total} 筆；間隔 {args.interval:g} 秒，預估 {total * args.interval / 3600:.1f} 小時", flush=True)
+    t0, ok, none, fail = _t.monotonic(), 0, 0, 0
+    for i, (c, w) in enumerate(todo, 1):
+        try:
+            rows = s.query(c, w)
+        except FetchError as e:
+            fail += 1
+            print(f"  失敗：{e}", flush=True)
+            if fail >= 20 and fail > ok:
+                print("連續失敗太多，先停止；稍後再執行同一個指令會從中斷處接著抓。", flush=True)
+                return 1
+            continue
+        if rows is None:
+            none += 1
+        else:
+            db.put_holders(rows)
+            ok += 1
+        if i % 25 == 0 or i == total:
+            el = _t.monotonic() - t0
+            eta = el / i * (total - i)
+            print(f"  {i}/{total}（{c} {w}）成功 {ok}、查無 {none}、失敗 {fail}；剩約 {eta / 3600:.1f} 小時", flush=True)
+    print(f"完成：成功 {ok}、查無資料 {none}、失敗 {fail}。可中斷後再執行同一個指令補齊。", flush=True)
+    return 0
+
+
 def run_alerts(cfg, args) -> int:
     from datetime import timedelta
 
@@ -276,6 +338,10 @@ def main(argv=None) -> None:
     sub.add_parser("watchlist")
     im = sub.add_parser("import"); im.add_argument("file")
     sub.add_parser("version")
+    hh = sub.add_parser("holders-history", help="集保股權分散表歷史回補（約一年，可中斷後接著跑）")
+    hh.add_argument("--codes", default="universe", help="universe（回溯股票池＋觀察清單，預設）、watchlist，或逗號分隔代號")
+    hh.add_argument("--weeks", type=int, default=0, help="只抓最近幾週（0＝查詢頁上全部）")
+    hh.add_argument("--interval", type=float, default=3.0, help="每次查詢間隔秒數（預設 3；太短可能被封鎖）")
     al = sub.add_parser("alerts", help="注意股、處置股：抓取並列出")
     al.add_argument("--date", help="日期（預設：最新交易日）")
     al.add_argument("--no-fetch", action="store_true", help="只列出資料庫裡的，不抓取")
@@ -292,7 +358,7 @@ def main(argv=None) -> None:
     bt.add_argument("--universe", default="auto", help="auto（預設）、watchlist，或 CSV 檔（代號,組別）")
     bt.add_argument("--grid", action="append", default=[], help="參數組合，例：--grid profitTargetPct=8,10,15（可重複）")
     bt.add_argument("--compare", action="append", default=[],
-                    help="規則對照組：settled（起漲前籌碼沉澱）、trial（試單）、bullhold／bullstop／bull（依大盤環境調整出場）、v04／v03（前幾版規則）、veto（否決條件逐條拿掉）、inst1d（法人改回看單日）、market（不用大盤逆風），可用逗號合併")
+                    help="規則對照組：tdcc（集保籌碼集中）、settled（起漲前籌碼沉澱）、trial（試單）、bullhold／bullstop／bull（依大盤環境調整出場）、v04／v03（前幾版規則）、veto（否決條件逐條拿掉）、inst1d（法人改回看單日）、market（不用大盤逆風），可用逗號合併")
     bt.add_argument("--no-study", action="store_true", help="不做條件研究")
     bt.add_argument("--no-scan", action="store_true", help="不做全市場掃描驗證")
     bt.add_argument("--max-adds", type=int, default=2)
@@ -358,6 +424,8 @@ def main(argv=None) -> None:
         sys.exit(run_backtest(cfg, args))
     elif args.cmd == "track":
         sys.exit(run_track(cfg, args))
+    elif args.cmd == "holders-history":
+        sys.exit(run_holders_history(cfg, args))
     elif args.cmd == "alerts":
         sys.exit(run_alerts(cfg, args))
     elif args.cmd == "scan":

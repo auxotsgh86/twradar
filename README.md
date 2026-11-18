@@ -209,6 +209,10 @@ API 全部需要 token，請不要公開分享含 token 的網址。
 - **條件研究**：每個條件單獨看，成立與不成立時之後 10 日的超額報酬差多少（兩段樣本方向一致才可信）。`--no-study` 可略過。
 - **全市場掃描驗證**：每天從全市場篩出趨勢股、依相對強度／法人排序取前 20 名，看是否勝過全市場與趨勢股平均。`--no-scan` 可略過。
 
+集保歷史（大戶比例、股東人數的每週變化，約一年）要先回補，回溯才用得到：
+`TWRADAR_HOME=~/twradar-data .venv/bin/python -m twradar holders-history`（約 18 小時，可中斷後再執行接著抓；
+`--codes watchlist` 只抓觀察清單，約 1 小時）。
+
 全市場強勢股掃描（今天的名單）：`TWRADAR_HOME=~/twradar-data .venv/bin/python -m twradar scan`（`--method` 可選
 相對強度、相對強度＋不追高、法人、綜合、綜合＋不追高）。排序方法是否有效，請先看回溯報表的「全市場掃描驗證」。
 

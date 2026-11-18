@@ -183,8 +183,11 @@ def adjust_prices(q: list, trading: list[str] | None = None) -> tuple[list[dict]
     return out, events
 
 
+HOLDER_WEEKS = 8   # 計算「連續幾週」用
+
+
 def _holders_rows(db: DB, codes: list[str], d: str) -> dict[str, list[dict]]:
-    """每檔最近兩週（≤ d）的集保分級資料：{code: [本週 {level: row}, 上週 {level: row}]}。"""
+    """每檔最近 HOLDER_WEEKS 週（≤ d）的集保分級資料：{code: [本週 {level: row}, 上週, …]}。"""
     if not codes:
         return {}
     ph = ",".join("?" * len(codes))
@@ -192,7 +195,7 @@ def _holders_rows(db: DB, codes: list[str], d: str) -> dict[str, list[dict]]:
                  f"ORDER BY code, date DESC", (*codes, d))
     want: dict[str, list[str]] = {}
     for r in dates:
-        if len(want.setdefault(r["code"], [])) < 2:
+        if len(want.setdefault(r["code"], [])) < HOLDER_WEEKS:
             want[r["code"]].append(r["date"])
     if not want:
         return {}
@@ -260,6 +263,26 @@ def _holders(weeks: list[dict], P: dict, stock: dict, avg_price: float | None) -
             prev_tot = (weeks[1].get(17) or {}).get("people")
             if prev_tot and out.get("holdersTotal"):
                 out["holdersChgPct"] = round((out["holdersTotal"] / prev_tot - 1) * 100, 2)
+        # 連續幾週：大戶比例上升、股東人數下降（只算相鄰週，中間缺週就停）
+        from .dates import to_date
+        up = down = 0
+        ups, downs = True, True
+        for a, b in zip(weeks, weeks[1:]):
+            da, db_ = next(iter(a.values()))["date"], next(iter(b.values()))["date"]
+            if (to_date(da) - to_date(db_)).days > 14:
+                break
+            if ups and whale_pct(a) > whale_pct(b):
+                up += 1
+            else:
+                ups = False
+            pa, pb = (a.get(17) or {}).get("people"), (b.get(17) or {}).get("people")
+            if downs and pa and pb and pa < pb:
+                down += 1
+            else:
+                downs = False
+            if not ups and not downs:
+                break
+        out["whaleUpWeeks"], out["holdersDownWeeks"] = up, down
     return out
 
 

@@ -445,6 +445,17 @@ class Provider:
 是否趨勢合格、各排序方法的名次），之後回填 5／10／20 日報酬；每天算「前 N 名平均 − 全市場平均」，再看日差距的平均、標準誤、勝出天數。
 **不補建過去**（只記錄最近 7 天內的日子）。顯示在全市場頁的驗證說明、狀態 API 的 `scanTracking`。
 
+## 9.7.4 集保歷史回補與籌碼集中（2026-11-19）
+
+- 來源：集保結算所查詢頁（`providers/tdcc_history.py`），約一年、每週一筆、一次查一檔一週；每次回應帶新 token，接著查下一筆直接用。
+  以「合 計」列為準存成 level 17（新的週別有 16＝差異數調整）。存入同一張 `holders` 表（src＝TDCC 查詢）。
+- `twradar holders-history [--codes universe|watchlist|代號,…] [--weeks N] [--interval 3]`：觀察清單優先，再加這段期間每季的回溯股票池；
+  已有的（code, 週別）不重抓，可中斷後再執行接著抓。約 420 檔 × 51 週、間隔 3 秒 ≈ 18 小時。
+- 指標：`whaleUpWeeks`（大戶比例連續上升週數）、`holdersDownWeeks`（股東人數連續下降週數），只算相鄰週（間隔 ≤ 14 天），最多看 8 週。
+- 回溯：History 載入集保；判定日只用**早於判定日**的週別（週五的資料週六公布），避免偷看。
+- 條件 `chipsGathering`：大戶連升 ≥ `whaleUpWeeksMin`（3）週且股東人數連降 ≥ `holdersDownWeeksMin`（3，0＝不看）週。
+- 對照組 `tdcc`：加試單、試單須籌碼集中、上車須籌碼集中、上車須大戶連升。集保歷史只有約一年，回溯請用 `--start` 從有資料後約一個月開始。
+
 ## 9.8 注意股、處置股（2026-11-16）
 
 - 來源（`twradar/providers/alerts.py`，格式依 2026/11 實際回應）：證交所 `announcement/notice`、`announcement/punish`；
