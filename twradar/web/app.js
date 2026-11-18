@@ -113,7 +113,7 @@ function cardHTML(s) {
    ${g.light === "wait" && g.rule && g.rule !== "觀察" ? `<div class="need"><b>${esc(g.rule)}：</b>${esc(g.warnings.join("；"))}</div>` : ""}
    ${g.light === "go" ? `<div class="need"><b>依據：</b>${esc(g.lightLabel || "")}・${esc([g.instWhy, g.checks.retail === "pass" ? "融資健康" : "", g.checks.main === "pass" ? "主力集中" : "", "價量確認"].filter(Boolean).join("、"))}；觀察價位 月線 ${fmt(r.ma20, 2)}${isNum(r.prevHigh) ? "、前高 " + fmt(r.prevHigh, pd(r.prevHigh)) : ""}</div>` : ""}
    ${g.light === "stop" ? `<div class="need"><b>原因：</b>${esc(g.warnings.join("；"))}</div>` : ""}
-   ${g.hold ? `<div class="need row" style="gap:6px;align-items:baseline"><b>持有：</b>${badge(g.hold.light)}<span>${esc(holdLine(g.hold))}</span></div>` : ""}
+   ${g.hold ? `<div class="need row" style="gap:6px;align-items:baseline"><b>持有：</b><button type="button" class="linkish" data-hold="${esc(s.code)}" title="調整持股">${badge(g.hold.light)}</button><span>${esc(holdLine(g.hold))}</span><button type="button" class="linkish small no-print" data-hold="${esc(s.code)}">調整持股</button></div>` : ""}
    ${g.keyLevelNote ? `<div class="note">${esc(g.keyLevelNote)}</div>` : ""}${s.note ? `<div class="note">${esc(s.note)}</div>` : ""}
    ${g.missing.length ? `<div class="note">未取得：${esc(g.missing.join("、"))}</div>` : ""}</article>`;
 }
@@ -213,7 +213,7 @@ async function viewStock(code) {
   $("#view").innerHTML = `
    <div class="row between"><div><h1>${esc(code)} ${esc(h.name || "")}</h1><div class="small muted">${h.market ? mktName(h.market) : ""} ${alertBadge(h.alert)}</div></div>
      <div class="row"><a class="btn" href="${back}">← ${back === "#/scan" ? "全市場" : "總覽"}</a>${h.inWatchlist ? "" : `<button class="primary" id="addThis">加入觀察</button>`}<a class="btn" href="${withTok(`/api/v1/stocks/${code}/history?days=250&format=csv`)}">下載歷史 CSV</a></div></div>
-   ${g ? `<section class="panel" style="display:flex;flex-direction:column;gap:6px"><div class="row">${badge(g.light, g.lightLabel)}${g.hold ? badge(g.hold.light) : ""}<span class="small muted">雷達判定（資料日 ${esc(h.date || "")}${h.inWatchlist ? "" : "，不在觀察清單，以未持有、全域預設規則判定"}${g.rule ? "・" + esc(g.rule) : ""}）</span></div>
+   ${g ? `<section class="panel" style="display:flex;flex-direction:column;gap:6px"><div class="row">${badge(g.light, g.lightLabel)}${g.hold ? `<button type="button" class="linkish" data-hold="${esc(code)}" title="調整持股">${badge(g.hold.light)}</button>` : ""}<span class="small muted">雷達判定（資料日 ${esc(h.date || "")}${h.inWatchlist ? "" : "，不在觀察清單，以未持有、全域預設規則判定"}${g.rule ? "・" + esc(g.rule) : ""}）</span></div>
      ${g.needs && g.needs.length ? `<div class="small"><b>還差：</b>${esc(g.needs.join("；"))}</div>` : ""}${g.warnings && g.warnings.length ? `<div class="small"><b>原因：</b>${esc(g.warnings.join("；"))}</div>` : ""}
      ${g.missing && g.missing.length ? `<div class="small muted">未取得：${esc(g.missing.join("、"))}${h.inWatchlist ? "" : "（集保大戶、散戶資料只抓觀察清單的股票）"}</div>` : ""}</section>` : ""}
    <section class="panel"><div class="row between"><h2>收盤價與均線（近 ${rows.length} 日）</h2><div class="legend"><span><i style="background:var(--fg)"></i>收盤</span><span><i style="background:var(--c-ma20)"></i>月線 MA20</span><span><i style="background:var(--c-ma60)"></i>季線 MA60</span></div></div>
@@ -233,7 +233,7 @@ function holdSec(st) {
   const list = st.filter(s => s.signal.hold).sort((a, b) => ["exit", "reduce", "keep", "na"].indexOf(a.signal.hold.light) - ["exit", "reduce", "keep", "na"].indexOf(b.signal.hold.light));
   if (!list.length) return "";
   return `<div class="sec"><h2>持有部位（${list.length}）</h2>${list.map(s => { const r = s.data, h = s.signal.hold;
-    return `<p style="margin:8px 0">${badge(h.light)} <b>${esc(s.code)} ${esc(s.name)}</b>　收 ${fmt(r.close, pd(r.close))}（<span class="${cls(r.chgPct)}">${fmtP(r.chgPct)}</span>）<br><span class="muted">${esc(holdLine(h) || "—")}</span></p>`; }).join("")}</div>`;
+    return `<p style="margin:8px 0"><button type="button" class="linkish" data-hold="${esc(s.code)}" title="調整持股">${badge(h.light)}</button> <b>${esc(s.code)} ${esc(s.name)}</b> <button type="button" class="linkish small no-print" data-hold="${esc(s.code)}">調整持股</button>　收 ${fmt(r.close, pd(r.close))}（<span class="${cls(r.chgPct)}">${fmtP(r.chgPct)}</span>）<br><span class="muted">${esc(holdLine(h) || "—")}</span></p>`; }).join("")}</div>`;
 }
 async function viewReport(date) {
   await loadDates();
@@ -538,6 +538,59 @@ async function viewScan() {
   };
   draw();
 }
+
+/* ---------- 調整持股（從持有提示開啟） ---------- */
+async function positionDialog(code) {
+  let wl, e;
+  try { [wl, e] = await Promise.all([api("/watchlist"), api("/latest")]); } catch (err) { toast(err.message); return; }
+  const w = wl.find(x => x.code === code);
+  if (!w) { toast(`${code} 不在觀察清單`); return; }
+  const s = (e.stocks || []).find(x => x.code === code), h = s && s.signal.hold, px = s && s.data ? s.data.close : null;
+  const sh = w.shares || 0, cost = w.cost;
+  const tip = !h ? "" : h.light === "exit" ? "規則提示「退場」：照規則是全部賣出。" : h.light === "reduce" ? "規則提示「減碼」：照規則是先賣出一部分（例如一半）。" : "規則提示「續抱」。";
+  sheet(`<div class="row between"><h2><span class="num">${esc(code)}</span> ${esc(w.name)}・調整持股</h2>${h ? badge(h.light) : ""}</div>
+    <div class="small">${esc(tip)}${h ? `<br><span class="muted">${esc(holdLine(h))}</span>` : ""}</div>
+    <div class="grid2 small"><div>目前股數：<b class="num">${sh ? fmt(sh) : "未填"}</b></div><div>成本：<b class="num">${isNum(cost) ? fmt(cost, 2) : "未填"}</b></div>
+      <div>最新收盤：<b class="num">${isNum(px) ? fmt(px, pd(px)) : "—"}</b></div><div>買進日期：<b>${esc(w.buyDate || "未填")}</b></div></div>
+    <div class="tabs2" role="tablist"><button type="button" data-act="sell" class="on">賣出</button><button type="button" data-act="buy">買進／加碼</button></div>
+    <form id="posForm" style="display:flex;flex-direction:column;gap:10px">
+      <div id="sellBox" class="row">${sh ? `<button type="button" data-q="${sh}">全部（${fmt(sh)}）</button><button type="button" data-q="${Math.floor(sh / 2000) * 1000 || Math.floor(sh / 2)}">約一半（${fmt(Math.floor(sh / 2000) * 1000 || Math.floor(sh / 2))}）</button>` : ""}
+        <span class="small muted">${sh ? "" : "沒有填股數：按「全部賣出」會改成未持有。"}</span></div>
+      <div class="grid2"><div class="field"><label for="p-qty" id="p-qtyL">賣出股數</label><input id="p-qty" inputmode="numeric" placeholder="${sh ? "例如 1000" : "可留空"}"></div>
+        <div class="field" id="p-pxF" hidden><label for="p-px">買進價格</label><input id="p-px" inputmode="decimal" value="${isNum(px) ? px : ""}"></div></div>
+      <div id="p-preview" class="small muted"></div>
+      <div class="row between"><button type="button" class="linkish small" id="p-full">完整編輯…</button>
+        <div class="row"><button type="button" data-close>取消</button>${sh ? "" : `<button type="button" class="danger" id="p-clear">全部賣出</button>`}<button class="primary">確定</button></div></div></form>`,
+    sheetEl => {
+      const q = x => sheetEl.querySelector(x); let act = "sell";
+      const calc = () => {
+        const n = parseInt(q("#p-qty").value, 10) || 0, p = Number(q("#p-px").value);
+        if (act === "sell") {
+          if (!n) return null;
+          if (sh && n > sh) return {err: "賣出股數超過持有"};
+          const left = sh ? sh - n : 0;
+          return left > 0 ? {holding: true, shares: left, cost, buyDate: w.buyDate, text: `賣出後剩 ${fmt(left)} 股，成本維持 ${isNum(cost) ? fmt(cost, 2) : "—"}`}
+            : {holding: false, shares: null, cost: null, buyDate: null, text: "全部賣出：改為未持有，成本與買進日期清除"};
+        }
+        if (!n || !(p > 0)) return null;
+        const tot = sh + n, avg = sh && isNum(cost) ? (cost * sh + p * n) / tot : p;
+        return {holding: true, shares: tot, cost: Math.round(avg * 100) / 100, buyDate: w.buyDate || new Date().toISOString().slice(0, 10),
+          text: `買進後共 ${fmt(tot)} 股，平均成本 ${fmt(avg, 2)}${w.buyDate ? "，買進日期維持第一次買進" : "，買進日期記為今天"}`};
+      };
+      const show = () => { const c = calc(); q("#p-preview").textContent = c ? (c.err || c.text) : ""; q("#p-preview").className = "small " + (c && c.err ? "down" : "muted"); };
+      sheetEl.querySelectorAll("[data-act]").forEach(b => b.onclick = () => { act = b.dataset.act; sheetEl.querySelectorAll("[data-act]").forEach(x => x.classList.toggle("on", x === b));
+        q("#sellBox").hidden = act !== "sell"; q("#p-pxF").hidden = act !== "buy"; q("#p-qtyL").textContent = act === "sell" ? "賣出股數" : "買進股數"; q("#p-qty").value = ""; show(); });
+      sheetEl.querySelectorAll("[data-q]").forEach(b => b.onclick = () => { q("#p-qty").value = b.dataset.q; show(); });
+      q("#p-qty").oninput = show; q("#p-px").oninput = show;
+      const save = async c => { try { await api("/watchlist", {method: "POST", body: JSON.stringify({code, holding: c.holding, shares: c.shares, cost: c.cost, buyDate: c.buyDate})});
+        await api("/analyze", {method: "POST", body: "{}"}).catch(() => {}); $("#layer").innerHTML = ""; toast(`${code} 持股已更新`); route(); } catch (err) { toast(err.message); } };
+      const clr = q("#p-clear"); if (clr) clr.onclick = () => save({holding: false, shares: null, cost: null, buyDate: null});
+      q("#posForm").addEventListener("submit", ev => { ev.preventDefault(); const c = calc(); if (!c) { toast("請填股數" + (act === "buy" ? "與價格" : "")); return; } if (c.err) { toast(c.err); return; } save(c); });
+      q("#p-full").onclick = async () => { const labels = await loadLabels(); editStock(w, labels, null, () => route()); };
+    });
+}
+// 捕獲階段處理：卡片本身點了會開個股頁，這裡先攔下來
+document.addEventListener("click", ev => { const b = ev.target.closest("[data-hold]"); if (b) { ev.preventDefault(); ev.stopPropagation(); positionDialog(b.dataset.hold); } }, true);
 
 /* ---------- 路由 ---------- */
 async function route() {
