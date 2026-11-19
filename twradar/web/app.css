@@ -13,7 +13,7 @@
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.55 var(--sans)}
 a{color:var(--accent)}
-.wrap{max-width:1120px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left));padding-right:max(16px,env(safe-area-inset-right))}
+.wrap{max-width:1360px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left));padding-right:max(16px,env(safe-area-inset-right))}
 .topbar{background:var(--surface);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}
 .topin{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-block:10px;flex-wrap:wrap}
 .brand{font-weight:700;font-size:18px;color:var(--fg);text-decoration:none;letter-spacing:.02em}
@@ -124,3 +124,13 @@ input[type=color]{padding:2px;width:36px;height:28px}
 a.plain{color:inherit;text-decoration:none}a.plain:hover{text-decoration:underline}
 button.linkish{border:0;background:none;padding:0;color:var(--accent);cursor:pointer;font:inherit}button.linkish.small{font-size:12px;text-decoration:underline}
 @media print{.no-print{display:none!important}}
+/* 精簡表：盡量不出現水平捲軸（窄螢幕依序隱藏次要欄位） */
+table.compact .short{display:none}
+table.compact th,table.compact td{padding:6px 7px}
+table.compact td.wrapc{white-space:normal;min-width:4.5em}
+table.compact th{line-height:1.25}
+@media (max-width:900px){table.compact .opt1{display:none}table.compact th,table.compact td{padding:5px 5px}table.compact .long{display:none}table.compact .short{display:inline}}
+@media (max-width:640px){table.compact .opt2,table.compact .opt3,table.compact .holdtxt{display:none}table.compact .badge{padding:2px 6px;gap:4px}
+  table.compact{font-size:12px}table.compact button{padding:4px 8px}
+  table.compact td.wrapc .badge{white-space:normal;line-height:1.25}table.compact td.wrapc{min-width:3.5em}}
+@media (max-width:480px){table.compact .opt4{display:none}}
