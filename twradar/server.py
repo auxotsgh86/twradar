@@ -117,7 +117,7 @@ class App:
             out.append({"code": w["code"], "name": w["name"], "market": w["market"], "group": L.group_of(w),
                         "labels": w["labels"],
                         "note": w["note"], "keyLevel": w["keyLevel"], "holding": w["holding"], "cost": w["cost"],
-                        "data": p["data"], "signal": p["signal"], "alert": alerts.get(w["code"])})
+                        "shares": w.get("shares"), "data": p["data"], "signal": p["signal"], "alert": alerts.get(w["code"])})
         return out
 
     def envelope(self, d: str) -> dict:

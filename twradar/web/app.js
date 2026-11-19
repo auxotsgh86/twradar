@@ -118,10 +118,12 @@ function cardHTML(s) {
    ${g.missing.length ? `<div class="note">未取得：${esc(g.missing.join("、"))}</div>` : ""}</article>`;
 }
 function tableHTML(stocks) {
-  const ord = {go: 0, wait: 1, stop: 2, na: 3};
-  return `<div class="tablewrap"><table class="sortable" data-sort="main"><thead><tr><th class="l">代號</th><th class="l">名稱</th><th>收盤</th><th>漲跌%</th><th>外資</th><th>投信</th><th>融資增減</th><th>量比</th><th>月線位置</th><th class="l">燈號</th></tr></thead><tbody>
+  const ord = {go: 0, wait: 1, stop: 2, na: 3}, hord = {exit: 0, reduce: 1, keep: 2, na: 3};
+  return `<div class="tablewrap"><table class="sortable" data-sort="main"><thead><tr><th class="l">代號</th><th class="l">名稱</th><th>收盤</th><th>漲跌%</th><th>外資</th><th>投信</th><th>融資增減</th><th>量比</th><th>月線位置</th><th class="l">燈號</th><th class="l">持有</th><th data-nosort class="no-print"></th></tr></thead><tbody>
   ${stocks.map(s => { const r = s.data, g = s.signal; const pos = g.belowMa20 === null || g.belowMa20 === undefined ? "—" : g.belowMa20 ? "月線下" : g.maDistPct < 0 ? "貼近月線" : "月線上";
-    return `<tr><td class="l num">${esc(s.code)}</td><td class="l">${esc(s.name)}${s.alert ? " " + alertBadge(s.alert) : ""}</td><td class="num">${fmt(r.close, pd(r.close))}</td><td class="num ${cls(r.chgPct)}">${fmtP(r.chgPct)}</td><td class="num ${cls(r.foreign)}">${fmtS(r.foreign)}</td><td class="num ${cls(r.trust)}">${fmtS(r.trust)}</td><td class="num">${fmtS(r.marginChg)}</td><td class="num">${isNum(g.volRatio) ? g.volRatio.toFixed(2) + "x" : "—"}</td><td data-v="${isNum(g.maDistPct) ? g.maDistPct : ""}">${pos} <span class="muted num">${isNum(g.maDistPct) ? "(" + fmtS(g.maDistPct, 1) + "%)" : ""}</span></td><td class="l" data-v="${ord[g.light] ?? 9}">${badge(g.light, g.lightLabel)}</td></tr>`; }).join("")}
+    return `<tr><td class="l num">${esc(s.code)}</td><td class="l">${esc(s.name)}${s.alert ? " " + alertBadge(s.alert) : ""}</td><td class="num">${fmt(r.close, pd(r.close))}</td><td class="num ${cls(r.chgPct)}">${fmtP(r.chgPct)}</td><td class="num ${cls(r.foreign)}">${fmtS(r.foreign)}</td><td class="num ${cls(r.trust)}">${fmtS(r.trust)}</td><td class="num">${fmtS(r.marginChg)}</td><td class="num">${isNum(g.volRatio) ? g.volRatio.toFixed(2) + "x" : "—"}</td><td data-v="${isNum(g.maDistPct) ? g.maDistPct : ""}">${pos} <span class="muted num">${isNum(g.maDistPct) ? "(" + fmtS(g.maDistPct, 1) + "%)" : ""}</span></td><td class="l" data-v="${ord[g.light] ?? 9}">${badge(g.light, g.lightLabel)}</td>
+      <td class="l" data-v="${g.hold ? hord[g.hold.light] ?? 9 : 9}">${g.hold ? `${badge(g.hold.light)} <span class="small muted num">${s.shares ? fmt(s.shares) + " 股" : ""}${isNum(g.hold.profitPct) ? `・<span class="${cls(g.hold.profitPct)}">${fmtS(g.hold.profitPct, 1)}%</span>` : ""}</span>` : `<span class="muted">—</span>`}</td>
+      <td class="no-print"><button type="button" class="small" data-hold="${esc(s.code)}">${s.holding ? "增減持股" : "買進"}</button></td></tr>`; }).join("")}
   </tbody></table></div>`;
 }
 
@@ -546,7 +548,7 @@ async function positionDialog(code) {
   const w = wl.find(x => x.code === code);
   if (!w) { toast(`${code} 不在觀察清單`); return; }
   const s = (e.stocks || []).find(x => x.code === code), h = s && s.signal.hold, px = s && s.data ? s.data.close : null;
-  const sh = w.shares || 0, cost = w.cost;
+  const sh = w.holding ? w.shares || 0 : 0, cost = w.holding ? w.cost : null;
   const tip = !h ? "" : h.light === "exit" ? "規則提示「退場」：照規則是全部賣出。" : h.light === "reduce" ? "規則提示「減碼」：照規則是先賣出一部分（例如一半）。" : "規則提示「續抱」。";
   sheet(`<div class="row between"><h2><span class="num">${esc(code)}</span> ${esc(w.name)}・調整持股</h2>${h ? badge(h.light) : ""}</div>
     <div class="small">${esc(tip)}${h ? `<br><span class="muted">${esc(holdLine(h))}</span>` : ""}</div>
@@ -560,7 +562,7 @@ async function positionDialog(code) {
         <div class="field" id="p-pxF" hidden><label for="p-px">買進價格</label><input id="p-px" inputmode="decimal" value="${isNum(px) ? px : ""}"></div></div>
       <div id="p-preview" class="small muted"></div>
       <div class="row between"><button type="button" class="linkish small" id="p-full">完整編輯…</button>
-        <div class="row"><button type="button" data-close>取消</button>${sh ? "" : `<button type="button" class="danger" id="p-clear">全部賣出</button>`}<button class="primary">確定</button></div></div></form>`,
+        <div class="row"><button type="button" data-close>取消</button>${sh || !w.holding ? "" : `<button type="button" class="danger" id="p-clear">全部賣出</button>`}<button class="primary">確定</button></div></div></form>`,
     sheetEl => {
       const q = x => sheetEl.querySelector(x); let act = "sell";
       const calc = () => {
@@ -574,13 +576,14 @@ async function positionDialog(code) {
         }
         if (!n || !(p > 0)) return null;
         const tot = sh + n, avg = sh && isNum(cost) ? (cost * sh + p * n) / tot : p;
-        return {holding: true, shares: tot, cost: Math.round(avg * 100) / 100, buyDate: w.buyDate || new Date().toISOString().slice(0, 10),
-          text: `買進後共 ${fmt(tot)} 股，平均成本 ${fmt(avg, 2)}${w.buyDate ? "，買進日期維持第一次買進" : "，買進日期記為今天"}`};
+        return {holding: true, shares: tot, cost: Math.round(avg * 100) / 100, buyDate: (w.holding && w.buyDate) || new Date().toISOString().slice(0, 10),
+          text: `買進後共 ${fmt(tot)} 股，平均成本 ${fmt(avg, 2)}${w.holding && w.buyDate ? "，買進日期維持第一次買進" : "，買進日期記為今天"}`};
       };
       const show = () => { const c = calc(); q("#p-preview").textContent = c ? (c.err || c.text) : ""; q("#p-preview").className = "small " + (c && c.err ? "down" : "muted"); };
       sheetEl.querySelectorAll("[data-act]").forEach(b => b.onclick = () => { act = b.dataset.act; sheetEl.querySelectorAll("[data-act]").forEach(x => x.classList.toggle("on", x === b));
         q("#sellBox").hidden = act !== "sell"; q("#p-pxF").hidden = act !== "buy"; q("#p-qtyL").textContent = act === "sell" ? "賣出股數" : "買進股數"; q("#p-qty").value = ""; show(); });
       sheetEl.querySelectorAll("[data-q]").forEach(b => b.onclick = () => { q("#p-qty").value = b.dataset.q; show(); });
+      if (!w.holding) sheetEl.querySelector("[data-act=buy]").click();   // 未持有：直接開在「買進」
       q("#p-qty").oninput = show; q("#p-px").oninput = show;
       const save = async c => { try { await api("/watchlist", {method: "POST", body: JSON.stringify({code, holding: c.holding, shares: c.shares, cost: c.cost, buyDate: c.buyDate})});
         await api("/analyze", {method: "POST", body: "{}"}).catch(() => {}); $("#layer").innerHTML = ""; toast(`${code} 持股已更新`); route(); } catch (err) { toast(err.message); } };
