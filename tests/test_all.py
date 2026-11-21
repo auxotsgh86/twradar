@@ -1897,6 +1897,21 @@ class MacroTests(unittest.TestCase):
         self.assertEqual(ev("breadthDiverge", {"mktChg10Pct": 3, "breadth20Chg10": -12}), PASS)
         self.assertEqual(ev("breadthDiverge", {"mktChg10Pct": -3, "breadth20Chg10": -12}), FAIL)
 
+    def test_reading(self):
+        from twradar.macro import reading
+        f = {"foreignSpot5d": -2185.7, "futForeign": -97863, "futForeignChg5": 3007, "usdTwdChg5Pct": 0.298,
+             "breadth20": 2.74, "breadth20Chg10": -3.64, "mktChg10Pct": -9.24}
+        rank = {"futForeign": {"pct": 4.2, "days": 565}, "breadth20": {"pct": 0.9, "days": 546}}
+        r = reading(f, rank, "ok", 1, 3, dict(DEFAULT_RULES))
+        self.assertIn("回補 3,007 口", r[0])
+        self.assertIn("96%", r[1])
+        self.assertIn("小貶 0.298%", r[2])
+        self.assertIn("極端弱勢", r[3])
+        self.assertIn("未成立（1/3 項）", r[4])
+        r = reading({**f, "futForeignChg5": -5000, "usdTwdChg5Pct": 0.5}, {}, "exit", 3, 3, dict(DEFAULT_RULES))
+        self.assertIn("兩邊同時看空", r[0])
+        self.assertIn("暫停新的上車訊號", r[-1])
+
     def test_climate_variants(self):
         from twradar.backtest import apply_variant, preset_variants
         from twradar.rules import default_playbooks

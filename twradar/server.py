@@ -102,13 +102,15 @@ class App:
         """大盤環境：外資態度（現貨、台指期、匯率，近 5 日）與市場廣度。"""
         from datetime import timedelta
 
-        from .macro import Macro, foreign_signals
+        from .macro import Macro, foreign_signals, history_rank, reading
         f = Macro(self.db, d, (to_date(d) - timedelta(days=40)).strftime("%Y%m%d")).fields(d)
         P = rules_of(self.settings)
         hit, have, why = foreign_signals(f, P)
         need = P.get("foreignExitSignals", 3)
         state = "na" if have < need else "exit" if hit >= need else "ok"
-        return {**f, "foreignHit": hit, "foreignHave": have, "foreignNeed": need, "foreignWhy": why, "foreignState": state}
+        rank = history_rank(self.db, d, f)
+        return {**f, "foreignHit": hit, "foreignHave": have, "foreignNeed": need, "foreignWhy": why, "foreignState": state,
+                "rank": rank, "reading": reading(f, rank, state, hit, need, P)}
 
     def day_status(self, d: str) -> dict:
         run = self.db.get_run(d)
