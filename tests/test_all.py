@@ -1823,6 +1823,94 @@ def _tdcc_table(people17=1000, whale_pct=50.0, new_format=True):
     return rows
 
 
+class MacroTests(unittest.TestCase):
+    """大盤環境：期交所 CSV（2026/11 實際格式）、市場廣度、外資撤出條件。"""
+    FUT = ("日期,商品名稱,身份別,多方交易口數,多方交易契約金額(千元),空方交易口數,空方交易契約金額(千元),多空交易口數淨額,"
+           "多空交易契約金額淨額(千元),多方未平倉口數,多方未平倉契約金額(千元),空方未平倉口數,空方未平倉契約金額(千元),"
+           "多空未平倉口數淨額,多空未平倉契約金額淨額(千元)\n"
+           "2026/11/02,臺股期貨,自營商,4663,42019187,5120,46155841,-457,-4136654,5640,51058110,4333,39225542,1307,11832568\n"
+           "2026/11/02,臺股期貨,投信,121,1094542,193,1745247,-72,-650705,91953,831751666,2814,25453756,89139,806297910\n"
+           "2026/11/02,臺股期貨,外資及陸資,57787,519492760,54986,494358727,2801,25134032,8952,80977983,98331,889533996,-89379,-808556013\n"
+           "2026/11/03,臺股期貨,外資及陸資,68904,610522831,71286,632445553,-2382,-21922722,10506,91105918,102318,887256473,-91812,-796150555\n")
+    FX = ("日期,美元／新台幣,人民幣／新台幣,歐元／美元\n2026/11/02,32.592,4.906041,1.1201\n2026/11/03,32.76,4.909807,1.1202\n")
+
+    def test_parse(self):
+        from twradar.providers import taifex as T
+        f = T.parse_futures(self.FUT.encode("cp950"))
+        self.assertEqual(f[0], {"date": "20261102", "src": "TAIFEX", "fut_dealer": 1307, "fut_trust": 89139, "fut_foreign": -89379})
+        self.assertEqual(f[1]["fut_foreign"], -91812)
+        x = T.parse_fx(self.FX.encode("cp950"))
+        self.assertEqual([(r["date"], r["usd_twd"]) for r in x], [("20261102", 32.592), ("20261103", 32.76)])
+        with self.assertRaises(FetchError):
+            T.parse_futures("<html>錯誤</html>".encode("cp950"))
+        with self.assertRaises(FetchError):
+            T.parse_fx("日期,其他\n2026/11/02,1\n".encode("cp950"))
+
+    def _db(self):
+        from twradar.db import DB
+        tmp = tempfile.mkdtemp()
+        db = DB(Path(tmp) / "t.sqlite3")
+        days = weekdays(40)
+        for i, d in enumerate(days):
+            db.put_market({"date": d, "taiex": 20000 + i * 10, "foreign_amt": -50e8 if i >= 30 else 10e8})
+        rows = []
+        for k in range(60):                      # 60 檔：前 30 檔一路漲、後 30 檔一路跌；另有 ETF 不計
+            for i, d in enumerate(days):
+                c = 100 + (i if k < 30 else -i * 0.5)
+                rows.append((d, f"{1100 + k}", c))
+            rows += [(d, "0050", 100 - i) for i, d in enumerate(days)]
+        with db.tx() as c:
+            c.executemany("INSERT OR REPLACE INTO quotes(date, code, close) VALUES(?,?,?)", rows)
+        return db, days
+
+    def test_breadth_and_fields(self):
+        from twradar.macro import Macro, compute_breadth
+        db, days = self._db()
+        n = compute_breadth(db)
+        self.assertEqual(n, len(days) - 19)
+        self.assertEqual(db.one("SELECT breadth20 FROM macro WHERE date=?", (days[-1],))["breadth20"], 50.0)
+        self.assertIsNone(db.one("SELECT breadth20 FROM macro WHERE date=?", (days[18],)))
+        self.assertEqual(compute_breadth(db), 0)   # 已算過的不重算
+        db.put_macro([{"date": d, "fut_foreign": -80000 - i * 1000, "usd_twd": 32 + i * 0.05} for i, d in enumerate(days)])
+        f = Macro(db, days[-1]).fields(days[-1])
+        self.assertEqual(f["foreignSpot5d"], -250.0)
+        self.assertEqual(f["futForeignChg5"], -5000)
+        self.assertGreater(f["usdTwdChg5Pct"], 0.3)
+        self.assertEqual(f["breadth20Chg10"], 0.0)
+        self.assertEqual(Macro(db, days[-1]).fields(days[3]).get("foreignSpot5d"), None)   # 不足 5 天
+        # 判定日以前的資料才算：days[29] 時外資還沒開始賣
+        self.assertEqual(Macro(db, days[-1]).fields(days[29])["foreignSpot5d"], 50.0)
+
+    def test_conditions(self):
+        from twradar.conditions import BUILTIN, Ctx, NA, PASS, FAIL
+        P = dict(DEFAULT_RULES)
+        ev = lambda cid, rec, **kw: BUILTIN[cid].fn(Ctx(rec, {}, {**P, **kw})).state  # noqa: E731
+        bad = {"foreignSpot5d": -300, "futForeignChg5": -5000, "usdTwdChg5Pct": 0.5}
+        self.assertEqual(ev("foreignExit", bad), PASS)
+        self.assertEqual(ev("foreignExit", {**bad, "usdTwdChg5Pct": 0.1}), FAIL)
+        self.assertEqual(ev("foreignExit", {**bad, "usdTwdChg5Pct": 0.1}, foreignExitSignals=2), PASS)
+        self.assertEqual(ev("foreignExit", {"foreignSpot5d": -300}), NA)
+        self.assertEqual(ev("breadthWeak", {"breadth20": 35}), PASS)
+        self.assertEqual(ev("breadthWeak", {"breadth20": 55}), FAIL)
+        self.assertEqual(ev("breadthWeak", {}), NA)
+        self.assertEqual(ev("breadthDiverge", {"mktChg10Pct": 3, "breadth20Chg10": -12}), PASS)
+        self.assertEqual(ev("breadthDiverge", {"mktChg10Pct": -3, "breadth20Chg10": -12}), FAIL)
+
+    def test_climate_variants(self):
+        from twradar.backtest import apply_variant, preset_variants
+        from twradar.rules import default_playbooks
+        from twradar.settings import default_settings
+        S = default_settings()
+        S["playbooks"] = default_playbooks()
+        vs = preset_variants(["climate"], S)
+        self.assertEqual(len(vs), 7)
+        name, over = vs[4]
+        veto = next(r for r in over["_playbooks"]["entry"] if r.get("label") == "否決")
+        self.assertIn("foreignExit", veto["when"]["any"])
+        self.assertIn("belowMa20", veto["when"]["any"])
+        apply_variant(S, over)
+
+
 class TdccHistoryTests(unittest.TestCase):
     WEEKS = ["20261113", "20261106", "20261030", "20251121"]
 

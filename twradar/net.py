@@ -51,15 +51,22 @@ class Fetcher:
                 time.sleep(delay)
             self._last[host] = time.monotonic()
 
-    def get(self, url: str, retries: int = 1) -> bytes:
+    def post(self, url: str, data: dict, retries: int = 1) -> bytes:
+        """表單 POST（期交所的 CSV 下載）。"""
+        from urllib.parse import urlencode
+        return self.get(url, retries, body=urlencode(data).encode())
+
+    def get(self, url: str, retries: int = 1, body: bytes | None = None) -> bytes:
         host = urlparse(url).netloc
         attempt = 0
         while True:
             self._wait(host)
             self.requests += 1
-            req = urllib.request.Request(url, headers={
-                "User-Agent": self.ua, "Accept": "application/json,text/html;q=0.9,*/*;q=0.5",
-                "Accept-Encoding": "gzip", "Accept-Language": "zh-TW,zh;q=0.9"})
+            headers = {"User-Agent": self.ua, "Accept": "application/json,text/html;q=0.9,*/*;q=0.5",
+                       "Accept-Encoding": "gzip", "Accept-Language": "zh-TW,zh;q=0.9"}
+            if body is not None:
+                headers["Content-Type"] = "application/x-www-form-urlencoded"
+            req = urllib.request.Request(url, data=body, headers=headers)
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout, context=self._ctx) as resp:
                     body = resp.read()

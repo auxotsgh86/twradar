@@ -121,6 +121,15 @@ def settled_playbooks(cond: str = "baseSettled") -> dict:
     return pb
 
 
+def veto_with(*conds: str) -> dict:
+    """否決條件另外加上 conds（任一成立就不上車）。"""
+    pb = default_playbooks()
+    for r in pb["entry"]:
+        if r.get("label") == "否決":
+            r["when"] = {"any": [*r["when"]["any"], *conds]}
+    return pb
+
+
 def trial_with(cond: str) -> dict:
     """試單另外要求某個條件。"""
     pb = trial_playbooks()
@@ -184,6 +193,11 @@ ENGINE_PARAMS = [
     {"id": "marginInstRatio", "label": "融資健康：融資增加 < 法人買超的", "value": 30, "unit": "%", "min": 0, "max": 1000, "note": ""},
     {"id": "inst5dPct", "label": "法人 5 日累計：佔近 5 日成交量 ≥", "value": 3, "unit": "%", "min": 0, "max": 100, "note": "5 日版的法人條件用"},
     {"id": "maxBiasMa5Pct", "label": "試單：收盤距 5 日線 ≤", "value": 5, "unit": "%", "min": 0, "max": 50, "note": "對照組「試單」用，不追高"},
+    {"id": "breadthMinPct", "label": "市場廣度：站上月線的股票比例 <", "value": 40, "unit": "%", "min": 0, "max": 100, "note": "對照組「大盤環境」用"},
+    {"id": "breadthDropPts", "label": "廣度背離：指數漲、廣度 10 日下降 ≥", "value": 10, "unit": "點", "min": 0, "max": 100, "note": ""},
+    {"id": "foreignExitSignals", "label": "外資撤出：成立訊號數 ≥", "value": 3, "unit": "項", "min": 1, "max": 3, "note": "現貨賣超、期貨空單增加、新台幣貶值"},
+    {"id": "foreignFutChgLots", "label": "外資撤出：台指期淨空單 5 日增加 ≥", "value": 2000, "unit": "口", "min": 0, "max": None, "note": ""},
+    {"id": "foreignFxPct", "label": "外資撤出：新台幣 5 日貶值 ≥", "value": 0.3, "unit": "%", "min": 0, "max": 10, "note": ""},
     {"id": "baseRangePct", "label": "籌碼沉澱：起漲前整理區間高低差 ≤", "value": 25, "unit": "%", "min": 0, "max": 200, "note": "對照組「沉澱」用"},
     {"id": "baseMarginPos", "label": "籌碼沉澱：融資在近 60 日區間的位置 ≤", "value": 40, "unit": "%", "min": 0, "max": 100, "note": "0＝最低、100＝最高"},
     {"id": "whaleUpWeeksMin", "label": "籌碼集中：大戶比例連續上升 ≥", "value": 3, "unit": "週", "min": 1, "max": 8, "note": "對照組「集保」用"},

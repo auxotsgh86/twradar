@@ -139,6 +139,11 @@ class Crawler:
         except Exception as e:  # noqa: BLE001  不影響當日狀態
             log.exception("alerts")
             self.db.log("warn", f"注意／處置股處理失敗：{e!r}")
+        try:
+            self.crawl_macro(d, force=final)
+        except Exception as e:  # noqa: BLE001  不影響當日狀態
+            log.exception("macro")
+            self.db.log("warn", f"大盤環境資料處理失敗：{e!r}")
         ok = [s for s in self.step_ids if run["steps"][s]["status"] in DONE]
         missing = [s for s in self.step_ids if s not in ok]
         label = self.step_labels
@@ -229,6 +234,32 @@ class Crawler:
         for e in errs:
             self.db.log("warn", f"注意／處置股抓取失敗：{e}")
         self.db.set_setting("alerts", {"date": d, "at": _now(), "rows": len(rows), "errors": errs})
+        return len(rows)
+
+    def crawl_macro(self, d: str, force: bool = False) -> int | None:
+        """大盤環境：市場廣度（由行情計算，每天都算）；期交所外資期貨與匯率只抓最近的日子（補歷史用 macro-history）。"""
+        from datetime import timedelta
+
+        from .macro import compute_breadth
+        from .providers.taifex import Taifex
+        compute_breadth(self.db, [d])
+        today = now_tw().strftime("%Y%m%d")
+        if (to_date(today) - to_date(d)).days > 7:
+            return None
+        opts = {} if self._custom else self.settings.source_plan(self.cfg.env)[2]
+        tf = opts.get("taifex") or {}
+        if not tf and (self._custom or any(isinstance(v, dict) and v.get("base") for v in opts.values())):
+            return None
+        key = self.db.get_setting("macro") or {}
+        if not force and key.get("date") == d:
+            return None
+        start = (to_date(d) - timedelta(days=14)).strftime("%Y%m%d")
+        rows, errs = Taifex(self.f, **({"base": tf["base"]} if tf.get("base") else {})).fetch(start, d)
+        if rows:
+            self.db.put_macro(rows)
+        for e in errs:
+            self.db.log("warn", f"大盤環境資料抓取失敗：{e}")
+        self.db.set_setting("macro", {"date": d, "at": _now(), "rows": len(rows), "errors": errs})
         return len(rows)
 
     def _past_publish(self, d: str) -> bool:

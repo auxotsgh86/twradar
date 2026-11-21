@@ -152,6 +152,47 @@ def holders_history_codes(db, st, which: str, weeks: list[str]) -> list[str]:
     return list(codes)
 
 
+def run_macro_history(cfg, args) -> int:
+    """外資台指期淨未平倉、美元兌新台幣（期交所，每段一年）與市場廣度（由已有行情計算）。"""
+    from datetime import timedelta
+
+    from .dates import to_date
+    from .macro import Macro, compute_breadth
+    from .net import Fetcher
+    from .providers.taifex import Taifex
+    db, st = open_all(cfg)
+    if not args.no_fetch:
+        first = db.one("SELECT MIN(date) AS d FROM market WHERE taiex IS NOT NULL")["d"]
+        start = args.start or first or "20240101"
+        from .config import now_tw
+        end = args.end or now_tw().strftime("%Y%m%d")
+        opts = st.source_plan(cfg.env)[2].get("taifex") or {}
+        tf = Taifex(Fetcher(max(cfg.request_interval, 3.0), cfg.user_agent), **({"base": opts["base"]} if opts.get("base") else {}))
+        a = to_date(start)
+        while a.strftime("%Y%m%d") <= end:
+            b = min(a + timedelta(days=364), to_date(end))
+            s, e = a.strftime("%Y%m%d"), b.strftime("%Y%m%d")
+            rows, errs = tf.fetch(s, e)
+            db.put_macro(rows)
+            fut = sum(1 for r in rows if "fut_foreign" in r)
+            fx = sum(1 for r in rows if "usd_twd" in r)
+            print(f"{s}～{e}：外資期貨 {fut} 天、匯率 {fx} 天" + ("；" + "；".join(errs) if errs else ""), flush=True)
+            a = b + timedelta(days=1)
+    n = compute_breadth(db)
+    print(f"市場廣度：新算 {n} 天")
+    r = db.one("SELECT COUNT(fut_foreign) AS f, COUNT(usd_twd) AS x, COUNT(breadth20) AS b, MIN(date) AS a, MAX(date) AS z FROM macro")
+    print(f"資料庫：外資期貨 {r['f']} 天、匯率 {r['x']} 天、廣度 {r['b']} 天（{r['a']}～{r['z']}）")
+    last = db.one("SELECT MAX(date) AS d FROM market WHERE taiex IS NOT NULL")["d"]
+    if last:
+        from .analysis import DEFAULT_RULES
+        from .macro import foreign_signals
+        f = Macro(db, last, (to_date(last) - timedelta(days=40)).strftime("%Y%m%d")).fields(last)
+        hit, have, why = foreign_signals(f, DEFAULT_RULES)
+        print(f"{last}：" + "、".join(f"{k}={v}" for k, v in f.items()))
+        print(f"外資撤出訊號 {hit}/{have}" + (f"（{'、'.join(why)}）" if why else ""))
+    return 0
+
+
 def run_holders_history(cfg, args) -> int:
     import time as _t
 
@@ -342,6 +383,10 @@ def main(argv=None) -> None:
     hh.add_argument("--codes", default="universe", help="universe（回溯股票池＋觀察清單，預設）、watchlist，或逗號分隔代號")
     hh.add_argument("--weeks", type=int, default=0, help="只抓最近幾週（0＝查詢頁上全部）")
     hh.add_argument("--interval", type=float, default=3.0, help="每次查詢間隔秒數（預設 3；太短可能被封鎖）")
+    mh = sub.add_parser("macro-history", help="大盤環境歷史：外資台指期、新台幣匯率（期交所）與市場廣度")
+    mh.add_argument("--start", help="開始日（預設：資料庫第一個交易日）")
+    mh.add_argument("--end", help="結束日（預設：今天）")
+    mh.add_argument("--no-fetch", action="store_true", help="不抓期交所，只計算市場廣度")
     al = sub.add_parser("alerts", help="注意股、處置股：抓取並列出")
     al.add_argument("--date", help="日期（預設：最新交易日）")
     al.add_argument("--no-fetch", action="store_true", help="只列出資料庫裡的，不抓取")
@@ -426,6 +471,8 @@ def main(argv=None) -> None:
         sys.exit(run_track(cfg, args))
     elif args.cmd == "holders-history":
         sys.exit(run_holders_history(cfg, args))
+    elif args.cmd == "macro-history":
+        sys.exit(run_macro_history(cfg, args))
     elif args.cmd == "alerts":
         sys.exit(run_alerts(cfg, args))
     elif args.cmd == "scan":

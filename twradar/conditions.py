@@ -631,6 +631,42 @@ def chips_gathering(c: Ctx) -> Res:
     return Res(FAIL, need="籌碼集中：" + "、".join(lack))
 
 
+@condition("breadthWeak", "市場廣度不足", "any", ("breadthMinPct",), ("breadth20",),
+           "站上月線的普通股比例低於設定值（多數股票走弱）；沒有廣度資料時不判定")
+def breadth_weak(c: Ctx) -> Res:
+    b = c.g("breadth20")
+    if b is None:
+        return Res(NA)
+    if b < c.P["breadthMinPct"]:
+        return Res(PASS, f"市場廣度 {b:.0f}%（低於 {fmt(c.P['breadthMinPct'], 0)}%）")
+    return Res(FAIL)
+
+
+@condition("breadthDiverge", "指數漲、廣度跌", "any", ("breadthDropPts",), ("mktChg10Pct", "breadth20Chg10"),
+           "加權指數 10 日上漲，但站上月線的比例 10 日下降達設定點數（只有權值股撐盤）")
+def breadth_diverge(c: Ctx) -> Res:
+    m, b = c.g("mktChg10Pct"), c.g("breadth20Chg10")
+    if m is None or b is None:
+        return Res(NA)
+    if m > 0 and b <= -c.P["breadthDropPts"]:
+        return Res(PASS, f"指數 10 日 {m:+.1f}%，廣度 {b:+.0f} 點")
+    return Res(FAIL)
+
+
+@condition("foreignExit", "外資撤出", "any", ("foreignExitSignals", "foreignFutChgLots", "foreignFxPct"),
+           ("foreignSpot5d", "futForeignChg5", "usdTwdChg5Pct"),
+           "近 5 日：外資現貨賣超、台指期淨空單增加、新台幣貶值，成立數達設定值；資料不足時不判定")
+def foreign_exit(c: Ctx) -> Res:
+    from .macro import foreign_signals
+    hit, have, why = foreign_signals(c.rec, c.P)
+    need = c.P["foreignExitSignals"]
+    if have < need:
+        return Res(NA)
+    if hit >= need:
+        return Res(PASS, "外資撤出：" + "、".join(why))
+    return Res(FAIL)
+
+
 @condition("biasMa5Ok", "未追高（5 日線乖離）", "entry", ("maxBiasMa5Pct",), ("close", "ma5"), "收盤距 5 日線不超過設定幅度")
 def bias_ma5_ok(c: Ctx) -> Res:
     close, ma5 = c.g("close"), c.g("ma5")
@@ -754,7 +790,9 @@ COMPARE_FIELDS = {
     "foreign5d": "外資 5 日合計（張）", "trust5d": "投信 5 日合計（張）",
     "ma5": "5 日線", "ma20Prev": "昨日月線", "amt": "成交金額（萬元）", "amt5": "5 日均成交金額（萬元）",
     "instNet": "外資＋投信買賣超（張）", "holdersTotal": "集保股東人數", "holdersChgPct": "股東人數週增減%",
-    "mktClose": "加權指數", "mktMa20": "加權指數月線", "capAmt": "市值（億元）", "peakClose": "買進後最高收盤",
+    "mktClose": "加權指數", "mktMa20": "加權指數月線", "breadth20": "市場廣度（站上月線%）",
+    "foreignSpot5d": "外資現貨 5 日（億元）", "futForeign": "外資台指期淨未平倉（口）", "futForeignChg5": "外資台指期 5 日增減（口）",
+    "usdTwd": "美元兌新台幣", "usdTwdChg5Pct": "新台幣 5 日貶值%", "capAmt": "市值（億元）", "peakClose": "買進後最高收盤",
     "marginChg": "融資增減（張）", "shortChg": "融券增減（張）", "marginStreak": "融資連增天數", "marginPos60": "融資 60 日位置%",
     "whalePct": "大戶持股比例%", "whaleChg": "大戶持股週增減（百分點）", "retailPeople": "散戶人數", "retailChg": "散戶人數週增減",
     "keyLevel": "關鍵價", "cost": "成本價", "profitPct": "持有報酬%",

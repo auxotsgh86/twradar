@@ -106,6 +106,11 @@ def _market(db: DB, d: str) -> dict:
         out["mktMa20"] = round(sum(rows[:20]) / 20, 2)
     if len(rows) >= 21:
         out["mktMa20Prev"] = round(sum(rows[1:21]) / 20, 2)
+    from datetime import timedelta
+
+    from .dates import to_date
+    from .macro import Macro
+    out.update(Macro(db, d, (to_date(d) - timedelta(days=40)).strftime("%Y%m%d")).fields(d))
     return out
 
 

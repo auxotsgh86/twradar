@@ -62,6 +62,9 @@ CREATE TABLE IF NOT EXISTS alerts (            -- 注意股、處置股公告（
   date TEXT NOT NULL, code TEXT NOT NULL, kind TEXT NOT NULL, market TEXT, name TEXT, count INTEGER, reason TEXT,
   start TEXT, end TEXT, measure TEXT, src TEXT, PRIMARY KEY (date, code, kind)
 );
+CREATE TABLE IF NOT EXISTS macro (             -- 大盤環境：外資台指期淨未平倉（口）、美元兌新台幣、市場廣度（站上月線家數%）
+  date TEXT PRIMARY KEY, fut_foreign INTEGER, fut_trust INTEGER, fut_dealer INTEGER, usd_twd REAL, breadth20 REAL, src TEXT
+);
 CREATE INDEX IF NOT EXISTS idx_alerts_code ON alerts(code, date);
 CREATE INDEX IF NOT EXISTS idx_quotes_code ON quotes(code, date);
 CREATE INDEX IF NOT EXISTS idx_inst_code ON inst(code, date);
@@ -193,6 +196,20 @@ class DB:
             out.setdefault(r["code"], {})["notice"] = {"count": r["count"], "reason": r["reason"]}
             out[r["code"]].setdefault("name", r["name"])
         return out
+
+    MACRO_COLS = ("fut_foreign", "fut_trust", "fut_dealer", "usd_twd", "breadth20", "src")
+
+    def put_macro(self, rows: list[dict]) -> int:
+        """合併寫入（只更新有值的欄位）。"""
+        with self.tx() as c:
+            for row in rows:
+                cur = c.execute("SELECT * FROM macro WHERE date=?", (row["date"],)).fetchone()
+                m = dict(cur) if cur else {"date": row["date"]}
+                m.update({k: v for k, v in row.items() if v is not None})
+                cols = ("date", *self.MACRO_COLS)
+                c.execute(f"INSERT OR REPLACE INTO macro({','.join(cols)}) VALUES({','.join('?' * len(cols))})",
+                          [m.get(k) for k in cols])
+        return len(rows)
 
     def holders_latest(self) -> str | None:
         r = self.one("SELECT MAX(date) AS d FROM holders")

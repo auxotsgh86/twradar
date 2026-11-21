@@ -456,6 +456,22 @@ class Provider:
 - 條件 `chipsGathering`：大戶連升 ≥ `whaleUpWeeksMin`（3）週且股東人數連降 ≥ `holdersDownWeeksMin`（3，0＝不看）週。
 - 對照組 `tdcc`：加試單、試單須籌碼集中、上車須籌碼集中、上車須大戶連升。集保歷史只有約一年，回溯請用 `--start` 從有資料後約一個月開始。
 
+## 9.7.5 大盤環境：外資態度與市場廣度（2026-11-21，對照組，尚未採用）
+
+- 起因：2026 下半年回溯勝率 25%；87% 的交易在「大盤多頭」（指數站上上揚的月線）時進場，但多頭判斷落後，
+  高點前最後一段照樣上車（6、7、10 月）；1 月指數漲 10.7% 卻多數個股不漲（權值股撐盤）。
+- 來源（`providers/taifex.py`，2026/11 實測）：期交所 `futContractsDateDown`（POST，commodityId=TXF，Big5 CSV，
+  一次可查約兩年）取各身分別「多空未平倉口數淨額」；`dailyFXRateDown` 取「美元／新台幣」。存入 `macro` 表。
+  央行 `cpx.cbc.gov.tw/api/OpenData/FTDOpenData_Day`（2008 起的銀行間收盤）也能用，目前未接。
+- 市場廣度：普通股（4 碼、非 0 開頭）收盤站上自己 20 日均線的比例，由已有的行情計算（`macro.compute_breadth`），每天抓完行情就算。
+- 欄位（`macro.Macro.fields`，只用判定日含以前）：`foreignSpot5d`（外資現貨 5 日，億元）、`futForeign`／`futForeignChg5`（口）、
+  `usdTwd`／`usdTwdChg5Pct`（正＝新台幣貶）、`breadth20`／`breadth20Chg10`、`mktChg10Pct`。
+- 條件：`foreignExit`（現貨 5 日賣超、期貨淨空單 5 日增加 ≥ `foreignFutChgLots`、新台幣 5 日貶 ≥ `foreignFxPct`，成立 ≥ `foreignExitSignals` 項）、
+  `breadthWeak`（廣度 < `breadthMinPct`）、`breadthDiverge`（指數 10 日漲、廣度 10 日降 ≥ `breadthDropPts` 點）。資料不足為 NA（不否決）。
+- 每日：抓完行情後算廣度；最近 7 天內的日子抓近 14 天的期貨與匯率（同一天只抓一次）。網址可在 `sources.options.taifex.base` 改。
+- 歷史：`twradar macro-history [--start] [--end] [--no-fetch]`（每段一年），最後印出最新一天的欄位與外資撤出訊號。
+- 對照組 `climate`：廣度 < 30／40／50% 不上車、指數漲廣度跌不上車、外資撤出（3 項／2 項）不上車、外資撤出＋廣度 < 40%。
+
 ## 9.8 注意股、處置股（2026-11-16）
 
 - 來源（`twradar/providers/alerts.py`，格式依 2026/11 實際回應）：證交所 `announcement/notice`、`announcement/punish`；

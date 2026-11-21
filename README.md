@@ -213,6 +213,10 @@ API 全部需要 token，請不要公開分享含 token 的網址。
 `TWRADAR_HOME=~/twradar-data .venv/bin/python -m twradar holders-history`（約 18 小時，可中斷後再執行接著抓；
 `--codes watchlist` 只抓觀察清單，約 1 小時）。
 
+大盤環境（外資台指期淨未平倉、新台幣匯率、市場廣度）也要先補歷史：
+`TWRADAR_HOME=~/twradar-data .venv/bin/python -m twradar macro-history`（幾分鐘）；之後每天自動更新。
+回溯對照組 `--compare climate` 會比較「市場廣度不足」「外資撤出」時不上車的效果。
+
 全市場強勢股掃描（今天的名單）：`TWRADAR_HOME=~/twradar-data .venv/bin/python -m twradar scan`（`--method` 可選
 相對強度、相對強度＋不追高、法人、綜合、綜合＋不追高）。排序方法是否有效，請先看回溯報表的「全市場掃描驗證」。
 

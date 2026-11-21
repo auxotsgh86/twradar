@@ -149,6 +149,8 @@ class History:
                 self.hd[r["code"]].append(r["date"])
             w[r["level"]] = {"date": r["date"], "people": r["people"], "shares": r["shares"], "pct": r["pct"]}
         self._hcache: dict[tuple, dict] = {}
+        from .macro import Macro
+        self.macro = Macro(db, until, (to_date(since) - timedelta(days=40)).strftime("%Y%m%d") if since else "")
         self.trading = [r["date"] for r in db.q("SELECT date FROM market WHERE taiex IS NOT NULL AND date>=? AND date<=? "
                                                 "ORDER BY date", rng)]
         self.taiex = {r["date"]: r["taiex"] for r in db.q("SELECT date, taiex FROM market WHERE taiex IS NOT NULL "
@@ -201,6 +203,7 @@ class History:
             out["mktMa20"] = sum(xs[:20]) / 20
         if len(xs) >= 21:
             out["mktMa20Prev"] = sum(xs[1:21]) / 20
+        out.update(self.macro.fields(d))
         return out
 
     def regime(self, d: str) -> str:
@@ -538,6 +541,7 @@ def _veto_ids(settings: dict) -> list[str]:
 
 def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
     """內建的規則對照組：
+    climate 大盤環境：市場廣度 30／40／50%、指數漲廣度跌、外資撤出（3 項、2 項）、外資撤出＋廣度
     tdcc    集保籌碼集中（大戶連升＋股東人數連降）：試單、試單須集中、上車須集中、上車須大戶連升
     settled 起漲前籌碼沉澱：試單、試單須沉澱、上車須沉澱
     trial   加「試單」規則（另一組同時拿掉大盤逆風）
@@ -592,10 +596,18 @@ def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
                                         next(y for y in base if isinstance(y, dict) and "instNetSell" in (y.get("all") or []))
                                         for x in r["when"]["any"]]
             out.append(("多頭只放寬幅度 3%（法人賣超停損照舊）", {"_playbooks": pb}))
+        elif n == "climate":   # 大盤環境：市場廣度、外資態度（現貨＋期貨＋匯率）
+            from .rules import veto_with
+            for v in (30, 40, 50):
+                out.append((f"廣度 < {v}% 不上車", {"_playbooks": veto_with("breadthWeak"), "breadthMinPct": v}))
+            out.append(("指數漲、廣度跌不上車", {"_playbooks": veto_with("breadthDiverge")}))
+            out.append(("外資撤出（3 項）不上車", {"_playbooks": veto_with("foreignExit")}))
+            out.append(("外資撤出（2 項）不上車", {"_playbooks": veto_with("foreignExit"), "foreignExitSignals": 2}))
+            out.append(("外資撤出＋廣度 < 40% 不上車", {"_playbooks": veto_with("foreignExit", "breadthWeak")}))
         elif n == "market":
             out.append(("不用大盤逆風", {"_drop": ["marketWeak"]}))
         else:
-            raise ValueError(f"未知的對照組：{n}（可用：tdcc、settled、trial、bullhold、bullstop、bullstop-grid、bull、veto、inst1d、market、v04、v03）")
+            raise ValueError(f"未知的對照組：{n}（可用：climate、tdcc、settled、trial、bullhold、bullstop、bullstop-grid、bull、veto、inst1d、market、v04、v03）")
     return out
 
 
