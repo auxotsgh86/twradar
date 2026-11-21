@@ -738,6 +738,12 @@ def red_vol_k_quality(c: Ctx) -> Res:
     return Res(FAIL, need="實體紅K（收漲、上影線短、帶量）")
 
 
+@condition("redVolKClean", "乾淨帶量紅K", "entry", ("volRatio", "maxUpperShadowPct"), ("candle", "chgPct", "upperShadowPct", "vol", "vol5"),
+           "帶量紅K，且當日上漲（排除跳空開低的假紅K）、上影線不到整根 K 線的設定比例（排除避雷針）；同 redVolKQuality")
+def red_vol_k_clean(c: Ctx) -> Res:
+    return red_vol_k_quality(c)
+
+
 @condition("breakMa20Deep", "深跌破下彎月線", "hold", ("breakMaBullPct",), ("close", "ma20", "ma20Prev"),
            "收盤低於月線超過較寬的幅度，且月線下彎（大盤多頭時用）")
 def break_ma20_deep(c: Ctx) -> Res:

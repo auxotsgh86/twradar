@@ -774,6 +774,7 @@ def _veto_ids(settings: dict) -> list[str]:
 
 def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
     """內建的規則對照組：
+    audit   個股訊號修復稽核（v0.6 為底）：v0.6 含／不加碼、Fix A～D、全修復含／不加碼
     neon    外部建議：不加碼、法人只看 5 日、轉買須力道、不追高、實體紅K、出貨警訊拿掉爆量長黑、多頭獲利出場放寬、全上
     largecap 大型權值股：停損放寬（3%、5%、不因法人賣超、連 2 日）、不追高（距月線 4%、6%）、盤整不進場（月線 10 日 1%、2%）
     climate-grid  v0.6 穩健性：v0.5、外資撤出 2 項、3 項但期貨空單 1000／4000 口、新台幣貶 0.2／0.5%
@@ -844,6 +845,21 @@ def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
         elif n == "v06":
             from .rules import v06_playbooks
             out.append(("v0.6（前一版）", {"_playbooks": v06_playbooks()}))
+        elif n == "audit":   # Neon 的個股訊號修復稽核（以 v0.6 為底；目前預設 v0.7 ＝ v0.6＋Fix A）
+            from .rules import neon_playbooks as nb, v06_playbooks
+            fa = dict(inst="5d")
+            fb = dict(entry_extra=("biasMa5Ok",), quality="clean")
+            fc = dict(no_blowoff=True)
+            fd = dict(bull_profit=True)
+            allf = {**fa, **fb, **fc, **fd}
+            out.append(("v0.6（含加碼）", {"_playbooks": v06_playbooks()}))
+            out.append(("v0.6（不加碼）", {"_playbooks": v06_playbooks(), "_maxAdds": 0}))
+            out.append(("Fix A：上車強制 5 日法人買超", {"_playbooks": nb(**fa)}))
+            out.append(("Fix B：上車不追高＋乾淨紅K", {"_playbooks": nb(**fb)}))
+            out.append(("Fix C：移除無差別爆量長黑減碼", {"_playbooks": nb(**fc)}))
+            out.append(("Fix D：多頭同步放寬獲利出場", {"_playbooks": nb(**fd)}))
+            out.append(("全修復（不加碼）", {"_playbooks": nb(**allf), "_maxAdds": 0}))
+            out.append(("全修復（含加碼）", {"_playbooks": nb(**allf)}))
         elif n == "neon":   # 外部建議：堵法人轉買後門、不追高、實體紅K、持有面少洗盤、不加碼對照
             from .rules import neon_playbooks as nb
             out.append(("不加碼（只看上車訊號）", {"_maxAdds": 0}))
@@ -878,7 +894,7 @@ def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
         elif n == "market":
             out.append(("不用大盤逆風", {"_drop": ["marketWeak"]}))
         else:
-            raise ValueError(f"未知的對照組：{n}（可用：v06、neon、largecap、climate、climate-grid、v05、tdcc、settled、trial、bullhold、bullstop、bullstop-grid、bull、veto、inst1d、market、v04、v03）")
+            raise ValueError(f"未知的對照組：{n}（可用：audit、v06、neon、largecap、climate、climate-grid、v05、tdcc、settled、trial、bullhold、bullstop、bullstop-grid、bull、veto、inst1d、market、v04、v03）")
     return out
 
 

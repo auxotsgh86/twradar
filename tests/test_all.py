@@ -1290,6 +1290,24 @@ class BacktestTests(unittest.TestCase):
                 c.execute("UPDATE quotes SET open=?, high=?, low=?, close=?, change=? WHERE date=? AND code='2330'",
                           (*tuple(old), d))
 
+    def test_max_adds_zero(self):
+        """_maxAdds=0：同一套規則下，對照組完全不加碼；預設會加碼。"""
+        from twradar import backtest as B
+        S = self.st.get()
+        S["conditions"] = [{"id": "cUp", "label": "上", "left": {"field": "close"}, "op": ">", "right": 0}]
+        S["playbooks"] = {"entry": [{"light": "add", "label": "上車", "when": {"all": ["notHolding", "cUp"]}},
+                                    {"light": "add", "label": "加碼", "when": {"all": ["isHolding", "cUp"]}},
+                                    {"light": "watch", "default": True}],
+                          "hold": [{"light": "keep", "default": True}]}
+        conf = B.BTConfig(start=self.dates[80], end=self.dates[-1], split=self.dates[120], universe="watchlist",
+                          variants=[("目前設定", {}), ("不加碼", {"_maxAdds": 0})], study=False, scan=False)
+        res = B.run(self.db, S, conf)
+        self.assertGreater(sum(t["adds"] for t in res["results"][0]["tradeList"]), 0)
+        self.assertEqual(res["results"][1]["portfolio"]["10"].get("taken") is not None, True)
+        trades0 = B.run(self.db, S, B.BTConfig(start=self.dates[80], end=self.dates[-1], split=self.dates[120], universe="watchlist",
+                                               variants=[("不加碼", {"_maxAdds": 0})], study=False, scan=False))
+        self.assertEqual(sum(t["adds"] for t in trades0["results"][0]["tradeList"]), 0)
+
     def test_tracking_record_and_forward(self):
         """模型追蹤：判定與報酬定義都和回溯分析一致；未滿期的報酬之後會回填；收盤分析後自動記錄。"""
         from twradar import tracking
@@ -2003,6 +2021,29 @@ class MacroTests(unittest.TestCase):
         self.assertEqual(vs["不加碼（只看上車訊號）"]["_maxAdds"], 0)
         for o in vs.values():
             apply_variant(S, o)
+
+    def test_audit(self):
+        import json as _j
+        from twradar.backtest import apply_variant, preset_variants
+        from twradar.conditions import BUILTIN, Ctx, NA, PASS, FAIL
+        from twradar.settings import default_settings
+        P = dict(DEFAULT_RULES)
+        ev = lambda rec: BUILTIN["redVolKClean"].fn(Ctx(rec, {}, P)).state  # noqa: E731
+        base = {"candle": 1, "chgPct": 2, "upperShadowPct": 20, "vol": 2000, "vol5": 1000}
+        self.assertEqual(ev(base), PASS)
+        self.assertEqual(ev({**base, "chgPct": -1}), FAIL)            # 跳空開低的假紅K
+        self.assertEqual(ev({**base, "upperShadowPct": 55}), FAIL)    # 避雷針
+        self.assertEqual(ev({**base, "upperShadowPct": None}), NA)
+        vs = dict(preset_variants(["audit"], default_settings()))
+        self.assertEqual(len(vs), 8)
+        self.assertEqual(vs["v0.6（不加碼）"]["_maxAdds"], 0)
+        self.assertEqual(vs["全修復（不加碼）"]["_maxAdds"], 0)
+        self.assertNotIn("_maxAdds", vs["全修復（含加碼）"])
+        fb = _j.dumps(vs["Fix B：上車不追高＋乾淨紅K"]["_playbooks"], ensure_ascii=False)
+        self.assertIn("redVolKClean", fb)
+        self.assertIn("biasMa5Ok", fb)
+        for o in vs.values():
+            apply_variant(default_settings(), o)
 
     def test_portfolio(self):
         """兩筆交易、資金 2 份：A 從 100 漲到 110、B 從 50 跌到 45；扣費前組合應約 +0%。"""

@@ -516,6 +516,10 @@ class Provider:
   台指期淨未平倉 5 日變化、−新台幣 5 日變化的滾動 Z-score（含當天的 W 日、截斷 ±3），等權平均＝`net_score`、樣本標準差＝`dispersion`；
   對未來 h 日加權指數報酬與期間最大回落做 Spearman Rank IC、分組（net 四組、disp ≥ 1.2）、與現行 `foreignExit`（3 項）對照，
   前 2/3 樣本內。純標準函式庫，獨立於規則與回溯。
+- 對照組 `audit`（Neon 的個股訊號修復稽核，以 v0.6 為底）：v0.6 含／不加碼、Fix A（上車強制 `inst5dBuy`）、
+  Fix B（`biasMa5Ok`＋`redVolKClean`）、Fix C（出貨警訊拿掉 `blowoffBlack`）、Fix D（多頭時獲利出場的跌破月線改
+  「非多頭才看跌破月線，或深跌破下彎月線」，保留 3 項籌碼轉弱）、全修復含／不加碼。`_maxAdds` 覆寫加碼次數。
+  `redVolKClean` 與 `redVolKQuality` 相同（名稱沿用建議）。
 - 條件研究：只看大盤層級欄位的條件（`study.MARKET_FIELDS`）同一天每檔都一樣，改用原始報酬（扣同日平均會抵消）。
 - 回溯結果每組加 `byMonth`（依進場月份）。
 - 對照組 `climate`（以 v0.5 為底）：廣度 < 30／40／50% 不上車、指數漲廣度跌不上車、外資撤出（3 項／2 項）不上車、外資撤出＋廣度 < 40%。

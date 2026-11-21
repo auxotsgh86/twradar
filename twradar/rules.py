@@ -196,7 +196,7 @@ def neon_playbooks(inst: str = "", entry_extra: tuple = (), quality: bool = Fals
         elif inst == "strong":
             w = _swap(w, "instTurn", "instTurnStrong")
         if quality:
-            w = _swap(w, "redVolK", "redVolKQuality")
+            w = _swap(w, "redVolK", "redVolKClean" if quality == "clean" else "redVolKQuality")
         if entry_extra:
             w = {"all": [*(w["all"] if "all" in w else [w]), *entry_extra]}
         r["when"] = w
