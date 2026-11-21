@@ -492,6 +492,8 @@ class Provider:
   - 個股頁「模擬買賣點」：`GET /stocks/{code}/trades?days=` 以目前規則（含策略標籤）跑回溯同一套 `simulate`，
     價格圖標 ▲買／▲加、▼賣／▼減（賺紅、賠綠），下方列出每筆及每個動作的理由（`simulate` 的 `events`：
     訊號日、執行日、規則、成立的條件說明；進場理由來自 `evaluate().entryReasons`、出場理由來自 `hold.reasons`）；和使用者實際買賣無關。
+    價格圖下方的「每日判定」色帶：`simulate(daily=...)` 記下每天的燈號與主要原因（觀察＝還差什麼、否決＝原因、持有＝續抱／減碼／退場），
+    看得出某段漲勢為什麼沒買。理由清單去除重複（`entryReasons`、`hold.reasons`）。
 - 對照組 `largecap`（2026-11-21，起因：台積電 5～10 月三筆都停損）：停損放寬（`breakMaPct` 3、5；拿掉「跌破月線＋法人賣超」；
   月線相關停損須 `belowMa20Two` 連 2 日收在月線下）、不追高（`notExtendedMa20`，距月線 4／6%）、盤整不進場
   （`ma20Trending`，月線 10 日上升 1／2%；指標 `ma20Ago10`、`prevClose`）。每個組合都有 `byTag`，比較大型／中型／上櫃。

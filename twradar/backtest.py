@@ -264,7 +264,8 @@ class Position:
 
 
 def simulate(hist: History, code: str, dates: list[str], universe: dict, P: dict, S: dict, cfg: BTConfig,
-             rec_cache: dict, events: list | None, regimes: dict) -> list[dict]:
+             rec_cache: dict, events: list | None, regimes: dict, daily: list | None = None) -> list[dict]:
+    """daily：給個股頁用，記下每天的判定（燈號、規則、主要原因）。"""
     fee, tax = P.get("feePct", 0.1425) / 100, P.get("taxPct", 0.3) / 100
     trades: list[dict] = []
     pos: Position | None = None
@@ -319,6 +320,16 @@ def simulate(hist: History, code: str, dates: list[str], universe: dict, P: dict
             r2 = dict(rec, peakClose=pos.peak / f)
         sig = evaluate(r2, stock, P, S)
         light, rule = sig["light"], sig.get("rule", "")
+        if daily is not None:
+            if pos:
+                h = sig.get("hold") or {}
+                daily.append({"date": d, "state": "hold-" + (h.get("light") or "na"), "rule": h.get("rule") or "續抱",
+                              "note": "、".join((h.get("reasons") or [])[:3])})
+            else:
+                why = (sig.get("entryReasons") if light == "go" else sig.get("warnings") if light == "stop"
+                       else sig.get("needs") if light == "wait" else sig.get("missing")) or []
+                why = [x for x in dict.fromkeys(why) if x not in ("未持有", "持有中")]
+                daily.append({"date": d, "state": light, "rule": rule, "note": "、".join(str(x) for x in why[:3])})
         if events is not None:
             base = {"code": code, "date": d, "tags": sorted(tags or []), "regime": regimes[d]}
             if light == "go":

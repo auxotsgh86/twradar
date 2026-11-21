@@ -353,9 +353,11 @@ class App:
         Pw, Sw, strat = L.resolve(S, w, R)
         hist = History(self.db, [code], dates[-1], since)
         cfg = BTConfig(start=dates[0], end=dates[-1], split=dates[-1])
-        trades = simulate(hist, code, dates, {d: {code: {"個股"}} for d in dates}, Pw, Sw, cfg, {}, None, {})
+        daily: list = []
+        trades = simulate(hist, code, dates, {d: {code: {"個股"}} for d in dates}, Pw, Sw, cfg, {}, None, {}, daily)
         return {"code": code, "from": dates[0], "to": dates[-1], "strategy": strat,
-                "trades": [{k: t[k] for k in ("entry", "exit", "rule", "reason", "ret", "adds", "reduced", "days", "events")} for t in trades]}
+                "trades": [{k: t[k] for k in ("entry", "exit", "rule", "reason", "ret", "adds", "reduced", "days", "events")} for t in trades],
+                "daily": daily}
 
     def stock_trial(self, code: str, labels: list[str] | None = None) -> dict | None:
         """用最近一個交易日的資料試算，逐條列出條件是否成立。"""

@@ -386,6 +386,24 @@ function tradeMarks(L, tr) {
   }
   return out;
 }
+/* 每日燈號帶：和價格圖同一條時間軸，每天一格 */
+const DAY_STATE = {
+  go: ["上車訊號", "var(--go)"], wait: ["觀察（條件還不夠）", "var(--wait)"], stop: ["否決（不宜進場）", "var(--stop)"], na: ["資料不足", "var(--na)"],
+  "hold-keep": ["持有：續抱", "var(--accent)"], "hold-reduce": ["持有：減碼", "var(--wait)"], "hold-exit": ["持有：退場", "var(--stop)"], "hold-na": ["持有", "var(--accent)"],
+};
+function dayStrip(L, tr) {
+  if (!tr || !(tr.daily || []).length || L.length < 2) return "";
+  const W = 760, Lm = 56, R = 12, H = 30, n = L.length, x = i => Lm + i * (W - Lm - R) / (n - 1), w = (W - Lm - R) / (n - 1);
+  const by = Object.fromEntries(tr.daily.map(d => [`${d.date.slice(0, 4)}-${d.date.slice(4, 6)}-${d.date.slice(6)}`, d]));
+  let g = `<text x="${Lm - 6}" y="19" text-anchor="end">判定</text>`;
+  L.forEach((d, i) => { const e = by[d]; if (!e) return; const [lab, col] = DAY_STATE[e.state] || [e.state, "var(--na)"];
+    const tip = `${d}　${lab}${e.rule && !lab.includes(e.rule) ? `（${e.rule}）` : ""}${e.note ? "\n" + (e.state === "wait" ? "還差：" : e.state === "stop" ? "原因：" : "") + e.note : ""}`;
+    const x0 = Math.max(Lm, x(i) - w / 2), x1 = Math.min(W - R, x(i) + w / 2);
+    g += `<rect x="${x0.toFixed(1)}" y="6" width="${(x1 - x0 + .4).toFixed(1)}" height="18" fill="${col}" opacity="${e.state.startsWith("hold") ? .55 : .85}"><title>${esc(tip)}</title></rect>`; });
+  const legend = ["go", "wait", "stop", "hold-keep"].map(k => `<span><i style="background:${DAY_STATE[k][1]};height:10px"></i>${DAY_STATE[k][0].replace(/（.*/, "")}</span>`).join("");
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="每日判定">${g}</svg>
+    <div class="legend small" style="margin:2px 0 6px">${legend}<span class="muted">滑鼠移到色塊上，可看那天為什麼沒買／為什麼賣</span></div>`;
+}
 function tradesHTML(tr) {
   if (!tr) return "";
   const note = `<div class="small muted">▲買／▲加＝買進、加碼；▼賣／▼減＝賣出、減碼。這是用目前規則${tr.strategy ? `（策略「${esc(tr.strategy)}」）` : ""}回頭模擬：假設這段期間完全照系統訊號操作，會在哪裡買、為什麼賣（收盤出現訊號、隔天開盤執行，扣手續費與證交稅）。
@@ -409,7 +427,7 @@ async function viewStock(code) {
      ${g.missing && g.missing.length ? `<div class="small muted">未取得：${esc(g.missing.join("、"))}${h.inWatchlist ? "" : "（集保大戶、散戶資料只抓觀察清單的股票）"}</div>` : ""}</section>` : ""}
    <section class="panel"><div class="row between"><h2>收盤價、均線與模擬買賣點（近 ${rows.length} 日）</h2><div class="legend"><span><i style="background:var(--fg)"></i>收盤</span><span><i style="background:var(--c-ma20)"></i>月線 MA20</span><span><i style="background:var(--c-ma60)"></i>季線 MA60</span></div></div>
     ${lineChart(L, [{values: rows.map(r => r.close), color: "var(--fg)", width: 2, dot: true}, {values: rows.map(r => r.ma20), color: "var(--c-ma20)"}, {values: rows.map(r => r.ma60), color: "var(--c-ma60)"}], {h: 320, bars: rows.map(r => r.volume), marks: tradeMarks(L, tr)})}
-    ${tradesHTML(tr)}</section>
+    ${dayStrip(L, tr)}${tradesHTML(tr)}</section>
    <section class="panel"><div class="row between"><h2>外資／投信買賣超（張，近 60 日）</h2><div class="legend"><span><i style="background:var(--c-foreign)"></i>外資</span><span><i style="background:var(--c-trust)"></i>投信</span></div></div>
     ${divBars(L60, [{values: r60.map(r => r.foreign), color: "var(--c-foreign)"}, {values: r60.map(r => r.trust), color: "var(--c-trust)"}])}</section>
    <section class="panel"><h2>融資餘額（張，近 60 日）</h2>${lineChart(L60, [{values: r60.map(r => r.marginBal), color: "var(--accent)", dot: true}], {h: 180})}</section>

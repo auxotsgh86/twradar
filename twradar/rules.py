@@ -491,7 +491,7 @@ def evaluate(rec: dict, stock: dict, P: dict, settings: dict | None = None) -> d
            "missing": missing_of(rec), "volRatio": None if vr is None else round(vr, 3),
            "maDistPct": None if not has_pv else round((close / ma20 - 1) * 100, 2),
            "belowMa20": below, "keyLevelNote": key_note, "rule": entry["rule"], "confirm": entry["confirm"],
-           "entryReasons": entry["reasons"]}
+           "entryReasons": list(dict.fromkeys(entry["reasons"]))}
     if light == "wait" and entry["rule"] not in ("觀察", "") and entry["reasons"]:
         out["warnings"] = out["warnings"] + [x for x in entry["reasons"] if x not in out["warnings"]]
     if stock.get("holding"):
@@ -501,7 +501,7 @@ def evaluate(rec: dict, stock: dict, P: dict, settings: dict | None = None) -> d
                 if eng.leaf(k, ctx).state == PASS]
         out["hold"] = {"light": h["light"], "lightLabel": h["lightLabel"] or LIGHT_LABEL.get(h["light"], h["light"]),
                        "rule": h["rule"], "confirm": h["confirm"],
-                       "reasons": h["reasons"], "weak": [w for w in warn if w not in h["reasons"]],
+                       "reasons": list(dict.fromkeys(h["reasons"])), "weak": [w for w in warn if w not in h["reasons"]],
                        "profitPct": None if prof is None else round(prof, 2)}
         if rec.get("costExDates") and ctx.cost:
             out["hold"]["costAdj"] = round(ctx.cost, 2)
