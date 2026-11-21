@@ -4,6 +4,7 @@
 - 超額報酬＝個股報酬 − 同日同組別（大型／中型／上櫃／觀察清單）股票池平均。
 - 同一天的觀察彼此相關：先算每天的平均，再算日平均的平均與標準誤（se）。
 - 兩個母體：「全部」＝整個股票池；「趨勢股」＝收盤在月線上且月線走平或上揚（右側系統真正會考慮的股票）。
+- 大盤層級的條件（只看大盤、廣度、外資態度）同一天對每檔都一樣，扣掉同日平均就抵消了，所以改看原始報酬（row["raw"]＝True）。
 - 「差距」＝成立 − 不成立；否決類條件應該是負的，買進類條件應該是正的；|差距| < 2×se 代表看不出區分力。
 """
 from __future__ import annotations
@@ -17,6 +18,14 @@ HORIZONS = (5, 10, 20)
 GROUPS = ("大型", "中型", "上櫃", "觀察清單")
 # 需要持有成本、關鍵價的條件不研究（股票池一律未持有）
 SKIP = {"noData", "isHolding", "notHolding", "addProfitOk", "stopLoss", "profitTarget", "belowKeyLevel", "giveback"}
+
+
+MARKET_FIELDS = {"mktClose", "mktMa20", "mktMa20Prev", "mktChg10Pct", "breadth20", "breadth20Chg10",
+                 "foreignSpot5d", "futForeign", "futForeignChg5", "usdTwd", "usdTwdChg5Pct"}
+
+
+def market_level(c) -> bool:
+    return bool(c.fields) and set(c.fields) <= MARKET_FIELDS
 
 
 def _grp(tags) -> str:
@@ -36,6 +45,7 @@ def condition_study(hist, dates, universe, P, S, split, rec_cache=None, regimes=
     """回傳 {條件: {"label", "side", 母體: {樣本: {"pass": {h: 統計}, "fail": {...}, "diff": {h: 差距}}}}}。"""
     rec_cache = {} if rec_cache is None else rec_cache
     conds = [c for cid, c in BUILTIN.items() if cid not in SKIP]
+    raw_ids = {c.id for c in conds if market_level(c)}
     # 每天每組的基準
     fw_all: dict[tuple, dict[int, float]] = {}
     base: dict[tuple, dict[int, float]] = {}
@@ -69,6 +79,7 @@ def condition_study(hist, dates, universe, P, S, split, rec_cache=None, regimes=
             ex = [(hi[h], fw[h] - b[h]) for h in HORIZONS if h in fw and h in b]
             if not ex:
                 continue
+            rw = [(hi[h], fw[h]) for h in HORIZONS if h in fw and h in b]
             ma20, prev = rec.get("ma20"), rec.get("ma20Prev")
             trend = ma20 is not None and prev is not None and rec["close"] >= ma20 and ma20 >= prev
             pops = ("全部", "趨勢股") if trend else ("全部",)
@@ -85,7 +96,7 @@ def condition_study(hist, dates, universe, P, S, split, rec_cache=None, regimes=
                     a = day.get((c.id, pop, state))
                     if a is None:
                         a = day[(c.id, pop, state)] = [0.0, 0.0, 0.0, 0, 0, 0]
-                    for k, v in ex:
+                    for k, v in (rw if c.id in raw_ids else ex):
                         a[k] += v
                         a[k + 3] += 1
         for (cid, pop, state), a in day.items():
@@ -98,7 +109,7 @@ def condition_study(hist, dates, universe, P, S, split, rec_cache=None, regimes=
                         cc[h] += a[k + 3]
     out: dict = {}
     for c in conds:
-        row = {"label": c.label, "side": c.side}
+        row = {"label": c.label, "side": c.side, "raw": c.id in raw_ids}
         for pop in ("全部", "趨勢股"):
             for s in ("樣本內", "樣本外", "全期"):
                 cell = {"pass": {}, "fail": {}, "diff": {}}

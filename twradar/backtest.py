@@ -474,7 +474,9 @@ def run(db: DB, settings: dict, cfg: BTConfig, progress=None) -> dict:
             trades += simulate(hist, code, dates, universe, P, S, cfg, rec_cache, events, regimes)
             if progress:
                 progress(vi, len(cfg.variants), ci + 1, len(codes))
-        res = {"name": name, "params": over, "trades": summarize_trades(trades, cfg.split)}
+        res = {"name": name, "params": over, "trades": summarize_trades(trades, cfg.split),
+               "byMonth": {m: summarize_trades([t for t in trades if t["entry"][:6] == m], "99999999")["全期"]
+                           for m in sorted({t["entry"][:6] for t in trades})}}
         if vi == 0 and cfg.study:
             from .study import condition_study
             res["conditions"] = condition_study(hist, dates, universe, P, S, cfg.split, rec_cache, regimes)
@@ -541,7 +543,9 @@ def _veto_ids(settings: dict) -> list[str]:
 
 def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
     """內建的規則對照組：
-    climate 大盤環境：市場廣度 30／40／50%、指數漲廣度跌、外資撤出（3 項、2 項）、外資撤出＋廣度
+    climate-grid  v0.6 穩健性：v0.5、外資撤出 3 項、2 項但期貨空單 1000／4000 口、新台幣貶 0.2／0.5%
+    v05     前一版規則
+    climate 大盤環境（以 v0.5 為底）：市場廣度 30／40／50%、指數漲廣度跌、外資撤出（3 項、2 項）、外資撤出＋廣度
     tdcc    集保籌碼集中（大戶連升＋股東人數連降）：試單、試單須集中、上車須集中、上車須大戶連升
     settled 起漲前籌碼沉澱：試單、試單須沉澱、上車須沉澱
     trial   加「試單」規則（另一組同時拿掉大盤逆風）
@@ -604,10 +608,19 @@ def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
             out.append(("外資撤出（3 項）不上車", {"_playbooks": veto_with("foreignExit")}))
             out.append(("外資撤出（2 項）不上車", {"_playbooks": veto_with("foreignExit"), "foreignExitSignals": 2}))
             out.append(("外資撤出＋廣度 < 40% 不上車", {"_playbooks": veto_with("foreignExit", "breadthWeak")}))
+        elif n == "v05":
+            from .rules import v05_playbooks
+            out.append(("v0.5（前一版）", {"_playbooks": v05_playbooks()}))
+        elif n == "climate-grid":   # v0.6 穩健性：外資撤出的門檻換成相鄰數值
+            from .rules import v05_playbooks
+            out.append(("v0.5（不看外資）", {"_playbooks": v05_playbooks()}))
+            out.append(("外資撤出 3 項", {"foreignExitSignals": 3}))
+            for lots, fx in ((1000, 0.3), (4000, 0.3), (2000, 0.2), (2000, 0.5), (1000, 0.2), (4000, 0.5)):
+                out.append((f"2 項：空單 {lots} 口、貶 {fx}%", {"foreignFutChgLots": lots, "foreignFxPct": fx}))
         elif n == "market":
             out.append(("不用大盤逆風", {"_drop": ["marketWeak"]}))
         else:
-            raise ValueError(f"未知的對照組：{n}（可用：climate、tdcc、settled、trial、bullhold、bullstop、bullstop-grid、bull、veto、inst1d、market、v04、v03）")
+            raise ValueError(f"未知的對照組：{n}（可用：climate、climate-grid、v05、tdcc、settled、trial、bullhold、bullstop、bullstop-grid、bull、veto、inst1d、market、v04、v03）")
     return out
 
 

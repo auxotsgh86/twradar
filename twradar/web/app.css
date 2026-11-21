@@ -44,6 +44,8 @@ select,input{font:inherit;font-size:13px;color:var(--fg);background:var(--surfac
 .b-na,.b-holiday,.b-not_started{background:var(--na-bg);color:var(--na)}
 .steps{display:flex;flex-wrap:wrap;gap:6px}
 .market{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px}
+.market.climate{margin-top:10px;padding-top:10px;border-top:1px dashed var(--line, #ddd)}
+.market.climate .badge{white-space:normal}
 .kv{display:flex;flex-direction:column;min-width:0}.kv .k{font-size:11.5px;color:var(--muted)}.kv .v{font-size:16px;font-weight:600}
 .tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
 .tile{border-radius:var(--r);padding:12px 14px;display:flex;align-items:baseline;gap:10px}

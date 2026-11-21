@@ -1133,7 +1133,7 @@ class V3RulesTests(unittest.TestCase):
         path.write_text(json.dumps(data), encoding="utf-8")
         s = SettingsStore(path, 50).get()
         self.assertEqual(s["playbooks"]["entry"][1]["label"], "自訂")
-        self.assertEqual(s["rulesVersion"], 5)
+        self.assertEqual(s["rulesVersion"], 6)
         # v0.3 預設 → 升級為目前預設；參數不再重設
         from twradar.rules import v03_playbooks
         data["playbooks"], data["rulesVersion"] = v03_playbooks(), 3
@@ -1142,7 +1142,7 @@ class V3RulesTests(unittest.TestCase):
                 p_["value"] = 20
         path.write_text(json.dumps(data), encoding="utf-8")
         s = SettingsStore(path, 50).get()
-        self.assertEqual((s["playbooks"], s["rulesVersion"]), (default_playbooks(), 5))
+        self.assertEqual((s["playbooks"], s["rulesVersion"]), (default_playbooks(), 6))
         # v0.4 預設 → v0.5
         from twradar.rules import v04_playbooks
         data["playbooks"], data["rulesVersion"] = v04_playbooks(), 4
@@ -1372,19 +1372,19 @@ class BacktestTests(unittest.TestCase):
         from twradar.settings import validate
         S = self.st.get()
         veto = B._veto_ids(S)
-        self.assertEqual(veto, ["belowMa20", "marginExcess"])
+        self.assertEqual(veto, ["belowMa20", "marginExcess", "foreignExit"])
         vs = B.preset_variants(["v03,veto", "inst1d,market"], S)
-        self.assertEqual([n for n, _ in vs], ["v0.3", "不用否決：belowMa20", "不用否決：marginExcess", "不用任何否決",
+        self.assertEqual([n for n, _ in vs], ["v0.3", "不用否決：belowMa20", "不用否決：marginExcess", "不用否決：foreignExit", "不用任何否決",
                                              "法人看單日", "不用大盤逆風"])
         with self.assertRaises(ValueError):
             B.preset_variants(["nope"], S)
         S1, p1 = B.apply_variant(S, {"_drop": ["marginExcess"], "stopLossPct": 8})
-        self.assertEqual({r["label"]: r for r in S1["playbooks"]["entry"]}["否決"]["when"]["any"], ["belowMa20"])
+        self.assertEqual({r["label"]: r for r in S1["playbooks"]["entry"]}["否決"]["when"]["any"], ["belowMa20", "foreignExit"])
         self.assertEqual(p1, {"stopLossPct": 8})
         self.assertEqual(S["playbooks"], default_playbooks())   # 原設定不變
         S2, _ = B.apply_variant(S, {"_drop": veto})
         self.assertNotIn("否決", [r["label"] for r in S2["playbooks"]["entry"]])
-        S3, _ = B.apply_variant(S, dict(vs[4][1]))
+        S3, _ = B.apply_variant(S, dict(vs[5][1]))
         e3 = {r["label"]: r for r in S3["playbooks"]["entry"]}
         self.assertEqual(e3["投信買、外資賣"]["when"], "trustBuyConflict")
         self.assertIn('"instBuy"', json.dumps(e3["加碼"]["when"]))
@@ -1404,7 +1404,7 @@ class BacktestTests(unittest.TestCase):
         pb = default_playbooks()
         e = {r["label"]: r for r in pb["entry"]}
         h = {r["label"]: r for r in pb["hold"]}
-        self.assertEqual(e["否決"]["when"], {"any": ["belowMa20", "marginExcess"]})
+        self.assertEqual(e["否決"]["when"], {"any": ["belowMa20", "marginExcess", "foreignExit"]})   # v0.6 加外資撤出
         self.assertEqual(e["投信買、外資賣"]["when"], "trustBuyConflict5d")
         txt = json.dumps(pb["entry"])
         self.assertIn("inst5dBuy", txt)
@@ -1457,8 +1457,8 @@ class BacktestTests(unittest.TestCase):
         r2 = {"close": 98.0, "ma20": 100.0, "ma20Prev": 100.5, "ma5": 99.0, "vol": 100, "vol5": 100, "instNet": -50,
               "mktClose": 100, "mktMa20": 99, "mktMa20Prev": 98}
         from twradar.rules import v04_playbooks
-        Sb, S = S, {**S, "playbooks": v04_playbooks()}   # 預設（v0.5）就是多頭放寬停損
-        self.assertEqual(Sb["playbooks"], bull_playbooks(stop=True))
+        Sb, S = S, {**S, "playbooks": v04_playbooks()}   # 預設（v0.5 起）就是多頭放寬停損
+        self.assertEqual(Sb["playbooks"]["hold"], bull_playbooks(stop=True)["hold"])
         self.assertEqual(evaluate(r2, hold, P, S)["hold"]["light"], "exit")
         self.assertEqual(evaluate(r2, hold, P, Sb)["hold"]["light"], "keep")
         self.assertEqual(evaluate({**r2, "close": 96.5}, hold, P, Sb)["hold"]["light"], "exit")            # 超過 3%
@@ -1887,8 +1887,9 @@ class MacroTests(unittest.TestCase):
         ev = lambda cid, rec, **kw: BUILTIN[cid].fn(Ctx(rec, {}, {**P, **kw})).state  # noqa: E731
         bad = {"foreignSpot5d": -300, "futForeignChg5": -5000, "usdTwdChg5Pct": 0.5}
         self.assertEqual(ev("foreignExit", bad), PASS)
-        self.assertEqual(ev("foreignExit", {**bad, "usdTwdChg5Pct": 0.1}), FAIL)
-        self.assertEqual(ev("foreignExit", {**bad, "usdTwdChg5Pct": 0.1}, foreignExitSignals=2), PASS)
+        self.assertEqual(ev("foreignExit", {**bad, "usdTwdChg5Pct": 0.1}), PASS)                 # 預設 2 項
+        self.assertEqual(ev("foreignExit", {**bad, "usdTwdChg5Pct": 0.1}, foreignExitSignals=3), FAIL)
+        self.assertEqual(ev("foreignExit", {**bad, "usdTwdChg5Pct": 0.1, "futForeignChg5": 100}), FAIL)
         self.assertEqual(ev("foreignExit", {"foreignSpot5d": -300}), NA)
         self.assertEqual(ev("breadthWeak", {"breadth20": 35}), PASS)
         self.assertEqual(ev("breadthWeak", {"breadth20": 55}), FAIL)
@@ -1909,6 +1910,17 @@ class MacroTests(unittest.TestCase):
         self.assertIn("foreignExit", veto["when"]["any"])
         self.assertIn("belowMa20", veto["when"]["any"])
         apply_variant(S, over)
+        g = preset_variants(["climate-grid"], S)
+        self.assertEqual(len(g), 8)
+        self.assertNotIn("foreignExit", json.dumps(g[0][1]["_playbooks"]))
+
+    def test_v06_upgrade(self):
+        """v0.5 的預設設定升級到 v0.6：否決加外資撤出，外資撤出門檻 3 → 2（沒改過才換）。"""
+        from twradar.rules import default_playbooks, upgrade, v05_playbooks
+        s = {"rulesVersion": 5, "playbooks": v05_playbooks(), "params": [{"id": "foreignExitSignals", "value": 3}]}
+        upgrade(s)
+        self.assertEqual(s["playbooks"], default_playbooks())
+        self.assertEqual(s["params"][0]["value"], 2)
 
 
 class TdccHistoryTests(unittest.TestCase):

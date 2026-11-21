@@ -137,10 +137,12 @@ def _cond_section(cs: dict | None) -> str:
             tds.append(f"<td class='num'>{p.get('n', 0):,}</td><td class='num {_cls(p.get('excess'))}'>{_num(p.get('excess'), sign=True, pct=True)}</td>"
                        f"<td class='num {_cls(f.get('excess'))}'>{_num(f.get('excess'), sign=True, pct=True)}</td>"
                        f"<td class='num {_cls(df)}'>{_num(df, sign=True)}</td><td class='sm'>{_e(v)}</td>")
-        rows.append(f"<tr><td>{_e(row['label'])}<div class='sm'>{_e(cid)}・{_e(row['side'])}</div></td>{''.join(tds)}</tr>")
+        raw = "・原始報酬" if row.get("raw") else ""
+        rows.append(f"<tr><td>{_e(row['label'])}<div class='sm'>{_e(cid)}・{_e(row['side'])}{raw}</div></td>{''.join(tds)}</tr>")
     head = "".join(f"<th>{s} 成立筆數</th><th>成立</th><th>不成立</th><th>差距</th><th>判讀</th>" for s in ("樣本內", "樣本外"))
     return f"""<h2>條件研究：每個條件的區分力</h2><section>
-<p class="sm">母體：趨勢股（收盤在月線上、月線走平或上揚）。數字為 10 日超額報酬（同日同組平均為基準）。
+<p class="sm">母體：趨勢股（收盤在月線上、月線走平或上揚）。數字為 10 日超額報酬（同日同組平均為基準）；
+大盤層級的條件（大盤、廣度、外資態度，同一天每檔都一樣）改用 10 日原始報酬，標「原始報酬」。
 否決類條件「差距」應為負、買進類應為正；兩段樣本方向一致才可信。「看不出差別」＝差距小於兩倍標準誤。</p>
 <div class="tw"><table><tr><th>條件</th>{head}</tr>{''.join(rows)}</table></div></section>"""
 

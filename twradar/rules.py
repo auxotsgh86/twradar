@@ -28,7 +28,7 @@ LIGHT_LABEL = {"go": "加碼訊號", "wait": "觀察中", "stop": "不宜加碼"
 CHIP_CONDS = ("inst", "main", "retail")
 
 
-RULES_VERSION = 5
+RULES_VERSION = 6
 
 
 def v03_playbooks() -> dict:
@@ -63,7 +63,13 @@ def v03_playbooks() -> dict:
 
 
 def default_playbooks() -> dict:
-    """預設規則 v0.5（2026-11-16，見 docs/STRATEGY.md 第 11 節）：v0.4 ＋ 大盤多頭時放寬月線停損
+    """預設規則 v0.6（2026-11-21，見 docs/STRATEGY.md 第 12 節）：v0.5 ＋ 外資撤出時不上車
+    （外資現貨 5 日賣超、台指期淨空單 5 日增加、新台幣 5 日貶值，三項中成立 foreignExitSignals 項）。"""
+    return veto_with("foreignExit")
+
+
+def v05_playbooks() -> dict:
+    """v0.5（2026-11-16，見 docs/STRATEGY.md 第 11 節）：v0.4 ＋ 大盤多頭時放寬月線停損
     （不因「跌破月線＋法人當日賣超」停損；跌破下彎月線超過 breakMaBullPct 才停損）。"""
     return bull_playbooks(stop=True)
 
@@ -122,8 +128,8 @@ def settled_playbooks(cond: str = "baseSettled") -> dict:
 
 
 def veto_with(*conds: str) -> dict:
-    """否決條件另外加上 conds（任一成立就不上車）。"""
-    pb = default_playbooks()
+    """以 v0.5 為底，否決條件另外加上 conds（任一成立就不上車）。"""
+    pb = v05_playbooks()
     for r in pb["entry"]:
         if r.get("label") == "否決":
             r["when"] = {"any": [*r["when"]["any"], *conds]}
@@ -195,7 +201,7 @@ ENGINE_PARAMS = [
     {"id": "maxBiasMa5Pct", "label": "試單：收盤距 5 日線 ≤", "value": 5, "unit": "%", "min": 0, "max": 50, "note": "對照組「試單」用，不追高"},
     {"id": "breadthMinPct", "label": "市場廣度：站上月線的股票比例 <", "value": 40, "unit": "%", "min": 0, "max": 100, "note": "對照組「大盤環境」用"},
     {"id": "breadthDropPts", "label": "廣度背離：指數漲、廣度 10 日下降 ≥", "value": 10, "unit": "點", "min": 0, "max": 100, "note": ""},
-    {"id": "foreignExitSignals", "label": "外資撤出：成立訊號數 ≥", "value": 3, "unit": "項", "min": 1, "max": 3, "note": "現貨賣超、期貨空單增加、新台幣貶值"},
+    {"id": "foreignExitSignals", "label": "外資撤出：成立訊號數 ≥", "value": 2, "unit": "項", "min": 1, "max": 3, "note": "現貨賣超、期貨空單增加、新台幣貶值"},
     {"id": "foreignFutChgLots", "label": "外資撤出：台指期淨空單 5 日增加 ≥", "value": 2000, "unit": "口", "min": 0, "max": None, "note": ""},
     {"id": "foreignFxPct", "label": "外資撤出：新台幣 5 日貶值 ≥", "value": 0.3, "unit": "%", "min": 0, "max": 10, "note": ""},
     {"id": "baseRangePct", "label": "籌碼沉澱：起漲前整理區間高低差 ≤", "value": 25, "unit": "%", "min": 0, "max": 200, "note": "對照組「沉澱」用"},
@@ -253,7 +259,7 @@ def upgrade(s: dict) -> dict:
         return s
     pb = s.get("playbooks")
     if isinstance(pb, dict):
-        olds = [p3_playbooks(), v03_playbooks(), v04_playbooks()] if v < 3 else [v03_playbooks(), v04_playbooks()]
+        olds = [v03_playbooks(), v04_playbooks(), v05_playbooks()] + ([p3_playbooks()] if v < 3 else [])
         for k in ("entry", "hold"):
             if not pb.get(k) or any(pb.get(k) == old[k] for old in olds):
                 pb[k] = default_playbooks()[k]
@@ -261,6 +267,10 @@ def upgrade(s: dict) -> dict:
         for p in s.get("params", []):
             if isinstance(p, dict) and p.get("id") in PARAM_DEFAULT_CHANGES and p.get("value") == PARAM_DEFAULT_CHANGES[p["id"]][0]:
                 p["value"] = PARAM_DEFAULT_CHANGES[p["id"]][1]
+    if v < 6:   # v0.6：外資撤出改成 3 項中 2 項成立（使用者沒改過才換）
+        for p in s.get("params", []):
+            if isinstance(p, dict) and p.get("id") == "foreignExitSignals" and p.get("value") == 3:
+                p["value"] = 2
     s["rulesVersion"] = RULES_VERSION
     return s
 

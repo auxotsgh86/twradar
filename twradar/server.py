@@ -20,7 +20,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from . import __version__
-from .dates import is_weekend, norm_date
+from .dates import is_weekend, norm_date, to_date
 from .analysis import DEFAULT_RULES, LIGHT_LABEL, evaluate, indicators_many, rules_of, run_analysis
 from .auth import COOKIE, SESSION_DAYS, AuthError, Authenticator, Credentials, TokenPasswordAuthenticator
 from . import labels as L
@@ -70,7 +70,19 @@ class App:
                 "foreignAmt": None if m["foreign_amt"] is None else round(m["foreign_amt"] / 1e8, 2),
                 "trustAmt": None if m["trust_amt"] is None else round(m["trust_amt"] / 1e8, 2),
                 "dealerAmt": None if m["dealer_amt"] is None else round(m["dealer_amt"] / 1e8, 2),
-                "unit": "億元", "source": m["src"]}
+                "unit": "億元", "source": m["src"], "climate": self.climate_of(d)}
+
+    def climate_of(self, d: str) -> dict:
+        """大盤環境：外資態度（現貨、台指期、匯率，近 5 日）與市場廣度。"""
+        from datetime import timedelta
+
+        from .macro import Macro, foreign_signals
+        f = Macro(self.db, d, (to_date(d) - timedelta(days=40)).strftime("%Y%m%d")).fields(d)
+        P = rules_of(self.settings)
+        hit, have, why = foreign_signals(f, P)
+        need = P.get("foreignExitSignals", 2)
+        state = "na" if have < need else "exit" if hit >= need else "ok"
+        return {**f, "foreignHit": hit, "foreignHave": have, "foreignNeed": need, "foreignWhy": why, "foreignState": state}
 
     def day_status(self, d: str) -> dict:
         run = self.db.get_run(d)

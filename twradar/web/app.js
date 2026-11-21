@@ -79,7 +79,21 @@ function marketHTML(m) {
     <div class="kv"><span class="k">加權指數</span><span class="v num">${fmt(m.taiex, 2)} <span class="small ${cls(m.taiexChgPct)}">${fmtP(m.taiexChgPct)}</span></span></div>
     <div class="kv"><span class="k">外資買賣超（億）</span><span class="v num ${cls(m.foreignAmt)}">${fmtS(m.foreignAmt, 2)}</span></div>
     <div class="kv"><span class="k">投信買賣超（億）</span><span class="v num ${cls(m.trustAmt)}">${fmtS(m.trustAmt, 2)}</span></div>
-    <div class="kv"><span class="k">自營商買賣超（億）</span><span class="v num ${cls(m.dealerAmt)}">${fmtS(m.dealerAmt, 2)}</span></div></div>`;
+    <div class="kv"><span class="k">自營商買賣超（億）</span><span class="v num ${cls(m.dealerAmt)}">${fmtS(m.dealerAmt, 2)}</span></div></div>
+    ${climateHTML(m.climate)}`;
+}
+/* 大盤環境：外資態度三項（近 5 日）與市場廣度 */
+function climateHTML(c) {
+  if (!c) return "";
+  const st = c.foreignState, txt = {exit: "外資撤出：暫停上車", ok: "外資未撤出", na: "外資態度資料不足"}[st] || "";
+  const b = `<span class="badge b-${st === "exit" ? "stop" : st === "ok" ? "go" : "na"}" title="${esc((c.foreignWhy || []).join("、"))}">${txt}（${c.foreignHit}/${c.foreignHave} 項）</span>`;
+  const P = v => v === undefined || v === null;
+  return `<div class="market climate">
+    <div class="kv"><span class="k">外資態度（近 5 日）</span><span class="v">${b}</span></div>
+    <div class="kv"><span class="k">外資現貨 5 日（億）</span><span class="v num ${cls(c.foreignSpot5d)}">${fmtS(c.foreignSpot5d, 0)}</span></div>
+    <div class="kv"><span class="k">外資台指期淨單（口）</span><span class="v num ${cls(c.futForeign)}">${fmtS(c.futForeign, 0)}<span class="small ${cls(c.futForeignChg5)}"> ${P(c.futForeignChg5) ? "" : "5日 " + fmtS(c.futForeignChg5, 0)}</span></span></div>
+    <div class="kv"><span class="k">美元兌新台幣</span><span class="v num">${fmt(c.usdTwd, 3)}<span class="small ${cls(-(c.usdTwdChg5Pct || 0))}"> ${P(c.usdTwdChg5Pct) ? "" : (c.usdTwdChg5Pct > 0 ? "5日貶 " : "5日升 ") + Math.abs(c.usdTwdChg5Pct).toFixed(2) + "%"}</span></span></div>
+    <div class="kv"><span class="k">市場廣度（站上月線）</span><span class="v num">${P(c.breadth20) ? "—" : c.breadth20.toFixed(0) + "%"}</span></div></div>`;
 }
 const ck = (label, st, why) => `<span class="ck ${st}" title="${esc(why || "")}">${{pass: "✓", fail: "✕", na: "?"}[st] || "?"} ${label}</span>`;
 /* 注意股、處置股標示 */
@@ -88,9 +102,9 @@ function alertBadge(a) {
   if (!a) return "";
   const out = [];
   if (a.disposal) { const x = a.disposal;
-    out.push(`<span class="badge stop" title="${esc((x.reason || "") + (x.measure ? "；" + x.measure : ""))}">處置中${x.end ? " 至 " + mmdd(x.end) : ""}${x.measure ? "・" + esc(x.measure.replace("撮合", "")) : ""}</span>`); }
+    out.push(`<span class="badge b-stop" title="${esc((x.reason || "") + (x.measure ? "；" + x.measure : ""))}">處置中${x.end ? " 至 " + mmdd(x.end) : ""}${x.measure ? "・" + esc(x.measure.replace("撮合", "")) : ""}</span>`); }
   if (a.notice || a.notices10) { const why = a.notice ? a.notice.reason : "";
-    out.push(`<span class="badge wait" title="${esc(why)}">注意${a.notices10 ? `（近10日 ${a.notices10} 次）` : ""}</span>`); }
+    out.push(`<span class="badge b-wait" title="${esc(why)}">注意${a.notices10 ? `（近10日 ${a.notices10} 次）` : ""}</span>`); }
   return out.join(" ");
 }
 function cardHTML(s) {
@@ -525,8 +539,8 @@ async function viewScan() {
       ${m.rows.length ? `<div class="tablewrap"><table class="sortable" data-sort="scan-${esc(scanMethod)}"><thead><tr><th>#</th><th class="l">代號</th><th class="l">名稱</th><th class="l">市場</th><th>收盤</th><th>法人 5 日買超<br>佔成交量</th><th>20 日<br>贏大盤</th><th>60 日<br>贏大盤</th><th>5 日線<br>乖離</th><th class="l">當日<br>轉弱</th><th>月線<br>乖離</th><th>日均額<br>（億）</th><th data-nosort></th></tr></thead><tbody>
         ${m.rows.map((r, i) => `<tr><td class="num">${i + 1}</td><td class="l num"><a href="#/stock/${esc(r.code)}" data-from="scan" title="看走勢與籌碼">${esc(r.code)}</a></td><td class="l"><a href="#/stock/${esc(r.code)}" data-from="scan" class="plain">${esc(r.name)}</a>${r.alert ? " " + alertBadge(r.alert) : ""}</td><td class="l">${mktName(r.market)}</td><td class="num">${fmt(r.close, pd(r.close))}</td>
           <td class="num ${cls(r.inst5Pct)}">${isNum(r.inst5Pct) ? fmtS(r.inst5Pct, 1) + "%" : "—"}</td><td class="num ${cls(r.rs20)}">${fmtS(r.rs20, 1)}%</td><td class="num ${cls(r.rs60)}">${fmtS(r.rs60, 1)}%</td>
-          <td class="num" data-v="${isNum(r.bias5) ? r.bias5 : ""}">${isNum(r.bias5) ? fmtS(r.bias5, 1) + "%" : "—"}${r.hot ? ` <span class="badge wait" title="5 日乖離在這檔自己近一年的前 10%">偏熱</span>` : ""}</td>
-          <td class="l" data-v="${r.weak ? 0 : 1}">${r.weak ? `<span class="badge stop" title="當天${esc(r.weak)}（${fmtP(r.chgPct)}、量比 ${fmt(r.volRatio, 1)}）：賣壓大於買盤">${esc(r.weak)}</span>` : ""}</td>
+          <td class="num" data-v="${isNum(r.bias5) ? r.bias5 : ""}">${isNum(r.bias5) ? fmtS(r.bias5, 1) + "%" : "—"}${r.hot ? ` <span class="badge b-wait" title="5 日乖離在這檔自己近一年的前 10%">偏熱</span>` : ""}</td>
+          <td class="l" data-v="${r.weak ? 0 : 1}">${r.weak ? `<span class="badge b-stop" title="當天${esc(r.weak)}（${fmtP(r.chgPct)}、量比 ${fmt(r.volRatio, 1)}）：賣壓大於買盤">${esc(r.weak)}</span>` : ""}</td>
           <td class="num">${fmtS(r.maDist, 1)}%</td><td class="num">${fmt(r.value20, 1)}</td>
           <td>${r.inWatchlist ? `<span class="small muted">已在清單</span>` : `<button data-add="${esc(r.code)}">加入觀察</button>`}</td></tr>`).join("")}
         </tbody></table></div>` : `<div class="empty">今天沒有股票通過篩選${s.trend ? "（這個排序需要法人資料）" : "：大盤弱勢時，站穩月線與季線、接近 60 日高點的股票很少"}。</div>`}
