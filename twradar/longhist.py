@@ -75,7 +75,9 @@ def parse(series: str, js) -> list[dict]:
     return out
 
 
-YAHOO = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}?period1={a}&period2={b}&interval=1d&events=div%2Csplit&includeAdjustedClose=true"
+YAHOO = "https://{host}.finance.yahoo.com/v8/finance/chart/{sym}?period1={a}&period2={b}&interval=1d&events=div%2Csplit&includeAdjustedClose=true"
+YAHOO_HOSTS = ("query2", "query1")
+BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 YAHOO_SYMBOLS = {"taiex": "%5ETWII", "0050": "0050.TW"}
 
 
@@ -118,7 +120,17 @@ def fetch_yahoo(db: DB, transport, start: str, end: str, series=("taiex", "0050"
         if s not in YAHOO_SYMBOLS:
             log(f"Yahoo 沒有 {s}，略過")
             continue
-        rows = parse_yahoo(s, transport.get_json(YAHOO.format(sym=YAHOO_SYMBOLS[s], a=a, b=b)))
+        js, last = None, None
+        for host in YAHOO_HOSTS:   # Yahoo 擋非瀏覽器的 User-Agent 會回 429；兩個主機輪流試
+            try:
+                js = transport.get_json(YAHOO.format(host=host, sym=YAHOO_SYMBOLS[s], a=a, b=b), retries=0)
+                break
+            except FetchError as e:
+                last = e
+                log(f"Yahoo {host}：{e}")
+        if js is None:
+            raise last
+        rows = parse_yahoo(s, js)
         with db.tx() as c:
             c.execute("DELETE FROM long_px WHERE series=?", (s,))
             c.executemany("INSERT OR REPLACE INTO long_px(series,date,open,high,low,close,change) VALUES(?,?,?,?,?,?,?)",

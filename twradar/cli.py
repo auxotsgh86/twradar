@@ -209,7 +209,13 @@ def run_long_history(cfg, args) -> int:
         from .longhist import fetch_yahoo
         series = tuple(x for x in series if x != "tr")
         print(f"從 Yahoo 抓 {','.join(series)}：{args.start}～{end}（每個系列一個請求）", flush=True)
-        st = fetch_yahoo(db, Fetcher(3.0, cfg.user_agent), args.start, end, series)
+        from .longhist import BROWSER_UA
+        from .net import FetchError
+        try:
+            st = fetch_yahoo(db, Fetcher(3.0, BROWSER_UA), args.start, end, series)
+        except FetchError as e:
+            print(f"\nYahoo 抓不到（{e}）。通常是暫時限流，等 10～30 分鐘再試。")
+            return 2
         for k, v in st.items():
             print(f"{k}：{v['days']} 天（{v['first']}～{v['last']}）")
         return 0
