@@ -1363,9 +1363,12 @@ class BacktestTests(unittest.TestCase):
             self.assertIn(k, html_)
         res = json.loads((out / "result.json").read_text(encoding="utf-8"))
         self.assertEqual(len(res["results"]), 5)
-        self.assertEqual(set(res["results"][0]["portfolio"]), {"5", "10", "20"})
+        self.assertEqual(set(res["results"][0]["portfolio"]), {"5", "10", "20", "30", "50", "20排序", "30排序", "50排序"})
         self.assertIn("加權指數", res["benchmarks"])
         self.assertIn("total", res["results"][1]["portfolio"]["10"])
+        self.assertIn("total", res["results"][1]["portfolio"]["30排序"])
+        self.assertEqual(len(res["timing"]), 5)
+        self.assertNotIn("full", json.dumps(res["results"][0]["portfolio"]))
         self.assertTrue((out / "trades.csv").exists())
 
     def test_rule_variants(self):

@@ -233,12 +233,31 @@ def _bench_section(res: dict) -> str:
                 f"<td class='num'>{_num(x.get('maxDD'), 1, pct=True)}</td>"
                 f"<td class='num {_cls(x.get('in'))}'>{_num(x.get('in'), 1, sign=True, pct=True)}</td>"
                 f"<td class='num {_cls(x.get('out'))}'>{_num(x.get('out'), 1, sign=True, pct=True)}</td><td class='num'>{extra}</td></tr>")
-    rows = "".join(row(f"照訊號操作：資金分 {n} 份", x, f"{_num(x.get('exposure'), 0)}%（買 {x.get('taken', 0)}、錯過 {x.get('skipped', 0)}）")
-                   for n, x in pf.items())
+    def nm(n):
+        return f"照訊號：資金分 {n.replace('排序', '')} 份" + ("，挑法人買超最強" if "排序" in n else "，依代號順序")
+    sec = lambda t: f"<tr><th colspan=7 style='background:#fafbfc'>{t}</th></tr>"  # noqa: E731
+    rows = sec("對照：什麼都不做")
     rows += "".join(row(k, v, "100%") for k, v in bm.items())
+    rows += sec("照訊號買賣個股")
+    rows += "".join(row(nm(n), x, f"{_num(x.get('exposure'), 0)}%（買 {x.get('taken', 0)}、錯過 {x.get('skipped', 0)}）")
+                    for n, x in pf.items())
+    if res.get("timing"):
+        rows += sec("抱 0050，只用大盤條件決定進出（訊號隔日開盤執行）")
+        rows += "".join(row(k, v, f"{_num(v.get('exposure'), 0)}%（進出 {v.get('switches', 0)} 次）") for k, v in res["timing"].items())
+    if res.get("combo"):
+        rows += sec("核心＋衛星（一開始各半，之後不再平衡）")
+        rows += "".join(row(k, v, "") for k, v in res["combo"].items())
     # 曲線：10 份 vs 對照
-    lines = [("照訊號操作（10 份）", (pf.get("10") or {}).get("curve") or [], "#b71c1c", 2.6)]
-    lines += [(k, v.get("curve") or [], c, 1.6) for (k, v), c in zip(bm.items(), ("#1f4e79", "#2e7d32"))]
+    lines = [("照訊號（30 份，挑最強）", (pf.get("30排序") or pf.get("10") or {}).get("curve") or [], "#b71c1c", 2.6)]
+    lines += [(k, v.get("curve") or [], c, 1.6) for (k, v), c in zip(bm.items(), ("#90a4ae", "#1f4e79"))]
+    tm = res.get("timing") or {}
+    if tm:
+        best = max(tm.items(), key=lambda kv: kv[1].get("total") or -1e9)
+        lines.append((best[0], best[1].get("curve") or [], "#2e7d32", 2.0))
+    cb = res.get("combo") or {}
+    if cb:
+        k0 = next(iter(cb))
+        lines.append((k0, cb[k0].get("curve") or [], "#b7791f", 1.6))
     vals = [v for _, cv, _, _ in lines for _, v in cv]
     svg = ""
     if vals:
@@ -265,6 +284,7 @@ def _bench_section(res: dict) -> str:
                 leg.append(f'<span><i style="background:{c};height:3px"></i>{_e(name)}</span>')
         svg = f'<svg viewBox="0 0 {W} {H}" style="width:100%;height:auto">{"".join(g)}</svg><div class="lg">{"".join(leg)}</div>'
     return f"""<h2>最關鍵的比較：照訊號操作 vs 直接買 0050／大盤</h2><section>
+<p class="sm">目標是最大獲利：一種做法要在總報酬上贏 0050 才算真的有用；報酬接近但最大回落小很多，代表風險較低。只有兩年資料，樣本不多。</p>
 <p class="sm">把訊號放進一個真實的投資組合：資金分成 N 份，有訊號且有空位才買（同一天太多檔時依代號順序），每次用當時總資產的 1/N；
 開盤成交、逐日以收盤計價，沒用到的錢放現金。簡化：不含加碼、減碼。0050 為還原股息的報酬；加權指數是價格指數，不含股息（會低估約每年 2～3%）。</p>
 <div class="tw"><table><tr><th>方式</th><th>總報酬</th><th>年化</th><th>最大回落</th><th>樣本內</th><th>樣本外</th><th>平均持股比例</th></tr>{rows}</table></div>

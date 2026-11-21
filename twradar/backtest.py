@@ -256,6 +256,7 @@ class Position:
     low: float = math.inf      # 還原價
     entry_rule: str = ""
     events: list = field(default_factory=list)   # [{date, kind: 買進／加碼／減碼／賣出, rule, why}]
+    score: float | None = None                    # 進場訊號當天的法人 5 日累計買超佔成交量 %（投資組合排序用）
 
     @property
     def avg(self) -> float:
@@ -282,7 +283,7 @@ def simulate(hist: History, code: str, dates: list[str], universe: dict, P: dict
             kind = pending[0]
             if kind in ("buy", "add"):
                 if kind == "buy":
-                    pos = Position(d, pending[1], entry_rule=pending[2])
+                    pos = Position(d, pending[1], entry_rule=pending[2], score=pending[4])
                     pos.events.append({"date": d, "kind": "買進", "rule": pending[2], "why": pending[3], "signal": sig_day})
                 else:
                     pos.adds += 1
@@ -344,7 +345,9 @@ def simulate(hist: History, code: str, dates: list[str], universe: dict, P: dict
         sig_day = d
         if pos is None:
             if light == "go" and tags:
-                pending = ("buy", sorted(tags), rule, sig.get("entryReasons") or [])
+                f5, t5, v5 = r2.get("foreign5d"), r2.get("trust5d"), r2.get("vol5")
+                score = ((f5 or 0) + (t5 or 0)) / (v5 * 5) * 100 if v5 and (f5 is not None or t5 is not None) else None
+                pending = ("buy", sorted(tags), rule, sig.get("entryReasons") or [], score)
         else:
             h = sig.get("hold") or {}
             if h.get("light") == "exit":
@@ -365,7 +368,8 @@ def simulate(hist: History, code: str, dates: list[str], universe: dict, P: dict
     return trades
 
 
-SLOTS = (5, 10, 20)   # 投資組合模擬：資金分成幾份
+SLOTS = (5, 10, 20, 30, 50)   # 投資組合模擬：資金分成幾份
+RANKED = (20, 30, 50)         # 另外試「同一天訊號太多時，挑法人買超最強的」
 
 
 def _curve_stats(curve: list[tuple[str, float]], split: str) -> dict:
@@ -387,13 +391,16 @@ def _curve_stats(curve: list[tuple[str, float]], split: str) -> dict:
             "out": round((v1 / before[-1] - 1) * 100, 2) if before and at is not None else None}
 
 
-def portfolio(trades: list[dict], hist: History, dates: list[str], split: str, slots: int, fee: float, tax: float) -> dict:
+def portfolio(trades: list[dict], hist: History, dates: list[str], split: str, slots: int, fee: float, tax: float,
+              rank: bool = False) -> dict:
     """把交易放進一個真實的投資組合：資金分成 slots 份，訊號來時有空位才買（同一天多檔時依代號順序），
     每次買進用「當時總資產 ÷ slots」；開盤成交、逐日以收盤計價，沒用到的錢放現金（不計利息）。
     簡化：不含加碼與減碼（每筆一次買進、一次賣出）。"""
     by_in: dict[str, list] = {}
     by_out: dict[str, list] = {}
-    for k, t in enumerate(sorted(trades, key=lambda t: (t["entry"], t["code"]))):
+    key = (lambda t: (t["entry"], -(t.get("score") if t.get("score") is not None else -1e9), t["code"])) if rank \
+        else (lambda t: (t["entry"], t["code"]))
+    for k, t in enumerate(sorted(trades, key=key)):
         by_in.setdefault(t["entry"], []).append((k, t))
         if t["reason"] != "期末未平倉":
             by_out.setdefault(t["exit"], []).append(k)
@@ -431,8 +438,49 @@ def portfolio(trades: list[dict], hist: History, dates: list[str], split: str, s
         expo.append(held / (cash + held) if cash + held else 0)
     out = _curve_stats(curve, split)
     out.update(slots=slots, taken=taken, skipped=skipped, exposure=round(sum(expo) / len(expo) * 100, 1) if expo else None,
-               curve=[[d, round(v, 4)] for d, v in curve[::5]] + ([[curve[-1][0], round(curve[-1][1], 4)]] if curve else []))
+               curve=_sample(curve), full=curve)
     return out
+
+
+def _sample(curve: list) -> list:
+    return [[d, round(v, 4)] for d, v in curve[::5]] + ([[curve[-1][0], round(curve[-1][1], 4)]] if curve else [])
+
+
+def timed_0050(db: DB, hist: History, dates: list[str], split: str, P: dict, out_when) -> dict:
+    """平常抱 0050（還原股息），out_when(當日大盤欄位, 大盤環境) 成立時隔日開盤賣出換現金，不成立時隔日開盤買回。
+    ETF 證交稅 0.1%、手續費 0.1425%。"""
+    h = History(db, ["0050"], dates[-1])
+    bars = h.adj["0050"]
+    fee, tax = P.get("feePct", 0.1425) / 100, 0.001
+    cash, sh, want, curve, switches, last, days_in = 1.0, 0.0, True, [], 0, None, 0
+    for d in dates:
+        b = bars.get(d)
+        if b and b.get("close"):
+            px = b.get("open") or b["close"]
+            if want and sh == 0 and cash > 0:
+                sh, cash = cash / (px * (1 + fee)), 0.0
+                switches += 1
+            elif not want and sh > 0:
+                cash, sh = sh * px * (1 - fee - tax), 0.0
+                switches += 1
+            last = b["close"]
+        if last is None:
+            continue
+        curve.append((d, cash + sh * last))
+        days_in += sh > 0
+        want = not out_when(hist.market(d), hist.regime(d))
+    o = _curve_stats(curve, split)
+    o.update(switches=switches, exposure=round(days_in / len(curve) * 100, 1) if curve else None, curve=_sample(curve), full=curve)
+    return o
+
+
+def mix(a: list, b: list, w: float, split: str) -> dict:
+    """兩條逐日曲線（起點都是 1）按 w : 1−w 一開始分配、之後不再平衡。"""
+    bm = dict(b)
+    curve = [(d, w * v / a[0][1] + (1 - w) * bm[d] / b[0][1]) for d, v in a if d in bm]
+    o = _curve_stats(curve, split)
+    o["curve"] = _sample(curve)
+    return o
 
 
 def benchmarks(db: DB, hist: History, dates: list[str], split: str) -> dict:
@@ -469,7 +517,7 @@ def _close(pos: Position, d: str, reason: str) -> dict:
             "tags": pos.tags, "rule": pos.entry_rule, "reason": reason, "invested": pos.invested,
             "pnl": pos.proceeds - pos.invested, "ret": round(ret, 3), "adds": pos.adds, "reduced": pos.reduced,
             "mae": round((pos.low / pos.avg - 1) * 100, 2) if pos.low < math.inf and pos.avg else None,
-            "events": pos.events}
+            "events": pos.events, "score": None if pos.score is None else round(pos.score, 2)}
 
 
 def _f(fw: dict) -> dict:
@@ -593,9 +641,13 @@ def run(db: DB, settings: dict, cfg: BTConfig, progress=None) -> dict:
                "byTag": {tag: summarize_trades([t for t in trades if tag in t["tags"]], cfg.split)
                          for tag in sorted({x for t in trades for x in t["tags"]})}}
         fee_, tax_ = P.get("feePct", 0.1425) / 100, P.get("taxPct", 0.3) / 100
-        res["portfolio"] = {str(n): portfolio(trades, hist, dates, cfg.split, n, fee_, tax_) for n in SLOTS}
-        if vi:   # 對照組只留 10 份的數字，不留曲線
-            res["portfolio"] = {"10": {k: v for k, v in res["portfolio"]["10"].items() if k != "curve"}}
+        pf = {str(n): portfolio(trades, hist, dates, cfg.split, n, fee_, tax_) for n in SLOTS}
+        pf.update({f"{n}排序": portfolio(trades, hist, dates, cfg.split, n, fee_, tax_, rank=True) for n in RANKED})
+        if vi == 0:
+            full0 = {k: v.pop("full") for k, v in pf.items()}
+            res["portfolio"] = pf
+        else:     # 對照組只留 10 份與 30 份排序的數字，不留曲線
+            res["portfolio"] = {k: {x: y for x, y in pf[k].items() if x not in ("curve", "full")} for k in ("10", "30排序")}
         if vi == 0 and cfg.study:
             from .study import condition_study
             res["conditions"] = condition_study(hist, dates, universe, P, S, cfg.split, rec_cache, regimes)
@@ -616,6 +668,31 @@ def run(db: DB, settings: dict, cfg: BTConfig, progress=None) -> dict:
         scan_res = scan_study(db, dates, cfg.split, progress=(lambda i, n: progress(len(cfg.variants), len(cfg.variants) + 1, i, n))
                               if progress else None)
     bench = benchmarks(db, hist, dates, cfg.split)
+    # 抱 0050、只用大盤條件決定進出
+    from .macro import foreign_signals
+    P1 = {**P0, **{k: v for k, v in (cfg.variants[0][1] or {}).items() if not k.startswith("_")}}
+
+    def fexit(n):
+        return lambda m, reg: (lambda h: h[1] >= n and h[0] >= n)(foreign_signals(m, P1))
+    timing_rules = {
+        "0050＋外資撤出（3 項）時空手": fexit(3),
+        "0050＋外資撤出（2 項）時空手": fexit(2),
+        "0050＋大盤非多頭時空手": lambda m, reg: reg in ("盤整", "空頭"),
+        "0050＋大盤空頭時空手": lambda m, reg: reg == "空頭",
+        "0050＋外資撤出（2 項）且大盤非多頭時空手": lambda m, reg: fexit(2)(m, reg) and reg in ("盤整", "空頭"),
+    }
+    timing = {k: timed_0050(db, hist, dates, cfg.split, P1, f) for k, f in timing_rules.items()}
+    combo = {}
+    h50 = History(db, ["0050"], dates[-1]).adj["0050"]
+    hold = [(d, h50[d]["close"]) for d in dates if h50.get(d) and h50[d].get("close")]
+    sig = full0.get("30排序") if results else None
+    if hold and sig:
+        combo["一半抱 0050、一半照訊號（30 份排序）"] = mix(hold, sig, .5, cfg.split)
+        t3 = timing["0050＋外資撤出（3 項）時空手"].get("full")
+        if t3:
+            combo["一半 0050＋外資撤出空手、一半照訊號"] = mix(t3, sig, .5, cfg.split)
+    for v in timing.values():
+        v.pop("full", None)
     bh = {}
     for tag in sorted({x for u in universe.values() for tags in u.values() for x in tags}):
         rets = []
@@ -629,7 +706,7 @@ def run(db: DB, settings: dict, cfg: BTConfig, progress=None) -> dict:
     return {"config": {"start": cfg.start, "end": cfg.end, "split": cfg.split, "universe": cfg.universe,
                        "maxAdds": cfg.max_adds, "horizons": list(HORIZONS)},
             "coverage": coverage, "baseline": {"|".join(k): v for k, v in baseline.items()},
-            "buyHold": bh, "benchmarks": bench, "results": results, "scan": scan_res}
+            "buyHold": bh, "benchmarks": bench, "timing": timing, "combo": combo, "results": results, "scan": scan_res}
 
 
 def parse_grid(items: list[str]) -> list[tuple[str, dict]]:
