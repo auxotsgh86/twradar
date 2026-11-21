@@ -240,6 +240,18 @@ def run_timing_study(cfg, args) -> int:
     return 0
 
 
+def run_vector_study(cfg, args) -> int:
+    """大盤資金向量（淨方向＋分歧度）的樣本內／外驗證；不影響任何規則。"""
+    from .dates import norm_date
+    from .vector import render, study
+    db, _ = open_all(cfg)
+    ws = tuple(int(x) for x in args.window.split(",") if x)
+    hs = tuple(int(x) for x in args.horizons.split(",") if x)
+    r = study(db, ws, hs, norm_date(args.split) if args.split else None, norm_date(args.start) if args.start else "")
+    print(render(r, hs))
+    return 0 if "error" not in r else 1
+
+
 def run_holders_history(cfg, args) -> int:
     import time as _t
 
@@ -430,6 +442,11 @@ def main(argv=None) -> None:
     hh.add_argument("--codes", default="universe", help="universe（回溯股票池＋觀察清單，預設）、watchlist，或逗號分隔代號")
     hh.add_argument("--weeks", type=int, default=0, help="只抓最近幾週（0＝查詢頁上全部）")
     hh.add_argument("--interval", type=float, default=3.0, help="每次查詢間隔秒數（預設 3；太短可能被封鎖）")
+    vs = sub.add_parser("vector-study", help="驗證大盤資金向量（現貨、台指期、匯率的淨方向與分歧度）對未來大盤的區分力")
+    vs.add_argument("--window", default="60", help="滾動 Z-score 視窗（逗號分隔，例如 60,120）")
+    vs.add_argument("--horizons", default="10,20", help="未來天數（逗號分隔）")
+    vs.add_argument("--split", help="樣本外起始日（預設：可用期間的前 2/3 之後）")
+    vs.add_argument("--start", help="開始日")
     lh = sub.add_parser("long-history", help="長期歷史：加權指數、0050、加權報酬指數（驗證大盤進出規則用）")
     lh.add_argument("--start", default="20080101", help="開始月份（預設 20080101）")
     lh.add_argument("--end", help="結束日（預設：今天）")
@@ -527,6 +544,8 @@ def main(argv=None) -> None:
         sys.exit(run_track(cfg, args))
     elif args.cmd == "holders-history":
         sys.exit(run_holders_history(cfg, args))
+    elif args.cmd == "vector-study":
+        sys.exit(run_vector_study(cfg, args))
     elif args.cmd == "long-history":
         sys.exit(run_long_history(cfg, args))
     elif args.cmd == "timing-study":

@@ -512,6 +512,10 @@ class Provider:
 - 長期歷史（`longhist.py`，2026-11-22）：`twradar long-history` 逐月抓證交所 MI_5MINS_HIST（加權指數）、STOCK_DAY 0050、
   MFI94U（加權報酬指數），存 `long_px` 表（不碰每日爬蟲的表）；`twradar timing-study [--years]` 在 2008 年起的資料上比較
   各種「大盤空頭空手」規則與一直抱著（0050 還原除息、開盤成交；報酬指數收盤成交）。除權息日顯示「X0.00」時不還原。
+- 大盤資金向量驗證（`vector.py`，`twradar vector-study [--window 60,120] [--horizons 10,20] [--split]`）：外資現貨 5 日、
+  台指期淨未平倉 5 日變化、−新台幣 5 日變化的滾動 Z-score（含當天的 W 日、截斷 ±3），等權平均＝`net_score`、樣本標準差＝`dispersion`；
+  對未來 h 日加權指數報酬與期間最大回落做 Spearman Rank IC、分組（net 四組、disp ≥ 1.2）、與現行 `foreignExit`（3 項）對照，
+  前 2/3 樣本內。純標準函式庫，獨立於規則與回溯。
 - 條件研究：只看大盤層級欄位的條件（`study.MARKET_FIELDS`）同一天每檔都一樣，改用原始報酬（扣同日平均會抵消）。
 - 回溯結果每組加 `byMonth`（依進場月份）。
 - 對照組 `climate`（以 v0.5 為底）：廣度 < 30／40／50% 不上車、指數漲廣度跌不上車、外資撤出（3 項／2 項）不上車、外資撤出＋廣度 < 40%。

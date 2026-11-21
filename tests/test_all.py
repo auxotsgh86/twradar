@@ -2084,6 +2084,74 @@ class MacroTests(unittest.TestCase):
         self.assertIsNone(App(cfg, db, st, start_background=False).stock_trades("9999", 20))
 
 
+class VectorTests(unittest.TestCase):
+    """大盤資金向量：方向、防未來函數、統計工具。"""
+
+    def _db(self, n=160, seed=7, shock=False):
+        import random
+        from twradar.db import DB
+        rnd = random.Random(seed)
+        db = DB(Path(tempfile.mkdtemp()) / "t.sqlite3")
+        days = weekdays(n)
+        px, fut, fx = 20000.0, -50000, 32.0
+        rows = []
+        for i, d in enumerate(days):
+            px *= 1 + rnd.gauss(0, .01)
+            fut += rnd.randint(-1500, 1500)
+            fx *= 1 + rnd.gauss(0, .002)
+            spot = rnd.gauss(0, 100e8)
+            if shock and i == n - 1:      # 最後一天：外資大買、空單大減、新台幣大貶
+                spot, fut, fx = 2000e8, fut + 30000, fx * 1.03
+            db.put_market({"date": d, "taiex": round(px, 2), "foreign_amt": spot})
+            rows.append({"date": d, "fut_foreign": fut, "usd_twd": round(fx, 4)})
+        db.put_macro(rows)
+        return db, days
+
+    def test_z_direction(self):
+        from twradar.vector import load, vector
+        db, days = self._db(shock=True)
+        v = vector(load(db), 60)
+        self.assertGreater(v["z_spot"][-1], 1)     # 外資大買 → 正（偏多）
+        self.assertGreater(v["z_fut"][-1], 1)      # 空單減少 → 正（偏多）
+        self.assertLess(v["z_fx"][-1], -1)         # 新台幣貶值 → 負（偏空）
+        self.assertLessEqual(max(abs(x) for x in v["z_spot"] if x is not None), 3.0)   # 截斷在 ±3
+        self.assertGreater(v["disp"][-1], 1)       # 兩多一空 → 分歧度大
+
+    def test_no_lookahead(self):
+        from twradar.vector import load, vector
+        db, days = self._db()
+        full = vector(load(db), 60)
+        for k in (70, 100, 130):
+            part = vector(load(db, until=days[k]), 60)
+            for key in ("z_spot", "z_fut", "z_fx", "net", "disp"):
+                self.assertEqual(full[key][k], part[key][k], (key, k))
+
+    def test_stats_tools(self):
+        from twradar.vector import episodes, forward, ranks, spearman
+        self.assertEqual(ranks([10, 20, 20, 30]), [1, 2.5, 2.5, 4])
+        xs = list(range(20))
+        self.assertAlmostEqual(spearman(xs, [x * x for x in xs])[0], 1.0)
+        self.assertAlmostEqual(spearman(xs, [-x for x in xs])[0], -1.0)
+        self.assertIsNone(spearman([1, 2], [3, 4])[0])
+        ret, mdd = forward([100, 102, 95, 110], 2)
+        self.assertAlmostEqual(ret[0], -5.0)
+        self.assertAlmostEqual(mdd[0], -5.0)
+        self.assertAlmostEqual(mdd[1], (95 / 102 - 1) * 100)
+        self.assertEqual(ret[2:], [None, None])
+        self.assertEqual(forward([100, 101, 103], 2)[1][0], 0.0)    # 沒跌：回落 0
+        self.assertEqual(episodes([1, 2, 3, 30, 31]), 2)
+
+    def test_study_render(self):
+        from twradar.vector import render, study
+        db, days = self._db(n=260)
+        r = study(db, (60, 120), (10, 20))
+        self.assertEqual(set(r["windows"]), {60, 120})
+        self.assertTrue(r["start"] < r["split"] <= r["end"])
+        txt = render(r)
+        for k in ("Rank IC", "高內耗", "外資撤出成立", "W = 120", "OOS"):
+            self.assertIn(k, txt)
+
+
 class LongHistoryTests(unittest.TestCase):
     def test_parse(self):
         from twradar.longhist import parse
