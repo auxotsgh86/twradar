@@ -355,7 +355,7 @@ class App:
         cfg = BTConfig(start=dates[0], end=dates[-1], split=dates[-1])
         trades = simulate(hist, code, dates, {d: {code: {"個股"}} for d in dates}, Pw, Sw, cfg, {}, None, {})
         return {"code": code, "from": dates[0], "to": dates[-1], "strategy": strat,
-                "trades": [{k: t[k] for k in ("entry", "exit", "rule", "reason", "ret", "adds", "reduced", "days")} for t in trades]}
+                "trades": [{k: t[k] for k in ("entry", "exit", "rule", "reason", "ret", "adds", "reduced", "days", "events")} for t in trades]}
 
     def stock_trial(self, code: str, labels: list[str] | None = None) -> dict | None:
         """用最近一個交易日的資料試算，逐條列出條件是否成立。"""

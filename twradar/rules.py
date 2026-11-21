@@ -490,7 +490,8 @@ def evaluate(rec: dict, stock: dict, P: dict, settings: dict | None = None) -> d
            "checks": chk, "instWhy": eng.leaf(ck_ids["inst"], ctx).text, "chipsPassed": chips, "needs": needs, "warnings": warns,
            "missing": missing_of(rec), "volRatio": None if vr is None else round(vr, 3),
            "maDistPct": None if not has_pv else round((close / ma20 - 1) * 100, 2),
-           "belowMa20": below, "keyLevelNote": key_note, "rule": entry["rule"], "confirm": entry["confirm"]}
+           "belowMa20": below, "keyLevelNote": key_note, "rule": entry["rule"], "confirm": entry["confirm"],
+           "entryReasons": entry["reasons"]}
     if light == "wait" and entry["rule"] not in ("觀察", "") and entry["reasons"]:
         out["warnings"] = out["warnings"] + [x for x in entry["reasons"] if x not in out["warnings"]]
     if stock.get("holding"):

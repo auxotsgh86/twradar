@@ -182,7 +182,7 @@ function lineChart(labels, series, {h = 220, bars = null, marks = []} = {}) {
     const cx = x(m.i), cy = y(v), buy = m.kind === "buy", col = buy ? "var(--up)" : m.win ? "var(--up)" : "var(--down)";
     const p = buy ? `${cx},${cy + 8} ${cx - 6},${cy + 18} ${cx + 6},${cy + 18}` : `${cx},${cy - 8} ${cx - 6},${cy - 18} ${cx + 6},${cy - 18}`;
     g += `<polygon points="${p}" fill="${buy ? "var(--up)" : col}" stroke="var(--surface)" stroke-width="1"><title>${esc(m.title)}</title></polygon>`;
-    if (m.label) g += `<text x="${cx}" y="${buy ? cy + 30 : cy - 22}" text-anchor="middle" style="fill:${buy ? "var(--up)" : col};font-weight:700">${esc(m.label)}</text>`;
+    if (m.label) g += `<text x="${cx}" y="${buy ? cy + 30 : cy - 22}" text-anchor="middle" style="fill:${buy ? "var(--up)" : col};font-weight:700"><title>${esc(m.title)}</title>${esc(m.label)}</text>`;
   }
   if (bars) {
     const top = T + ch + 10, bh = 40, mx = Math.max(...bars.filter(isNum), 1), bw = Math.max(1, (W - L - R) / labels.length * .7);
@@ -367,23 +367,33 @@ async function viewHome(date) {
 
 /* ---------- 頁面：個股 ---------- */
 /* 個股頁：用目前規則模擬的買賣點 */
+const EV_LABEL = {買進: "買", 加碼: "加", 減碼: "減", 賣出: "賣"};
+const md = d => `${d.slice(4, 6)}/${d.slice(6)}`;
+function evText(e) {
+  const why = (e.why || []).filter(x => x && !["未持有", "持有中"].includes(x));
+  return `${e.signal ? md(e.signal) + " 收盤出現訊號 → " : ""}${md(e.date)} 開盤${e.kind}${e.rule && e.rule !== e.kind ? `（${e.rule}）` : ""}${why.length ? "：" + why.join("、") : ""}`;
+}
 function tradeMarks(L, tr) {
   if (!tr || !tr.trades) return [];
   const idx = d => L.indexOf(`${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6)}`), out = [];
   for (const t of tr.trades) {
-    const a = idx(t.entry), b = idx(t.exit), open = t.reason === "期末未平倉";
-    if (a >= 0) out.push({i: a, kind: "buy", label: "買", title: `${t.entry} 買進（${t.rule}）`});
-    if (b >= 0 && !open) out.push({i: b, kind: "sell", win: t.ret > 0, label: "賣", title: `${t.exit} 賣出：${t.reason}，報酬 ${fmtS(t.ret, 1)}%`});
+    const evs = t.events && t.events.length ? t.events : [{date: t.entry, kind: "買進", rule: t.rule}, ...(t.reason === "期末未平倉" ? [] : [{date: t.exit, kind: "賣出", rule: t.reason}])];
+    for (const e of evs) {
+      const i = idx(e.date); if (i < 0) continue;
+      const buy = e.kind === "買進" || e.kind === "加碼";
+      out.push({i, kind: buy ? "buy" : "sell", win: e.kind === "賣出" ? t.ret > 0 : e.kind === "減碼", label: EV_LABEL[e.kind] || e.kind, title: evText(e) + (e.kind === "賣出" ? `；這筆報酬 ${fmtS(t.ret, 1)}%` : "")});
+    }
   }
   return out;
 }
 function tradesHTML(tr) {
   if (!tr) return "";
-  const ymd = d => `${d.slice(4, 6)}/${d.slice(6)}`;
-  const note = `<div class="small muted">▲買／▼賣：用目前規則${tr.strategy ? `（策略「${esc(tr.strategy)}」）` : ""}模擬，假設這段期間完全照訊號操作：訊號隔日開盤買進、最多加碼 2 次、退場全賣，扣手續費與證交稅。和你實際的買賣無關。</div>`;
+  const note = `<div class="small muted">▲買／▲加＝買進、加碼；▼賣／▼減＝賣出、減碼。這是用目前規則${tr.strategy ? `（策略「${esc(tr.strategy)}」）` : ""}回頭模擬：假設這段期間完全照系統訊號操作，會在哪裡買、為什麼賣（收盤出現訊號、隔天開盤執行，扣手續費與證交稅）。
+    用途是檢查規則適不適合這檔股票，和你實際的買賣無關。滑鼠移到三角形上可看理由。</div>`;
   if (!tr.trades.length) return note + `<div class="small">這段期間沒有出現買進訊號。</div>`;
-  return note + `<div class="tablewrap" style="margin-top:6px"><table class="sortable" data-sort="stocktrades"><thead><tr><th class="l">買進</th><th class="l">賣出</th><th class="l">進場規則</th><th class="l">出場原因</th><th>加碼</th><th>天數</th><th>報酬</th></tr></thead><tbody>
-    ${tr.trades.map(t => `<tr><td class="l num">${ymd(t.entry)}</td><td class="l num">${t.reason === "期末未平倉" ? "持有中" : ymd(t.exit)}</td><td class="l">${esc(t.rule || "")}</td><td class="l">${t.reason === "期末未平倉" ? "—" : esc(t.reason)}</td><td class="num">${t.adds}</td><td class="num">${t.days}</td><td class="num ${cls(t.ret)}">${fmtS(t.ret, 1)}%</td></tr>`).join("")}</tbody></table></div>`;
+  return note + `<div class="tablewrap" style="margin-top:6px"><table><thead><tr><th class="l">買進</th><th class="l">賣出</th><th class="l">出場原因</th><th>加碼</th><th>天數</th><th>報酬</th></tr></thead><tbody>
+    ${tr.trades.map(t => `<tr><td class="l num">${md(t.entry)}</td><td class="l num">${t.reason === "期末未平倉" ? "持有中" : md(t.exit)}</td><td class="l">${t.reason === "期末未平倉" ? "—" : esc(t.reason)}</td><td class="num">${t.adds}</td><td class="num">${t.days}</td><td class="num ${cls(t.ret)}">${fmtS(t.ret, 1)}%</td></tr>
+      ${(t.events || []).length ? `<tr class="evrow"><td colspan="6"><ul>${t.events.map(e => `<li><b>${esc(e.kind)}</b>　${esc(evText(e))}</li>`).join("")}</ul></td></tr>` : ""}`).join("")}</tbody></table></div>`;
 }
 async function viewStock(code) {
   const days = 120;

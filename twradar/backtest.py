@@ -255,6 +255,7 @@ class Position:
     peak: float = 0.0          # 還原價
     low: float = math.inf      # 還原價
     entry_rule: str = ""
+    events: list = field(default_factory=list)   # [{date, kind: 買進／加碼／減碼／賣出, rule, why}]
 
     @property
     def avg(self) -> float:
@@ -268,6 +269,7 @@ def simulate(hist: History, code: str, dates: list[str], universe: dict, P: dict
     trades: list[dict] = []
     pos: Position | None = None
     pending: tuple | None = None
+    sig_day = ""            # 訊號出現的日子（隔天開盤才執行）
     adj = hist.adj[code]
     for d in dates:
         bar = adj.get(d)
@@ -280,8 +282,10 @@ def simulate(hist: History, code: str, dates: list[str], universe: dict, P: dict
             if kind in ("buy", "add"):
                 if kind == "buy":
                     pos = Position(d, pending[1], entry_rule=pending[2])
+                    pos.events.append({"date": d, "kind": "買進", "rule": pending[2], "why": pending[3], "signal": sig_day})
                 else:
                     pos.adds += 1
+                    pos.events.append({"date": d, "kind": "加碼", "rule": "加碼", "why": pending[1], "signal": sig_day})
                 pos.shares += 1 / (px * (1 + fee))
                 pos.bought += 1 / (px * (1 + fee))
                 pos.invested += 1
@@ -290,6 +294,7 @@ def simulate(hist: History, code: str, dates: list[str], universe: dict, P: dict
                 sell = pos.shares / 2 if kind == "reduce" else pos.shares
                 pos.proceeds += sell * px * (1 - fee - tax)
                 pos.shares -= sell
+                pos.events.append({"date": d, "kind": "減碼" if kind == "reduce" else "賣出", "rule": pending[1], "why": pending[2], "signal": sig_day})
                 if kind == "reduce":
                     pos.reduced = True
                 else:
@@ -325,17 +330,18 @@ def simulate(hist: History, code: str, dates: list[str], universe: dict, P: dict
             h = sig.get("hold")
             if h and h["light"] in ("exit", "reduce"):
                 events.append({**base, "kind": ("退場：" if h["light"] == "exit" else "減碼：") + h["rule"], **_f(hist.fwd(code, d))})
+        sig_day = d
         if pos is None:
             if light == "go" and tags:
-                pending = ("buy", sorted(tags), rule)
+                pending = ("buy", sorted(tags), rule, sig.get("entryReasons") or [])
         else:
             h = sig.get("hold") or {}
             if h.get("light") == "exit":
-                pending = ("exit", h["rule"])
+                pending = ("exit", h["rule"], h.get("reasons") or [])
             elif h.get("light") == "reduce" and not pos.reduced:
-                pending = ("reduce", h["rule"])
+                pending = ("reduce", h["rule"], h.get("reasons") or [])
             elif light == "go" and rule == "加碼" and pos.adds < cfg.max_adds:
-                pending = ("add",)
+                pending = ("add", sig.get("entryReasons") or [])
     if pos:  # 期末未平倉：以最後收盤計價
         last = max((d for d in dates if adj.get(d) and adj[d].get("close") is not None), default=None)
         if last:
@@ -368,7 +374,8 @@ def _close(pos: Position, d: str, reason: str) -> dict:
     return {"entry": pos.entry_date, "exit": d, "days": (to_date(d) - to_date(pos.entry_date)).days,
             "tags": pos.tags, "rule": pos.entry_rule, "reason": reason, "invested": pos.invested,
             "pnl": pos.proceeds - pos.invested, "ret": round(ret, 3), "adds": pos.adds, "reduced": pos.reduced,
-            "mae": round((pos.low / pos.avg - 1) * 100, 2) if pos.low < math.inf and pos.avg else None}
+            "mae": round((pos.low / pos.avg - 1) * 100, 2) if pos.low < math.inf and pos.avg else None,
+            "events": pos.events}
 
 
 def _f(fw: dict) -> dict:
