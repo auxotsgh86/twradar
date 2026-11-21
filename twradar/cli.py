@@ -205,6 +205,14 @@ def run_long_history(cfg, args) -> int:
     db, _ = open_all(cfg)
     end = args.end or now_tw().strftime("%Y%m%d")
     series = tuple(x for x in args.series.split(",") if x)
+    if args.source == "yahoo":
+        from .longhist import fetch_yahoo
+        series = tuple(x for x in series if x != "tr")
+        print(f"從 Yahoo 抓 {','.join(series)}：{args.start}～{end}（每個系列一個請求）", flush=True)
+        st = fetch_yahoo(db, Fetcher(3.0, cfg.user_agent), args.start, end, series)
+        for k, v in st.items():
+            print(f"{k}：{v['days']} 天（{v['first']}～{v['last']}）")
+        return 0
     print(f"抓 {','.join(series)}：{args.start[:6]}～{end[:6]}，每個請求間隔 {args.interval} 秒", flush=True)
     st = fetch(db, Fetcher(args.interval, cfg.user_agent), args.start, end, series)
     blocked = st.pop("blocked", None)
@@ -451,6 +459,8 @@ def main(argv=None) -> None:
     lh.add_argument("--start", default="20080101", help="開始月份（預設 20080101）")
     lh.add_argument("--end", help="結束日（預設：今天）")
     lh.add_argument("--series", default="taiex,0050,tr", help="taiex、0050、tr（逗號分隔）")
+    lh.add_argument("--source", choices=("twse", "yahoo"), default="twse",
+                    help="twse：證交所逐月（會被限流）；yahoo：一次抓整段（0050 已還原股息與分割，沒有報酬指數）")
     lh.add_argument("--interval", type=float, default=8.0, help="每個請求間隔秒數（預設 8；太快會被證交所暫時封鎖）")
     ts = sub.add_parser("timing-study", help="長期歷史上比較「抱 0050、大盤空頭時空手」各種規則")
     ts.add_argument("--start", help="開始日（預設：資料最早一天）")

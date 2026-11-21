@@ -75,6 +75,59 @@ def parse(series: str, js) -> list[dict]:
     return out
 
 
+YAHOO = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}?period1={a}&period2={b}&interval=1d&events=div%2Csplit&includeAdjustedClose=true"
+YAHOO_SYMBOLS = {"taiex": "%5ETWII", "0050": "0050.TW"}
+
+
+def parse_yahoo(series: str, js) -> list[dict]:
+    """Yahoo 日線：0050 用還原股息與分割的收盤（adjclose），開高低也照同一比例還原；之後不必再做除權息還原。"""
+    try:
+        res = js["chart"]["result"][0]
+    except (KeyError, IndexError, TypeError):
+        err = ((js or {}).get("chart") or {}).get("error") if isinstance(js, dict) else None
+        raise FetchError("parse", f"Yahoo 回應格式不符：{err}")
+    off = int((res.get("meta") or {}).get("gmtoffset") or 28800)
+    q = (res.get("indicators") or {}).get("quote", [{}])[0]
+    adj = ((res.get("indicators") or {}).get("adjclose") or [{}])[0].get("adjclose")
+    from datetime import datetime, timezone
+    out = {}
+    for i, ts in enumerate(res.get("timestamp") or []):
+        close = (q.get("close") or [None])[i] if i < len(q.get("close") or []) else None
+        if close is None:
+            continue
+        k = (adj[i] / close) if series == "0050" and adj and i < len(adj) and adj[i] else 1.0
+        d = datetime.fromtimestamp(ts + off, tz=timezone.utc).strftime("%Y%m%d")
+
+        def g(f):
+            v = (q.get(f) or [None] * (i + 1))[i] if i < len(q.get(f) or []) else None
+            return None if v is None else round(v * k, 4)
+        out[d] = {"series": series, "date": d, "open": g("open"), "high": g("high"), "low": g("low"),
+                  "close": round(close * k, 4), "change": None}
+    return [out[d] for d in sorted(out)]
+
+
+def fetch_yahoo(db: DB, transport, start: str, end: str, series=("taiex", "0050"), log=print) -> dict:
+    """從 Yahoo 一次抓整段（每個系列一個請求），避開證交所的請求次數限制。會覆蓋同系列已有的資料。"""
+    from .dates import to_date
+    ensure(db)
+    from datetime import datetime, timezone
+    a = int(datetime.combine(to_date(start), datetime.min.time(), tzinfo=timezone.utc).timestamp())
+    b = int(datetime.combine(to_date(end), datetime.min.time(), tzinfo=timezone.utc).timestamp()) + 86400
+    stats = {}
+    for s in series:
+        if s not in YAHOO_SYMBOLS:
+            log(f"Yahoo 沒有 {s}，略過")
+            continue
+        rows = parse_yahoo(s, transport.get_json(YAHOO.format(sym=YAHOO_SYMBOLS[s], a=a, b=b)))
+        with db.tx() as c:
+            c.execute("DELETE FROM long_px WHERE series=?", (s,))
+            c.executemany("INSERT OR REPLACE INTO long_px(series,date,open,high,low,close,change) VALUES(?,?,?,?,?,?,?)",
+                          [(r["series"], r["date"], r["open"], r["high"], r["low"], r["close"], r["change"]) for r in rows])
+        stats[s] = {"fetched": 1, "skipped": 0, "failed": 0, "days": len(rows),
+                    "first": rows[0]["date"] if rows else None, "last": rows[-1]["date"] if rows else None}
+    return stats
+
+
 def ensure(db: DB) -> None:
     with db.tx() as c:
         c.execute(SCHEMA)

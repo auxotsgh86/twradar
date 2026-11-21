@@ -2167,6 +2167,22 @@ class LongHistoryTests(unittest.TestCase):
         self.assertEqual([r["change"] for r in rows], [0.35, -0.2, None])
         self.assertEqual(parse("0050", {"stat": "很抱歉，沒有符合條件的資料!"}), [])
 
+    def test_yahoo(self):
+        from twradar.longhist import parse_yahoo
+        js = {"chart": {"result": [{"meta": {"gmtoffset": 28800},
+                                    "timestamp": [1199203200, 1199289600, 1199376000],   # 2008-01-02、03、04 00:00 台北
+                                    "indicators": {"quote": [{"open": [60.0, 61.0, None], "high": [61, 62, None], "low": [59, 60, None],
+                                                              "close": [60.5, 61.5, None]}],
+                                                   "adjclose": [{"adjclose": [30.25, 30.75, None]}]}}], "error": None}}
+        rows = parse_yahoo("0050", js)
+        self.assertEqual([r["date"] for r in rows], ["20080102", "20080103"])
+        self.assertAlmostEqual(rows[0]["close"], 30.25)
+        self.assertAlmostEqual(rows[0]["open"], 30.0)          # 開盤照同一比例還原
+        self.assertIsNone(rows[0]["change"])
+        self.assertAlmostEqual(parse_yahoo("taiex", js)[1]["close"], 61.5)
+        with self.assertRaises(FetchError):
+            parse_yahoo("0050", {"chart": {"result": None, "error": {"code": "Not Found"}}})
+
     def test_adjust_and_study(self):
         from twradar.longhist import adjusted, bear_flags, simulate, stats
         rows = [{"date": f"2008{m:02d}{d:02d}", "open": 100.0, "high": 100.0, "low": 100.0, "close": 100.0, "change": 0.0}

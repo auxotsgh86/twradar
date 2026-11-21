@@ -510,7 +510,7 @@ class Provider:
 - 大盤進出的穩健性：`timing_rules` 加空頭連 2 日、跌破月線 1／2% 且下彎、季線空頭（`mktMa60`）、只看跌破月線、只看月線下彎；
   核心＋衛星改成 0050 空頭空手 30／50／70% ＋ 照訊號（30 份排序）。
 - 長期歷史（`longhist.py`，2026-11-22）：`twradar long-history` 逐月抓證交所 MI_5MINS_HIST（加權指數）、STOCK_DAY 0050、
-  MFI94U（加權報酬指數），存 `long_px` 表（不碰每日爬蟲的表）；`twradar timing-study [--years]` 在 2008 年起的資料上比較
+  MFI94U（加權報酬指數），或 `--source yahoo` 一次抓整段（^TWII、0050.TW 還原股息）；存 `long_px` 表（不碰每日爬蟲的表）；`twradar timing-study [--years]` 在 2008 年起的資料上比較
   各種「大盤空頭空手」規則與一直抱著（0050 還原除息、開盤成交；報酬指數收盤成交）。除權息日顯示「X0.00」時不還原。
 - 大盤資金向量驗證（`vector.py`，`twradar vector-study [--window 60,120] [--horizons 10,20] [--split]`）：外資現貨 5 日、
   台指期淨未平倉 5 日變化、−新台幣 5 日變化的滾動 Z-score（含當天的 W 日、截斷 ±3），等權平均＝`net_score`、樣本標準差＝`dispersion`；
