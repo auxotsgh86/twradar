@@ -100,7 +100,8 @@ function climateHTML(c, {reading = true} = {}) {
   const st = c.foreignState, txt = {exit: "外資撤出：暫停上車", ok: "外資未撤出", na: "外資態度資料不足"}[st] || "";
   const b = `<span class="badge b-${st === "exit" ? "stop" : st === "ok" ? "go" : "na"}">${txt}（${c.foreignHit}/${c.foreignHave} 項）</span>`;
   const P = v => v === undefined || v === null;
-  const rd = reading && (c.reading || []).length ? `<div class="reading"><div class="k">目前情境（規則式解讀，非預測）</div><ul>${c.reading.map(t => `<li>${esc(t)}</li>`).join("")}</ul></div>` : "";
+  const rd = reading && (c.reading || []).length ? `<div class="reading"><div class="k">目前情境（現況、一般解讀、過去資料；非預測）</div><ul>${c.reading.map(t => typeof t === "string" ? `<li>${esc(t)}</li>` :
+    `<li><div class="rt">${esc(t.text)}</div>${t.concept ? `<div class="rc"><b>一般解讀</b>　${esc(t.concept)}</div>` : ""}${t.evidence ? `<div class="re"><b>過去資料</b>　${esc(t.evidence.replace(/^過去資料/, ""))}</div>` : ""}</li>`).join("")}</ul></div>` : "";
   return `<div class="market climate">
     ${kv("attitude", "外資態度（近 5 日）", b)}
     ${kv("spot5", "外資現貨 5 日（億）", `<span class="num ${cls(c.foreignSpot5d)}">${fmtS(c.foreignSpot5d, 0)}</span>`)}

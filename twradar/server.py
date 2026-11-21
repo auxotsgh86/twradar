@@ -109,8 +109,14 @@ class App:
         need = P.get("foreignExitSignals", 3)
         state = "na" if have < need else "exit" if hit >= need else "ok"
         rank = history_rank(self.db, d, f)
+        key = (d, json.dumps(P, sort_keys=True, default=str))
+        cache = self.__dict__.setdefault("_sit_cache", {})
+        if key not in cache:
+            from .macro import situation_stats
+            cache.clear()
+            cache[key] = situation_stats(self.db, d, P)
         return {**f, "foreignHit": hit, "foreignHave": have, "foreignNeed": need, "foreignWhy": why, "foreignState": state,
-                "rank": rank, "reading": reading(f, rank, state, hit, need, P)}
+                "rank": rank, "reading": reading(f, rank, state, hit, need, P, cache[key])}
 
     def day_status(self, d: str) -> dict:
         run = self.db.get_run(d)

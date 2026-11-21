@@ -1902,15 +1902,34 @@ class MacroTests(unittest.TestCase):
         f = {"foreignSpot5d": -2185.7, "futForeign": -97863, "futForeignChg5": 3007, "usdTwdChg5Pct": 0.298,
              "breadth20": 2.74, "breadth20Chg10": -3.64, "mktChg10Pct": -9.24}
         rank = {"futForeign": {"pct": 4.2, "days": 565}, "breadth20": {"pct": 0.9, "days": 546}}
-        r = reading(f, rank, "ok", 1, 3, dict(DEFAULT_RULES))
-        self.assertIn("回補 3,007 口", r[0])
-        self.assertIn("96%", r[1])
-        self.assertIn("小貶 0.298%", r[2])
-        self.assertIn("極端弱勢", r[3])
-        self.assertIn("未成立（1/3 項）", r[4])
+        st = {"since": "20240723", "futHi": -90000, "base": {"n": 500, "f20": 1.2, "up20": 58},
+              "by": {"foreign:sell_cover": {"n": 30, "episodes": 6, "f10": 1.0, "up10": 60, "f20": 2.5, "up20": 67},
+                     "breadth:b0": {"n": 3, "episodes": 1}}}
+        r = reading(f, rank, "ok", 1, 3, dict(DEFAULT_RULES), st)
+        self.assertIn("減少 3,007 口（回補）", r[0]["text"])
+        self.assertIn("賣壓常會跟著減輕", r[0]["concept"])
+        self.assertIn("出現過 30 天（約 6 段）", r[0]["evidence"])
+        self.assertIn("+2.5%", r[0]["evidence"])
+        self.assertIn("96%", r[1]["text"])                     # 空單偏高
+        self.assertIn("貶 0.298%，接近 0.3% 的門檻", r[2]["text"])
+        self.assertIn("幾乎所有股票在月線下", r[3]["text"])
+        self.assertIn("樣本太少", r[3]["evidence"])
+        self.assertIn("未成立（1/3 項）", r[4]["text"])
         r = reading({**f, "futForeignChg5": -5000, "usdTwdChg5Pct": 0.5}, {}, "exit", 3, 3, dict(DEFAULT_RULES))
-        self.assertIn("兩邊同時看空", r[0])
-        self.assertIn("暫停新的上車訊號", r[-1])
+        self.assertIn("一致的看空", r[0]["concept"])
+        self.assertIn("暫停新的上車訊號", r[-1]["text"])
+        self.assertEqual(r[0]["evidence"], "")
+
+    def test_situation_stats(self):
+        from twradar.macro import compute_breadth, situation_stats
+        db, days = self._db()
+        compute_breadth(db)
+        db.put_macro([{"date": d, "fut_foreign": -80000 - i * 1000, "usd_twd": 32 + i * 0.05} for i, d in enumerate(days)])
+        st = situation_stats(db, days[-1], dict(DEFAULT_RULES))
+        self.assertEqual(st["base"]["n"], len(days) - 20)          # 之後 20 日完整的日子才算
+        self.assertTrue(any(k.startswith("fx:") for k in st["by"]))
+        st2 = situation_stats(db, days[25], dict(DEFAULT_RULES))   # 只用 d 以前
+        self.assertEqual(st2["base"]["n"], 26 - 20)
 
     def test_climate_variants(self):
         from twradar.backtest import apply_variant, preset_variants

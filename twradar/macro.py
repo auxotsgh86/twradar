@@ -141,67 +141,147 @@ def history_rank(db: DB, d: str, rec: dict) -> dict:
     return out
 
 
-def reading(f: dict, rank: dict, state: str, hit: int, need: int, P: dict) -> list[str]:
-    """把大盤環境的數字翻成白話的情境解讀（規則式，非預測）。"""
-    out: list[str] = []
+FWD = (10, 20)   # 歷史統計：之後 10、20 個交易日的加權指數報酬
+
+CONCEPT = {
+    ("foreign", "sell_add"): "現貨賣、期貨也加空，是外資最一致的看空：不只賣掉持股，還押注大盤下跌。",
+    ("foreign", "sell_cover"): "外資常先用期貨避險再賣現貨；空單開始回補，代表押注下跌的部位在減少，賣壓常會跟著減輕。但現貨還在賣，表示還沒轉向。",
+    ("foreign", "buy_cover"): "現貨買、空單也回補，外資兩邊都轉向偏多，常是波段回升的開始。",
+    ("foreign", "buy_add"): "現貨買、期貨卻加空，常是一邊買股票一邊用期貨避險，或只是換股，方向不明確。",
+    ("foreign", "sell_flat"): "外資只在現貨賣、期貨沒有明顯動作，比較像調節持股，不一定是看空整個市場。",
+    ("foreign", "buy_flat"): "外資現貨買超、期貨沒有明顯動作，偏多但力道普通。",
+    ("futlevel", "high"): "淨空單越多，代表押注下跌的部位越大；但空單也是未來的買盤：回補時必須買回期貨，常推升大盤（軋空）。",
+    ("fx", "depr"): "外資賣股後把新台幣換成美元匯出，新台幣就會貶值；匯率是確認錢是否真的離開台灣的指標。",
+    ("fx", "near_depr"): "新台幣小幅走貶，資金有外流的跡象，但還不明顯。",
+    ("fx", "appr"): "新台幣升值，常代表外資把錢匯進來，資金面偏多。",
+    ("fx", "near_appr"): "新台幣小幅走升，資金可能開始回流。",
+    ("fx", "flat"): "匯率持平，代表外資賣股的錢可能還留在台灣（放現金或轉買其他資產），還沒真的匯出。",
+    ("breadth", "b0"): "幾乎所有股票都跌破月線，是恐慌性的全面賣出；這種極端常出現在下跌的後段，但也可能再持續一段時間。",
+    ("breadth", "b10"): "大多數股票走弱，市場偏空，個股訊號容易失敗。",
+    ("breadth", "b30"): "不到一半的股票在月線上，行情集中在少數族群，選股難度高。",
+    ("breadth", "b50"): "多數股票在月線上，市場普遍健康。",
+    ("breadth", "b80"): "幾乎全面上漲，市場情緒熱，常伴隨短線過熱與拉回。",
+    ("diverge", "yes"): "指數漲、多數股票卻跌，代表只有少數權值股在撐，行情基礎不穩。",
+    ("state", "exit"): "這是系統規則，不是預測：外資在現貨、期貨、匯率同時撤出時暫停上車（回溯顯示能減少虧損）。",
+    ("state", "ok"): "這是系統規則，不是預測：外資沒有同時在三個地方撤出，個股訊號照常判斷。",
+}
+
+
+def classify(f: dict, P: dict, fut_hi: float | None = None) -> dict:
+    """把一天的大盤環境分類成幾種情境（每一組最多一種）。"""
+    out = {}
     sp, fc, fx = f.get("foreignSpot5d"), f.get("futForeignChg5"), f.get("usdTwdChg5Pct")
-    lots = P.get("foreignFutChgLots", 2000)
-    adding = fc is not None and fc <= -lots
-    covering = fc is not None and fc >= lots
-    if sp is not None:
-        sell = sp < 0
-        fut = ("期貨空單還在增加" if adding else f"期貨空單 5 日回補 {fc:,} 口" if covering
-               else "期貨空單變化不大" if fc is not None else "")
-        if sell and adding:
-            s = f"外資現貨 5 日賣超 {-sp:,.0f} 億，{fut}：外資在現貨和期貨兩邊同時看空。"
-        elif sell and covering:
-            s = f"外資現貨 5 日還在賣（{-sp:,.0f} 億），但{fut}：賣壓可能接近尾聲，但還不是回頭買進。"
-        elif not sell and covering:
-            s = f"外資現貨 5 日買超 {sp:,.0f} 億，{fut}：外資回頭的訊號。"
-        elif not sell and adding:
-            s = f"外資現貨 5 日買超 {sp:,.0f} 億，但{fut}：可能是換股或避險，方向不明。"
-        else:
-            s = f"外資現貨 5 日{'賣超' if sell else '買超'} {abs(sp):,.0f} 億" + (f"，{fut}。" if fut else "。")
-        out.append(s)
-    fr = rank.get("futForeign")
-    if fr and f.get("futForeign", 0) < 0 and fr["pct"] <= 15:
-        out.append(f"外資台指期淨空單 {-f['futForeign']:,} 口，比近 {fr['days']} 個交易日中 {100 - fr['pct']:.0f}% 的日子都多，屬於偏高的空單部位；"
-                   "空單大量回補通常是止跌的重要訊號。")
+    lots, thr = P.get("foreignFutChgLots", 2000), P.get("foreignFxPct", 0.3)
+    if sp is not None and fc is not None:
+        fut = "add" if fc <= -lots else "cover" if fc >= lots else "flat"
+        out["foreign"] = ("sell_" if sp < 0 else "buy_") + fut
+    if fut_hi is not None and f.get("futForeign") is not None and f["futForeign"] <= fut_hi < 0:
+        out["futlevel"] = "high"
     if fx is not None:
-        if fx >= P.get("foreignFxPct", 0.3):
-            out.append(f"新台幣 5 日貶 {fx:.2f}%：資金外流的壓力還在。")
-        elif fx <= -P.get("foreignFxPct", 0.3):
-            out.append(f"新台幣 5 日升 {-fx:.2f}%：資金有回流跡象。")
-        else:
-            thr = P.get("foreignFxPct", 0.3)
-            v = f"{abs(fx):.3f}".rstrip("0") if round(abs(fx), 2) >= thr else f"{abs(fx):.2f}"
-            if fx >= thr * .6:
-                out.append(f"新台幣 5 日小貶 {v}%，接近 {thr:g}% 的門檻，留意資金外流。")
-            elif fx <= -thr * .6:
-                out.append(f"新台幣 5 日小升 {v}%，接近 {thr:g}% 的門檻，資金可能開始回流。")
-            else:
-                out.append(f"新台幣 5 日變動 {fx:+.2f}%，大致持平，匯率沒有明顯的資金進出訊號。")
+        out["fx"] = ("depr" if fx >= thr else "appr" if fx <= -thr else "near_depr" if fx >= thr * .6
+                     else "near_appr" if fx <= -thr * .6 else "flat")
     b = f.get("breadth20")
     if b is not None:
+        out["breadth"] = "b0" if b < 10 else "b10" if b < 30 else "b30" if b < 50 else "b50" if b < 80 else "b80"
+    mc, bc = f.get("mktChg10Pct"), f.get("breadth20Chg10")
+    if mc is not None and bc is not None and mc > 0 and bc <= -P.get("breadthDropPts", 10):
+        out["diverge"] = "yes"
+    hit, have, _ = foreign_signals(f, P)
+    need = P.get("foreignExitSignals", 3)
+    if have >= need:
+        out["state"] = "exit" if hit >= need else "ok"
+    return out
+
+
+def _fut_hi(db: DB, d: str) -> float | None:
+    """淨空單「偏高」的門檻：到 d 為止，空單最多的 15% 日子的界線。"""
+    xs = [r["fut_foreign"] for r in db.q("SELECT fut_foreign FROM macro WHERE fut_foreign IS NOT NULL AND date<=? ORDER BY fut_foreign", (d,))]
+    return xs[int(len(xs) * .15)] if len(xs) >= 60 else None
+
+
+def situation_stats(db: DB, d: str, P: dict) -> dict:
+    """過去每一種情境出現後，加權指數之後 10、20 個交易日的表現（只用 d 以前、之後走勢已完整的日子）。"""
+    M = Macro(db, d)
+    fut_hi = _fut_hi(db, d)
+    acc: dict = {}
+    base = {h: [] for h in FWD}
+    n = len(M.days)
+    for i in range(n - max(FWD)):
+        if not M.taiex[i]:
+            continue
+        rets = {h: M.taiex[i + h] / M.taiex[i] - 1 for h in FWD}
+        for h in FWD:
+            base[h].append(rets[h])
+        for g, k in classify(M.fields(M.days[i]), P, fut_hi).items():
+            acc.setdefault((g, k), []).append((i, rets))
+
+    def summ(rows):
+        if not rows:
+            return {"n": 0}
+        eps = 1 + sum(1 for a, b in zip(rows, rows[1:]) if b[0] - a[0] > 10)
+        out = {"n": len(rows), "episodes": eps}
+        for h in FWD:
+            xs = [r[1][h] for r in rows]
+            out[f"f{h}"] = round(sum(xs) / len(xs) * 100, 2)
+            out[f"up{h}"] = round(sum(x > 0 for x in xs) / len(xs) * 100)
+        return out
+
+    bs = {"n": len(base[FWD[0]])}
+    for h in FWD:
+        xs = base[h]
+        if xs:
+            bs[f"f{h}"] = round(sum(xs) / len(xs) * 100, 2)
+            bs[f"up{h}"] = round(sum(x > 0 for x in xs) / len(xs) * 100)
+    return {"since": M.days[0] if M.days else None, "base": bs, "futHi": fut_hi,
+            "by": {f"{g}:{k}": summ(v) for (g, k), v in acc.items()}}
+
+
+def evidence(st: dict | None, key: str) -> str:
+    if not st:
+        return ""
+    s, b = st["by"].get(key, {"n": 0}), st["base"]
+    since = st.get("since") or ""
+    head = f"過去資料（{since[:4]}/{since[4:6]} 起）"
+    if s["n"] < 5 or s.get("episodes", 0) < 2:
+        return f"{head}：這種情況只出現過 {s['n']} 天，樣本太少，無法判斷。"
+    h = max(FWD)
+    return (f"{head}：出現過 {s['n']} 天（約 {s['episodes']} 段）；之後 {h} 個交易日加權指數平均 {s[f'f{h}']:+.1f}%、"
+            f"上漲機率 {s[f'up{h}']}%（所有日子平均 {b.get(f'f{h}', 0):+.1f}%、上漲 {b.get(f'up{h}', 0)}%）。")
+
+
+def reading(f: dict, rank: dict, state: str, hit: int, need: int, P: dict, stats: dict | None = None) -> list[dict]:
+    """大盤環境的情境解讀：每一項有三段：現況（數字）、一般解讀（常識）、過去資料（我們自己的歷史統計）。"""
+    out: list[dict] = []
+    cls = classify(f, P, (stats or {}).get("futHi"))
+    item = lambda g, text: out.append({"text": text, "concept": CONCEPT.get((g, cls.get(g)), ""),  # noqa: E731
+                                       "evidence": evidence(stats, f"{g}:{cls.get(g)}")})
+    sp, fc, fx = f.get("foreignSpot5d"), f.get("futForeignChg5"), f.get("usdTwdChg5Pct")
+    if "foreign" in cls:
+        k = cls["foreign"]
+        fut = {"add": f"期貨淨空單 5 日增加 {-fc:,} 口", "cover": f"期貨淨空單 5 日減少 {fc:,} 口（回補）",
+               "flat": f"期貨淨空單 5 日變化不大（{fc:+,} 口）"}[k.split("_")[1]]
+        item("foreign", f"外資現貨 5 日{'賣超' if sp < 0 else '買超'} {abs(sp):,.0f} 億，{fut}。")
+    elif sp is not None:
+        out.append({"text": f"外資現貨 5 日{'賣超' if sp < 0 else '買超'} {abs(sp):,.0f} 億（期貨資料不足）。", "concept": "", "evidence": ""})
+    fr = rank.get("futForeign")
+    if "futlevel" in cls and fr:
+        item("futlevel", f"外資台指期淨空單 {-f['futForeign']:,} 口，比近 {fr['days']} 個交易日中 {100 - fr['pct']:.0f}% 的日子都多。")
+    if "fx" in cls:
+        thr = P.get("foreignFxPct", 0.3)
+        v = f"{abs(fx):.3f}".rstrip("0") if round(abs(fx), 2) == thr and abs(fx) != thr else f"{abs(fx):.2f}"   # 0.298 不要顯示成 0.30
+        word = "貶" if fx > 0 else "升"
+        tail = {"depr": "", "appr": "", "near_depr": f"，接近 {thr:g}% 的門檻", "near_appr": f"，接近 {thr:g}% 的門檻", "flat": "，大致持平"}[cls["fx"]]
+        item("fx", f"新台幣 5 日{word} {v}%{tail}。")
+    b = f.get("breadth20")
+    if "breadth" in cls:
         br = rank.get("breadth20")
         pos = f"（近 {br['days']} 個交易日中，只有 {br['pct']:.0f}% 的日子這麼低或更低）" if br and br["pct"] <= 20 else ""
-        if b < 10:
-            out.append(f"市場廣度 {b:.0f}%：幾乎所有股票都在月線下{pos}，屬於極端弱勢；這種位置常是賣壓宣洩的後段，"
-                       "但還無法確定是底部，最好等外資空單回補或廣度回升再確認。")
-        elif b < 30:
-            out.append(f"市場廣度 {b:.0f}%：大多數股票在月線下{pos}，市場偏弱。")
-        elif b < 50:
-            out.append(f"市場廣度 {b:.0f}%：月線上的股票不到一半，強勢股集中在少數族群。")
-        elif b < 80:
-            out.append(f"市場廣度 {b:.0f}%：多數股票在月線上，市場普遍偏多。")
-        else:
-            out.append(f"市場廣度 {b:.0f}%：幾乎全面上漲，短線偏熱，追高要小心。")
-        mc, bc = f.get("mktChg10Pct"), f.get("breadth20Chg10")
-        if mc is not None and bc is not None and mc > 0 and bc <= -10:
-            out.append(f"加權指數 10 日漲 {mc:.1f}%，但廣度降了 {-bc:.0f} 點：只有少數權值股在撐盤。")
+        item("breadth", f"市場廣度 {b:.0f}%：{'幾乎所有' if b < 10 else '大多數' if b < 30 else '超過一半的' if b < 50 else '只有少數' if b < 80 else '幾乎沒有'}股票在月線下{pos}。")
+    if "diverge" in cls:
+        item("diverge", f"加權指數 10 日漲 {f['mktChg10Pct']:.1f}%，但廣度降了 {-f['breadth20Chg10']:.0f} 點。")
     if state == "exit":
-        out.append(f"外資撤出成立（{hit}/{need} 項）：系統暫停新的上車訊號，持股照原本的出場規則。")
+        item("state", f"外資撤出成立（{hit}/{need} 項）：系統暫停新的上車訊號，持股照原本的出場規則。")
     elif state == "ok":
         near = "，已接近暫停門檻" if hit == need - 1 and hit > 0 else ""
-        out.append(f"外資撤出未成立（{hit}/{need} 項{near}）：系統照常判斷個股訊號。")
+        item("state", f"外資撤出未成立（{hit}/{need} 項{near}）：系統照常判斷個股訊號。")
     return out

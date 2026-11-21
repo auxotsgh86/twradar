@@ -53,6 +53,10 @@ select,input{font:inherit;font-size:13px;color:var(--fg);background:var(--surfac
 .reading{margin-top:10px;padding:10px 12px;border-radius:8px;background:var(--surface2);font-size:13.5px;line-height:1.7}
 .reading .k{font-size:12px;color:var(--muted);margin-bottom:2px}
 .reading ul{margin:0;padding-left:1.2em}
+.reading li{margin:4px 0 8px}
+.reading .rt{color:var(--fg);font-weight:600}
+.reading .rc,.reading .re{color:var(--muted);font-size:12.5px;line-height:1.65}
+.reading .rc b,.reading .re b{color:var(--fg);font-weight:600}
 .kv{display:flex;flex-direction:column;min-width:0}.kv .k{font-size:11.5px;color:var(--muted)}.kv .v{font-size:16px;font-weight:600}
 .tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
 .tile{border-radius:var(--r);padding:12px 14px;display:flex;align-items:baseline;gap:10px}
