@@ -488,7 +488,9 @@ def run(db: DB, settings: dict, cfg: BTConfig, progress=None) -> dict:
                 progress(vi, len(cfg.variants), ci + 1, len(codes))
         res = {"name": name, "params": over, "trades": summarize_trades(trades, cfg.split), "equity": equity_curve(trades),
                "byMonth": {m: summarize_trades([t for t in trades if t["entry"][:6] == m], "99999999")["全期"]
-                           for m in sorted({t["entry"][:6] for t in trades})}}
+                           for m in sorted({t["entry"][:6] for t in trades})},
+               "byTag": {tag: summarize_trades([t for t in trades if tag in t["tags"]], cfg.split)
+                         for tag in sorted({x for t in trades for x in t["tags"]})}}
         if vi == 0 and cfg.study:
             from .study import condition_study
             res["conditions"] = condition_study(hist, dates, universe, P, S, cfg.split, rec_cache, regimes)
@@ -555,6 +557,7 @@ def _veto_ids(settings: dict) -> list[str]:
 
 def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
     """內建的規則對照組：
+    largecap 大型權值股：停損放寬（3%、5%、不因法人賣超、連 2 日）、不追高（距月線 4%、6%）、盤整不進場（月線 10 日 1%、2%）
     climate-grid  v0.6 穩健性：v0.5、外資撤出 2 項、3 項但期貨空單 1000／4000 口、新台幣貶 0.2／0.5%
     v05     前一版規則
     climate 大盤環境（以 v0.5 為底）：市場廣度 30／40／50%、指數漲廣度跌、外資撤出（3 項、2 項）、外資撤出＋廣度
@@ -620,6 +623,16 @@ def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
             out.append(("外資撤出（3 項）不上車", {"_playbooks": veto_with("foreignExit")}))
             out.append(("外資撤出（2 項）不上車", {"_playbooks": veto_with("foreignExit"), "foreignExitSignals": 2}))
             out.append(("外資撤出＋廣度 < 40% 不上車", {"_playbooks": veto_with("foreignExit", "breadthWeak")}))
+        elif n == "largecap":   # 大型權值股：停損放寬、不追高、盤整不進場（看報表的「依股票組」比較大型／中型／上櫃）
+            from .rules import entry_with, stop_variant
+            out.append(("停損：跌破月線 3% 才算", {"breakMaPct": 3}))
+            out.append(("停損：跌破月線 5% 才算", {"breakMaPct": 5, "breakMaBullPct": 5}))
+            out.append(("停損：不因月線＋法人賣超", {"_playbooks": stop_variant("nosell")}))
+            out.append(("停損：連 2 日在月線下", {"_playbooks": stop_variant("two")}))
+            out.append(("不追高：距月線 ≤ 4%", {"_playbooks": entry_with("notExtendedMa20"), "maxBiasMa20Pct": 4}))
+            out.append(("不追高：距月線 ≤ 6%", {"_playbooks": entry_with("notExtendedMa20"), "maxBiasMa20Pct": 6}))
+            out.append(("盤整不進場：月線 10 日 ≥ 1%", {"_playbooks": entry_with("ma20Trending"), "ma20SlopePct": 1}))
+            out.append(("盤整不進場：月線 10 日 ≥ 2%", {"_playbooks": entry_with("ma20Trending"), "ma20SlopePct": 2}))
         elif n == "v05":
             from .rules import v05_playbooks
             out.append(("v0.5（前一版）", {"_playbooks": v05_playbooks()}))
@@ -632,7 +645,7 @@ def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
         elif n == "market":
             out.append(("不用大盤逆風", {"_drop": ["marketWeak"]}))
         else:
-            raise ValueError(f"未知的對照組：{n}（可用：climate、climate-grid、v05、tdcc、settled、trial、bullhold、bullstop、bullstop-grid、bull、veto、inst1d、market、v04、v03）")
+            raise ValueError(f"未知的對照組：{n}（可用：largecap、climate、climate-grid、v05、tdcc、settled、trial、bullhold、bullstop、bullstop-grid、bull、veto、inst1d、market、v04、v03）")
     return out
 
 

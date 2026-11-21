@@ -317,8 +317,12 @@ def _indicators(q: list, ins: list, m, srcs: set | None, d: str, mh: list | None
             rec["ma5"] = round(sum(closes[:5]) / 5, 2)
         if len(closes) >= 20:
             rec["ma20"] = round(sum(closes[:20]) / 20, 2)
+        if len(closes) >= 2:
+            rec["prevClose"] = closes[1]
         if len(closes) >= 21:
             rec["ma20Prev"] = round(sum(closes[1:21]) / 20, 2)
+        if len(closes) >= 30:
+            rec["ma20Ago10"] = round(sum(closes[10:30]) / 20, 2)   # 10 個交易日前的月線（看月線斜率）
         if len(closes) >= 60:
             rec["ma60"] = round(sum(closes[:60]) / 60, 2)
         base = [r["close"] for r in q[5:61] if r["close"] is not None]   # 最近 5 日之前的約 55 日：起漲前的整理區間

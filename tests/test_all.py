@@ -1970,6 +1970,25 @@ class MacroTests(unittest.TestCase):
         self.assertEqual(len(g), 8)
         self.assertNotIn("foreignExit", json.dumps(g[0][1]["_playbooks"]))
 
+    def test_largecap_conditions(self):
+        from twradar.backtest import apply_variant, preset_variants
+        from twradar.conditions import BUILTIN, Ctx, NA, PASS, FAIL
+        from twradar.settings import default_settings
+        P = dict(DEFAULT_RULES)
+        ev = lambda cid, rec, **kw: BUILTIN[cid].fn(Ctx(rec, {}, {**P, **kw})).state  # noqa: E731
+        self.assertEqual(ev("notExtendedMa20", {"close": 106, "ma20": 100}, maxBiasMa20Pct=4), FAIL)
+        self.assertEqual(ev("notExtendedMa20", {"close": 103, "ma20": 100}, maxBiasMa20Pct=4), PASS)
+        self.assertEqual(ev("ma20Trending", {"ma20": 101, "ma20Ago10": 100}, ma20SlopePct=2), FAIL)
+        self.assertEqual(ev("ma20Trending", {"ma20": 103, "ma20Ago10": 100}, ma20SlopePct=2), PASS)
+        self.assertEqual(ev("belowMa20Two", {"close": 95, "ma20": 100, "prevClose": 99, "ma20Prev": 100}), PASS)
+        self.assertEqual(ev("belowMa20Two", {"close": 95, "ma20": 100, "prevClose": 101, "ma20Prev": 100}), FAIL)
+        self.assertEqual(ev("belowMa20Two", {"close": 95, "ma20": 100}), NA)
+        S = default_settings()
+        vs = preset_variants(["largecap"], S)
+        self.assertEqual(len(vs), 8)
+        for _, o in vs:
+            apply_variant(S, o)
+
     def test_v06_upgrade(self):
         """v0.5 的預設設定升級到 v0.6：否決加外資撤出；使用者設定的門檻不動。"""
         from twradar.rules import default_playbooks, upgrade, v05_playbooks

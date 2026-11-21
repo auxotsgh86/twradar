@@ -678,6 +678,42 @@ def bias_ma5_ok(c: Ctx) -> Res:
     return Res(FAIL, need=f"等回到 5 日線附近（乖離 {b:+.1f}%，上限 {fmt(c.P['maxBiasMa5Pct'], 1)}%）")
 
 
+@condition("notExtendedMa20", "未遠離月線", "entry", ("maxBiasMa20Pct",), ("close", "ma20"),
+           "收盤距月線不超過設定幅度（避免急漲後追高）")
+def not_extended_ma20(c: Ctx) -> Res:
+    close, ma20 = c.g("close"), c.g("ma20")
+    if close is None or not ma20:
+        return Res(NA)
+    b = (close / ma20 - 1) * 100
+    if b <= c.P["maxBiasMa20Pct"]:
+        return Res(PASS, f"距月線 {b:+.1f}%")
+    return Res(FAIL, need=f"等回到月線附近（距月線 {b:+.1f}%，上限 {fmt(c.P['maxBiasMa20Pct'], 1)}%）")
+
+
+@condition("ma20Trending", "月線明顯上揚", "entry", ("ma20SlopePct",), ("ma20", "ma20Ago10"),
+           "月線 10 個交易日上升達設定幅度（排除盤整時月線走平）")
+def ma20_trending(c: Ctx) -> Res:
+    ma20, ago = c.g("ma20"), c.g("ma20Ago10")
+    if ma20 is None or not ago:
+        return Res(NA)
+    sl = (ma20 / ago - 1) * 100
+    if sl >= c.P["ma20SlopePct"]:
+        return Res(PASS, f"月線 10 日 {sl:+.1f}%")
+    return Res(FAIL, need=f"月線走出盤整（10 日 {sl:+.1f}%，需 ≥ {fmt(c.P['ma20SlopePct'], 1)}%）")
+
+
+@condition("belowMa20Two", "連 2 日收在月線下", "hold", ("maTol",), ("close", "ma20", "prevClose", "ma20Prev"),
+           "今天和昨天收盤都低於月線（扣容許誤差）")
+def below_ma20_two(c: Ctx) -> Res:
+    close, ma20, pc, pm = c.g("close"), c.g("ma20"), c.g("prevClose"), c.g("ma20Prev")
+    if None in (close, ma20, pc, pm):
+        return Res(NA)
+    k = 1 - c.P["maTol"] / 100
+    if close < ma20 * k and pc < pm * k:
+        return Res(PASS, "連 2 日收在月線下")
+    return Res(FAIL)
+
+
 @condition("breakMa20Deep", "深跌破下彎月線", "hold", ("breakMaBullPct",), ("close", "ma20", "ma20Prev"),
            "收盤低於月線超過較寬的幅度，且月線下彎（大盤多頭時用）")
 def break_ma20_deep(c: Ctx) -> Res:

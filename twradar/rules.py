@@ -16,6 +16,8 @@
 """
 from __future__ import annotations
 
+import json
+
 import copy
 
 from .conditions import BUILTIN, NA, OPS, PASS, FAIL, COMPARE_FIELDS, Ctx, Res, compare, fmt
@@ -127,6 +129,37 @@ def settled_playbooks(cond: str = "baseSettled") -> dict:
     return pb
 
 
+def entry_with(*conds: str) -> dict:
+    """以目前預設為底，上車另外要求 conds。"""
+    pb = default_playbooks()
+    for r in pb["entry"]:
+        if r.get("label") == "上車":
+            w = r["when"]
+            r["when"] = {"all": [*(w["all"] if isinstance(w, dict) and "all" in w else [w]), *conds]}
+    return pb
+
+
+def stop_variant(kind: str) -> dict:
+    """以目前預設為底，調整停損中和月線有關的部分。
+    nosell：拿掉「跌破月線＋法人當日賣超」；two：月線相關的停損都要連 2 日收在月線下。"""
+    pb = default_playbooks()
+
+    def ma_related(x) -> bool:
+        return "belowMa20" in json.dumps(x) or "breakMa20" in json.dumps(x)
+    for r in pb["hold"]:
+        if r.get("label") != "停損":
+            continue
+        xs = []
+        for x in r["when"]["any"]:
+            if kind == "nosell" and isinstance(x, dict) and "instNetSell" in json.dumps(x):
+                continue
+            if kind == "two" and ma_related(x):
+                x = {"all": [x, "belowMa20Two"]}
+            xs.append(x)
+        r["when"] = {"any": xs}
+    return pb
+
+
 def veto_with(*conds: str) -> dict:
     """以 v0.5 為底，否決條件另外加上 conds（任一成立就不上車）。"""
     pb = v05_playbooks()
@@ -204,6 +237,8 @@ ENGINE_PARAMS = [
     {"id": "foreignExitSignals", "label": "外資撤出：成立訊號數 ≥", "value": 3, "unit": "項", "min": 1, "max": 3, "note": "現貨賣超、期貨空單增加、新台幣貶值"},
     {"id": "foreignFutChgLots", "label": "外資撤出：台指期淨空單 5 日增加 ≥", "value": 2000, "unit": "口", "min": 0, "max": None, "note": ""},
     {"id": "foreignFxPct", "label": "外資撤出：新台幣 5 日貶值 ≥", "value": 0.3, "unit": "%", "min": 0, "max": 10, "note": ""},
+    {"id": "maxBiasMa20Pct", "label": "不追高：收盤距月線 ≤", "value": 6, "unit": "%", "min": 0, "max": 50, "note": "對照組「大型股」用"},
+    {"id": "ma20SlopePct", "label": "盤整不進場：月線 10 日上升 ≥", "value": 1, "unit": "%", "min": -10, "max": 20, "note": "對照組「大型股」用"},
     {"id": "baseRangePct", "label": "籌碼沉澱：起漲前整理區間高低差 ≤", "value": 25, "unit": "%", "min": 0, "max": 200, "note": "對照組「沉澱」用"},
     {"id": "baseMarginPos", "label": "籌碼沉澱：融資在近 60 日區間的位置 ≤", "value": 40, "unit": "%", "min": 0, "max": 100, "note": "0＝最低、100＝最高"},
     {"id": "whaleUpWeeksMin", "label": "籌碼集中：大戶比例連續上升 ≥", "value": 3, "unit": "週", "min": 1, "max": 8, "note": "對照組「集保」用"},
