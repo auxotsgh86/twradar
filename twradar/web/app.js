@@ -81,7 +81,7 @@ const TIPS = {
   dealer: "證券商用自有資金的買賣超，包含發行權證的避險交易；進出很快，對方向的參考性較低。",
   attitude: "看外資近 5 日在三個地方是否同時撤出：現貨賣超、台指期空單增加、新台幣貶值。成立項數達到設定值（預設 3 項）時，系統暫停新的上車訊號。",
   spot5: "外資最近 5 個交易日買賣超的加總。負數代表外資這週整體在賣。",
-  fut: "外資在台指期貨的「多單減空單」口數。負數＝淨空單，代表外資押注下跌或在避險。旁邊的 5 日變化：正數＝空單減少（回補，偏多），負數＝空單增加（偏空）。",
+  fut: "外資在台指期貨「空單比多單多出幾口」，也就是淨空單；數字越大，外資押注下跌或避險的部位越大（新聞常說的「外資淨空單 10 萬口」就是這個）。旁邊是 5 日變化：空單減少（回補）偏多，空單增加偏空。",
   fx: "1 美元可以換多少新台幣。數字變大＝新台幣貶值，常伴隨外資把錢匯出；數字變小＝新台幣升值、資金流入。",
   breadth: "全部上市櫃普通股中，收盤價站在自己月線（20 日均價）之上的比例。指數在漲但廣度很低，代表只有少數權值股在撐盤。",
 };
@@ -104,7 +104,7 @@ function climateHTML(c, {reading = true} = {}) {
   return `<div class="market climate">
     ${kv("attitude", "外資態度（近 5 日）", b)}
     ${kv("spot5", "外資現貨 5 日（億）", `<span class="num ${cls(c.foreignSpot5d)}">${fmtS(c.foreignSpot5d, 0)}</span>`)}
-    ${kv("fut", "外資台指期淨單（口）", `<span class="num ${cls(c.futForeign)}">${fmtS(c.futForeign, 0)}</span><span class="small num ${cls(c.futForeignChg5)}"> ${P(c.futForeignChg5) ? "" : "5日 " + fmtS(c.futForeignChg5, 0)}</span>`)}
+    ${kv("fut", P(c.futForeign) || c.futForeign <= 0 ? "外資台指期淨空單（口）" : "外資台指期淨多單（口）", `<span class="num ${cls(c.futForeign)}">${P(c.futForeign) ? "—" : fmt(Math.abs(c.futForeign), 0)}</span><span class="small num ${cls(c.futForeignChg5)}"> ${P(c.futForeignChg5) || c.futForeignChg5 === 0 ? "" : `5日空單${c.futForeignChg5 > 0 ? "減少" : "增加"} ${fmt(Math.abs(c.futForeignChg5), 0)}`}</span>`)}
     ${kv("fx", "美元兌新台幣", `<span class="num">${fmt(c.usdTwd, 3)}</span><span class="small num ${cls(-(c.usdTwdChg5Pct || 0))}"> ${P(c.usdTwdChg5Pct) ? "" : (c.usdTwdChg5Pct > 0 ? "5日貶 " : "5日升 ") + Math.abs(c.usdTwdChg5Pct).toFixed(2) + "%"}</span>`)}
     ${kv("breadth", "市場廣度（站上月線）", `<span class="num">${P(c.breadth20) ? "—" : c.breadth20.toFixed(0) + "%"}</span>`)}</div>${rd}`;
 }
@@ -261,16 +261,17 @@ function bubbleSVG(items, center = "台股現貨") {
   return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="近期資金流向氣泡圖">${g}</svg>`;
 }
 /* 圖右上角：最新值與 5 日、期間變化 */
-function chgTxt(arr, f, upWord, downWord, pct = false) {
+function chgTxt(arr, f, upWord, downWord, pct = false, plain = false) {
   const v = (arr || []).map((x, i) => [x, i]).filter(([x]) => isNum(x)); if (v.length < 2) return "";
   const last = v[v.length - 1][0], p5 = v[Math.max(0, v.length - 6)][0], first = v[0][0];
   const c = (a, b) => { const d = b - a; return `${d >= 0 ? upWord : downWord} ${pct ? Math.abs(d / a * 100).toFixed(2) + "%" : f(Math.abs(d)).replace(/^[+−-]/, "")}`; };
-  return `最新 ${pct ? fmt(last, 3) : fmtS(last, 0)}　5 日 ${c(p5, last)}　期間 ${c(first, last)}`;
+  return `最新 ${pct ? fmt(last, 3) : plain ? fmt(last, 0) : fmtS(last, 0)}　5 日 ${c(p5, last)}　期間 ${c(first, last)}`;
 }
 async function viewFlows() {
   FW = Math.max(340, Math.min(1200, ($("#view").clientWidth || 1200) - 34));
   const f = await api("/flows?days=" + FLOW_DAYS), S = f.series || {}, D = f.dates || [];
   const sum = k => (S[k] || []).reduce((a, v) => a + (isNum(v) ? v : 0), 0);
+  const SHORT = (S.futForeign || []).map(v => isNum(v) ? -v : null);
   const fo = sum("foreign"), tr = sum("trust"), de = sum("dealer"), mg = sum("margin");
   const items = [{label: "外資", v: fo}, {label: "投信", v: tr}, {label: "自營商", v: de}, {label: "其他本土（差額，身分不明）", v: -(fo + tr + de)}];
   if ((S.margin || []).some(isNum)) items.push({label: "融資增減", v: mg, side: true});
@@ -284,7 +285,7 @@ async function viewFlows() {
       <div id="xread" class="small muted">　</div>
       ${syncChart(D, S.taiex || [], {title: "加權指數"})}
       ${syncChart(D, S.foreign || [], {title: "外資現貨買賣超（億）", bar: true})}
-      ${syncChart(D, S.futForeign || [], {title: "外資台指期淨未平倉（口）", h: 170, delta: true, goodUp: true, sub: chgTxt(S.futForeign, v => fmtS(v, 0) + " 口", "回補", "加空")})}
+      ${syncChart(D, SHORT, {title: "外資台指期淨空單（口，越高越看空；負數＝淨多單）", h: 170, delta: true, goodUp: false, sub: chgTxt(SHORT, v => fmt(v, 0) + " 口", "增加", "減少", false, true) + "　長條：紅＝空單減少　綠＝空單增加"})}
       ${syncChart(D, S.usdTwd || [], {title: "美元兌新台幣（往上＝新台幣貶）", h: 170, digits: 2, delta: true, goodUp: false, sub: chgTxt(S.usdTwd, v => fmtS(v, 3), "新台幣貶", "新台幣升", true)})}
       ${syncChart(D, S.breadth || [], {title: "市場廣度：站上月線的股票 %", ref: 50})}
       ${axisRow(D)}</div>
@@ -292,7 +293,7 @@ async function viewFlows() {
       ${D.length ? bubbleSVG(items) : `<div class="empty">沒有資料</div>`}
       <p class="small muted">圓面積與金額成正比。「其他本土」＝三大法人合計的反向，是推算出來的，證交所沒有公布這些人是誰；
       推測可能包括公股行庫與國安基金（國家隊）、壽險、企業與大股東，以及用現股買賣的散戶。虛線圓「融資增減」是用融資買股的散戶（槓桿），減少代表散戶槓桿在退場，不計入買賣平衡。
-      外資台指期淨單 ${isNum(fut1) ? fmtS(fut1, 0) + " 口" : "—"}${isNum(fut0) && isNum(fut1) ? `（期間 ${fmtS(fut1 - fut0, 0)} 口，負＝空單增加）` : ""}，不按比例。</p></div>`;
+      ${isNum(fut1) ? `外資台指期${fut1 <= 0 ? `淨空單 ${fmt(-fut1, 0)}` : `淨多單 ${fmt(fut1, 0)}`} 口` : "外資台指期：沒有資料"}${isNum(fut0) && isNum(fut1) && fut1 !== fut0 ? `（這段期間空單${fut1 < fut0 ? "增加" : "減少"} ${fmt(Math.abs(fut1 - fut0), 0)} 口）` : ""}，屬於押注方向的部位，不是現貨資金，所以不畫成氣泡。</p></div>`;
   document.querySelectorAll("[data-days]").forEach(b => b.onclick = () => { FLOW_DAYS = +b.dataset.days; viewFlows(); });
   const svgs = [...document.querySelectorAll("svg.sync")], read = $("#xread");
   const show = i => {
@@ -300,7 +301,7 @@ async function viewFlows() {
     svgs.forEach(s => { const L = +s.dataset.l, R = +s.dataset.r, n = +s.dataset.n, x = L + (n < 2 ? 0 : i * (FW - L - R) / (n - 1));
       const l = s.querySelector(".xh"); l.setAttribute("x1", x); l.setAttribute("x2", x); l.setAttribute("visibility", "visible"); });
     const v = (k, dg = 0) => isNum((S[k] || [])[i]) ? fmt(S[k][i], dg) : "—";
-    read.innerHTML = `<b>${ymd(D[i])}</b>　加權 ${v("taiex", 0)}　外資現貨 ${isNum(S.foreign[i]) ? fmtS(S.foreign[i], 0) : "—"} 億　台指期淨單 ${isNum((S.futForeign || [])[i]) ? fmtS(S.futForeign[i], 0) : "—"} 口　美元 ${v("usdTwd", 3)}　廣度 ${v("breadth", 0)}%`;
+    read.innerHTML = `<b>${ymd(D[i])}</b>　加權 ${v("taiex", 0)}　外資現貨 ${isNum(S.foreign[i]) ? fmtS(S.foreign[i], 0) : "—"} 億　台指期淨空單 ${isNum(SHORT[i]) ? fmt(SHORT[i], 0) : "—"} 口　美元 ${v("usdTwd", 3)}　廣度 ${v("breadth", 0)}%`;
   };
   svgs.forEach(s => {
     s.addEventListener("pointermove", ev => { const b = s.getBoundingClientRect(), L = +s.dataset.l, R = +s.dataset.r, n = +s.dataset.n;
