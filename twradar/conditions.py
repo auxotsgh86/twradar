@@ -714,6 +714,30 @@ def below_ma20_two(c: Ctx) -> Res:
     return Res(FAIL)
 
 
+@condition("instTurnStrong", "法人轉買且力道夠", "entry", ("instTurnPct", "inst5dPct"), ("instTurn", "instNet", "vol", "foreign5d", "trust5d", "vol5"),
+           "由賣轉買，且當日外資＋投信買超佔成交量達設定比例，近 5 日也不是大幅賣超")
+def inst_turn_strong(c: Ctx) -> Res:
+    t, net, vol = c.g("instTurn"), c.g("instNet"), c.g("vol")
+    if t is None or net is None or not vol:
+        return Res(NA)
+    day = net / vol * 100
+    r5 = _inst5_ratio(c, (c.g("foreign5d") or 0) + (c.g("trust5d") or 0))
+    if t and day >= c.P["instTurnPct"] and (r5 is None or r5 >= -c.P["inst5dPct"]):
+        return Res(PASS, f"法人轉買，當日買超佔成交量 {day:.1f}%")
+    return Res(FAIL, need=f"法人轉買且當日買超 ≥ 成交量 {fmt(c.P['instTurnPct'], 1)}%")
+
+
+@condition("redVolKQuality", "實體紅K（非避雷針）", "entry", ("volRatio", "maxUpperShadowPct"), ("candle", "chgPct", "upperShadowPct", "vol", "vol5"),
+           "收紅、當日上漲、量比達門檻，且上影線不超過整根 K 線的設定比例")
+def red_vol_k_quality(c: Ctx) -> Res:
+    k, ch, us, vr = c.g("candle"), c.g("chgPct"), c.g("upperShadowPct"), c.vol_r
+    if None in (k, ch, us) or vr is None:
+        return Res(NA)
+    if k > 0 and ch > 0 and us < c.P["maxUpperShadowPct"] and vr > c.P["volRatio"]:
+        return Res(PASS, f"實體紅K（上影 {us:.0f}%、量比 {vr:.2f}）")
+    return Res(FAIL, need="實體紅K（收漲、上影線短、帶量）")
+
+
 @condition("breakMa20Deep", "深跌破下彎月線", "hold", ("breakMaBullPct",), ("close", "ma20", "ma20Prev"),
            "收盤低於月線超過較寬的幅度，且月線下彎（大盤多頭時用）")
 def break_ma20_deep(c: Ctx) -> Res:

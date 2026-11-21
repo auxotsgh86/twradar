@@ -160,6 +160,44 @@ def stop_variant(kind: str) -> dict:
     return pb
 
 
+def _swap(node, old: str, new):
+    if isinstance(node, str):
+        return new if node == old else node
+    if isinstance(node, list):
+        return [_swap(x, old, new) for x in node]
+    if isinstance(node, dict):
+        return {k: _swap(v, old, new) if k in ("all", "any", "none", "not", "when", "of", "atLeast") else v for k, v in node.items()}
+    return node
+
+
+def neon_playbooks(inst: str = "", entry_extra: tuple = (), quality: bool = False, no_blowoff: bool = False,
+                   bull_profit: bool = False) -> dict:
+    """外部建議的修正（以目前預設為底）。
+    inst：「5d」上車只看法人 5 日累計（拿掉法人由賣轉買）；「strong」由賣轉買必須當日力道夠。
+    entry_extra：上車另外要求的條件；quality：帶量紅K改成實體紅K；no_blowoff：出貨警訊拿掉「爆量長黑」（保留高檔爆量長黑）；
+    bull_profit：大盤多頭時，獲利出場的「跌破月線」改成深跌破下彎月線。"""
+    pb = default_playbooks()
+    for r in pb["entry"]:
+        if r.get("label") != "上車":
+            continue
+        w = r["when"]
+        if inst == "5d":
+            w = _swap(w, "instTurn", "inst5dBuy")
+        elif inst == "strong":
+            w = _swap(w, "instTurn", "instTurnStrong")
+        if quality:
+            w = _swap(w, "redVolK", "redVolKQuality")
+        if entry_extra:
+            w = {"all": [*(w["all"] if "all" in w else [w]), *entry_extra]}
+        r["when"] = w
+    for r in pb["hold"]:
+        if no_blowoff and r.get("label") == "出貨警訊":
+            r["when"] = {"any": [x for x in r["when"]["any"] if x != "blowoffBlack"]}
+        if bull_profit and r.get("label") == "獲利出場":
+            r["when"] = _swap(r["when"], "belowMa20", {"any": [{"all": ["belowMa20", "marketNotBull"]}, "breakMa20Deep"]})
+    return pb
+
+
 def veto_with(*conds: str) -> dict:
     """以 v0.5 為底，否決條件另外加上 conds（任一成立就不上車）。"""
     pb = v05_playbooks()
@@ -239,6 +277,8 @@ ENGINE_PARAMS = [
     {"id": "foreignFxPct", "label": "外資撤出：新台幣 5 日貶值 ≥", "value": 0.3, "unit": "%", "min": 0, "max": 10, "note": ""},
     {"id": "maxBiasMa20Pct", "label": "不追高：收盤距月線 ≤", "value": 6, "unit": "%", "min": 0, "max": 50, "note": "對照組「大型股」用"},
     {"id": "ma20SlopePct", "label": "盤整不進場：月線 10 日上升 ≥", "value": 1, "unit": "%", "min": -10, "max": 20, "note": "對照組「大型股」用"},
+    {"id": "instTurnPct", "label": "法人轉買：當日買超佔成交量 ≥", "value": 3, "unit": "%", "min": 0, "max": 100, "note": "對照組用"},
+    {"id": "maxUpperShadowPct", "label": "實體紅K：上影線佔整根 K 線 <", "value": 40, "unit": "%", "min": 0, "max": 100, "note": "對照組用"},
     {"id": "baseRangePct", "label": "籌碼沉澱：起漲前整理區間高低差 ≤", "value": 25, "unit": "%", "min": 0, "max": 200, "note": "對照組「沉澱」用"},
     {"id": "baseMarginPos", "label": "籌碼沉澱：融資在近 60 日區間的位置 ≤", "value": 40, "unit": "%", "min": 0, "max": 100, "note": "0＝最低、100＝最高"},
     {"id": "whaleUpWeeksMin", "label": "籌碼集中：大戶比例連續上升 ≥", "value": 3, "unit": "週", "min": 1, "max": 8, "note": "對照組「集保」用"},

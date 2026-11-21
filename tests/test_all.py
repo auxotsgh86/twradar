@@ -1976,6 +1976,34 @@ class MacroTests(unittest.TestCase):
         self.assertEqual(len(g), 8)
         self.assertNotIn("foreignExit", json.dumps(g[0][1]["_playbooks"]))
 
+    def test_neon(self):
+        import json as _j
+        from twradar.backtest import apply_variant, preset_variants
+        from twradar.conditions import BUILTIN, Ctx, PASS, FAIL
+        from twradar.settings import default_settings
+        P = dict(DEFAULT_RULES)
+        ev = lambda cid, rec, **kw: BUILTIN[cid].fn(Ctx(rec, {}, {**P, **kw})).state  # noqa: E731
+        base = {"candle": 1, "chgPct": 2, "vol": 2000, "vol5": 1000}
+        self.assertEqual(ev("redVolKQuality", {**base, "upperShadowPct": 20}), PASS)
+        self.assertEqual(ev("redVolKQuality", {**base, "upperShadowPct": 60}), FAIL)
+        self.assertEqual(ev("redVolKQuality", {**base, "upperShadowPct": 20, "chgPct": -1}), FAIL)
+        t = {"instTurn": True, "vol": 1000, "vol5": 1000, "foreign5d": 0, "trust5d": 0}
+        self.assertEqual(ev("instTurnStrong", {**t, "instNet": 50}), PASS)
+        self.assertEqual(ev("instTurnStrong", {**t, "instNet": 10}), FAIL)
+        self.assertEqual(ev("instTurnStrong", {**t, "instNet": 50, "foreign5d": -1000}), FAIL)
+        S = default_settings()
+        vs = dict(preset_variants(["neon"], S))
+        self.assertEqual(len(vs), 9)
+        allin = _j.dumps(vs["四刀全上"]["_playbooks"], ensure_ascii=False)
+        for k in ("redVolKQuality", "biasMa5Ok", "breakMa20Deep"):
+            self.assertIn(k, allin)
+        self.assertNotIn('"instTurn"', allin)
+        self.assertNotIn('"blowoffBlack"', allin)
+        self.assertIn("highBlowoffBlack", allin)
+        self.assertEqual(vs["不加碼（只看上車訊號）"]["_maxAdds"], 0)
+        for o in vs.values():
+            apply_variant(S, o)
+
     def test_portfolio(self):
         """兩筆交易、資金 2 份：A 從 100 漲到 110、B 從 50 跌到 45；扣費前組合應約 +0%。"""
         from twradar.backtest import portfolio

@@ -339,6 +339,8 @@ def _indicators(q: list, ins: list, m, srcs: set | None, d: str, mh: list | None
             rec["amt5"] = round(sum(pv) / 5 / 1e4)
         if cur["open"] is not None:
             rec["candle"] = (cur["close"] > cur["open"]) - (cur["close"] < cur["open"])  # 1 紅 K、-1 黑 K
+            if cur.get("high") is not None and cur.get("low") is not None and cur["high"] > cur["low"]:
+                rec["upperShadowPct"] = round((cur["high"] - max(cur["open"], cur["close"])) / (cur["high"] - cur["low"]) * 100, 1)
         # 回測月線：過去 N 日（不含今日）最低價、收盤距當日月線的最小值（%）
         n = int(P.get("pullbackDays", 10))
         lows, cls_ = [], []
