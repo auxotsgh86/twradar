@@ -268,6 +268,29 @@ function chgTxt(arr, f, upWord, downWord, pct = false, plain = false) {
   const c = (a, b) => { const d = b - a; return `${d >= 0 ? upWord : downWord} ${pct ? Math.abs(d / a * 100).toFixed(2) + "%" : f(Math.abs(d)).replace(/^[+−-]/, "")}`; };
   return `最新 ${pct ? fmt(last, 3) : plain ? fmt(last, 0) : fmtS(last, 0)}　5 日 ${c(p5, last)}　期間 ${c(first, last)}`;
 }
+/* 資金流向的圖（資金流向頁與報表共用） */
+function flowCharts(f) {
+  const S = f.series || {}, D = f.dates || [];
+  const SHORT = (S.futForeign || []).map(v => isNum(v) ? -v : null);
+  return `${syncChart(D, S.taiex || [], {title: "加權指數"})}
+      ${syncChart(D, S.foreign || [], {title: "外資現貨買賣超（億）", bar: true})}
+      ${syncChart(D, SHORT, {title: "外資台指期淨空單（口，越高越看空；負數＝淨多單）", h: 170, delta: true, goodUp: false, sub: chgTxt(SHORT, v => fmt(v, 0) + " 口", "增加", "減少", false, true) + "　長條：紅＝空單減少　綠＝空單增加"})}
+      ${syncChart(D, S.usdTwd || [], {title: "美元兌新台幣（往上＝新台幣貶）", h: 170, digits: 2, delta: true, goodUp: false, sub: chgTxt(S.usdTwd, v => fmtS(v, 3), "新台幣貶", "新台幣升", true)})}
+      ${syncChart(D, S.breadth || [], {title: "市場廣度：站上月線的股票 %", ref: 50})}
+      ${axisRow(D)}`;
+}
+function flowBubble(f, days) {
+  const S = f.series || {}, D = f.dates || [], FLOW_DAYS = days;
+  const sum = k => (S[k] || []).reduce((a, v) => a + (isNum(v) ? v : 0), 0);
+  const fo = sum("foreign"), tr = sum("trust"), de = sum("dealer"), mg = sum("margin");
+  const items = [{label: "外資", v: fo}, {label: "投信", v: tr}, {label: "自營商", v: de}, {label: "其他本土（差額，身分不明）", v: -(fo + tr + de)}];
+  if ((S.margin || []).some(isNum)) items.push({label: "融資增減", v: mg, side: true});
+  const fut = (S.futForeign || []).filter(isNum), fut0 = fut[0], fut1 = fut[fut.length - 1];
+  return `${D.length ? bubbleSVG(items) : `<div class="empty">沒有資料</div>`}
+      <p class="small muted">圓面積與金額成正比。「其他本土」＝三大法人合計的反向，是推算出來的，證交所沒有公布這些人是誰；
+      推測可能包括公股行庫與國安基金（國家隊）、壽險、企業與大股東，以及用現股買賣的散戶。虛線圓「融資增減」是用融資買股的散戶（槓桿），減少代表散戶槓桿在退場，不計入買賣平衡。
+      ${isNum(fut1) ? `外資台指期${fut1 <= 0 ? `淨空單 ${fmt(-fut1, 0)}` : `淨多單 ${fmt(fut1, 0)}`} 口` : "外資台指期：沒有資料"}${isNum(fut0) && isNum(fut1) && fut1 !== fut0 ? `（這段期間空單${fut1 < fut0 ? "增加" : "減少"} ${fmt(Math.abs(fut1 - fut0), 0)} 口）` : ""}，屬於押注方向的部位，不是現貨資金，所以不畫成氣泡。</p>`;
+}
 async function viewFlows() {
   FW = Math.max(340, Math.min(1200, ($("#view").clientWidth || 1200) - 34));
   const f = await api("/flows?days=" + FLOW_DAYS), S = f.series || {}, D = f.dates || [];
@@ -284,17 +307,9 @@ async function viewFlows() {
     <div class="panel flowclim">${climateHTML(f.climate) || `<div class="empty">沒有外資態度資料</div>`}</div>
     <div class="panel"><h2>趨勢（共用時間軸，滑鼠移到圖上看同一天的數值）</h2>
       <div id="xread" class="small muted">　</div>
-      ${syncChart(D, S.taiex || [], {title: "加權指數"})}
-      ${syncChart(D, S.foreign || [], {title: "外資現貨買賣超（億）", bar: true})}
-      ${syncChart(D, SHORT, {title: "外資台指期淨空單（口，越高越看空；負數＝淨多單）", h: 170, delta: true, goodUp: false, sub: chgTxt(SHORT, v => fmt(v, 0) + " 口", "增加", "減少", false, true) + "　長條：紅＝空單減少　綠＝空單增加"})}
-      ${syncChart(D, S.usdTwd || [], {title: "美元兌新台幣（往上＝新台幣貶）", h: 170, digits: 2, delta: true, goodUp: false, sub: chgTxt(S.usdTwd, v => fmtS(v, 3), "新台幣貶", "新台幣升", true)})}
-      ${syncChart(D, S.breadth || [], {title: "市場廣度：站上月線的股票 %", ref: 50})}
-      ${axisRow(D)}</div>
+      ${flowCharts(f)}</div>
     <div class="panel"><h2>錢流到哪裡（近 ${FLOW_DAYS} 日累計）</h2>
-      ${D.length ? bubbleSVG(items) : `<div class="empty">沒有資料</div>`}
-      <p class="small muted">圓面積與金額成正比。「其他本土」＝三大法人合計的反向，是推算出來的，證交所沒有公布這些人是誰；
-      推測可能包括公股行庫與國安基金（國家隊）、壽險、企業與大股東，以及用現股買賣的散戶。虛線圓「融資增減」是用融資買股的散戶（槓桿），減少代表散戶槓桿在退場，不計入買賣平衡。
-      ${isNum(fut1) ? `外資台指期${fut1 <= 0 ? `淨空單 ${fmt(-fut1, 0)}` : `淨多單 ${fmt(fut1, 0)}`} 口` : "外資台指期：沒有資料"}${isNum(fut0) && isNum(fut1) && fut1 !== fut0 ? `（這段期間空單${fut1 < fut0 ? "增加" : "減少"} ${fmt(Math.abs(fut1 - fut0), 0)} 口）` : ""}，屬於押注方向的部位，不是現貨資金，所以不畫成氣泡。</p></div>`;
+      ${flowBubble(f, FLOW_DAYS)}</div>`;
   document.querySelectorAll("[data-days]").forEach(b => b.onclick = () => { FLOW_DAYS = +b.dataset.days; viewFlows(); });
   const svgs = [...document.querySelectorAll("svg.sync")], read = $("#xread");
   const show = i => {
@@ -370,11 +385,27 @@ function holdSec(st) {
   return `<div class="sec"><h2>持有部位（${list.length}）</h2>${list.map(s => { const r = s.data, h = s.signal.hold;
     return `<p style="margin:8px 0"><button type="button" class="linkish" data-hold="${esc(s.code)}" title="調整持股">${badge(h.light)}</button> <b>${esc(s.code)} ${esc(s.name)}</b> <button type="button" class="linkish small no-print" data-hold="${esc(s.code)}">調整持股</button>　收 ${fmt(r.close, pd(r.close))}（<span class="${cls(r.chgPct)}">${fmtP(r.chgPct)}</span>）<br><span class="muted">${esc(holdLine(h) || "—")}</span></p>`; }).join("")}</div>`;
 }
+const REPORT_DAYS = 60;
+/* 離線報表：把目前的報表連同樣式存成一個 HTML 檔，沒有網路也能打開 */
+async function downloadOffline(d) {
+  const css = await fetch("app.css", {cache: "no-store"}).then(r => r.text()).catch(() => "");
+  const art = $("article.report").cloneNode(true);
+  art.querySelectorAll(".no-print,.noprint,button").forEach(x => x.remove());
+  const html = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>右側加碼晨報 ${d}</title><style>${css}\n.no-print,.noprint{display:none!important}body{padding:16px}</style></head>
+<body><main class="wrap">${art.outerHTML}</main><footer class="wrap foot">離線版：由右側加碼雷達產生；滑鼠移到大盤數字上可看說明。以上為籌碼訊號整理，非投資建議。</footer></body></html>`;
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([html], {type: "text/html"}));
+  a.download = `twradar-report-${d.replace(/-/g, "")}.html`;
+  document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
 async function viewReport(date) {
   await loadDates();
   const e = date ? await api("/days/" + date) : await api("/latest");
   const d = e.date; if (!d) { $("#view").innerHTML = `<div class="panel empty">尚無資料</div>`; return; }
   const st = e.stocks, m = e.market;
+  FW = 1000;   // 報表的圖用固定寬度，列印與離線檔案都一致
+  const fl = await api(`/flows?days=${REPORT_DAYS}&date=${d.replace(/-/g, "")}`).catch(() => null);
   const withMA = st.filter(s => isNum(s.signal.maDistPct)).map(s => ({label: s.code + " " + s.name, v: s.signal.maDistPct, light: s.signal.light}));
   const sec = (k, title) => { const list = st.filter(s => s.signal.light === k); if (!list.length) return "";
     return `<div class="sec"><h2 style="color:var(--${k === "na" ? "na" : k})">${title}（${list.length}）</h2>${list.map(s => { const r = s.data, g = s.signal;
@@ -383,7 +414,7 @@ async function viewReport(date) {
       return `<p style="margin:8px 0"><b>${esc(s.code)} ${esc(s.name)}</b>　收 ${fmt(r.close, pd(r.close))}（<span class="${cls(r.chgPct)}">${fmtP(r.chgPct)}</span>）　外資 ${fmtS(r.foreign)}　投信 ${fmtS(r.trust)}　融資 ${fmtS(r.marginChg)}<br><span class="muted">${esc(line)}${g.keyLevelNote ? "；" + esc(g.keyLevelNote) : ""}</span></p>`; }).join("")}</div>`; };
   $("#view").innerHTML = `
    <div class="row between noprint"><div class="row"><select id="dsel" aria-label="資料日">${dateOptions(d)}</select>${e.ready ? "" : badge(e.status, e.statusText)}</div>
-     <div class="row"><button class="primary" id="printBtn">列印／存成 PDF</button></div></div>
+     <div class="row"><button id="offBtn" title="存成一個 HTML 檔，傳給別人用瀏覽器打開，不需要網路">下載離線報表</button><button class="primary" id="printBtn">列印／存成 PDF</button></div></div>
    <article class="report">
     <div><h1>右側加碼晨報｜資料日 ${d.replace(/-/g, "/")}</h1><div class="small muted">產出時間 ${new Date().toLocaleString("zh-TW", {hour12: false})}・資料狀態：${esc(e.statusText)}</div></div>
     ${marketHTML(m)}
@@ -395,13 +426,21 @@ async function viewReport(date) {
     <div class="sec"><h2>收盤與月線乖離（%）</h2><div class="small muted">0 線為月線，右側＝站上月線；長條顏色為燈號</div>${hBars(withMA, {color: lightColor, unit: "%"})}</div>
     <div class="sec"><h2>外資／投信 當日買賣超（張）</h2><div class="legend"><span><i style="background:var(--c-foreign)"></i>外資</span><span><i style="background:var(--c-trust)"></i>投信</span></div>
      ${divBars(st.map(s => s.code), [{values: st.map(s => s.data.foreign ?? null), color: "var(--c-foreign)"}, {values: st.map(s => s.data.trust ?? null), color: "var(--c-trust)"}], {h: 220, lab: d => d, every: 1})}</div>
+    ${fl && (fl.dates || []).length ? `<div class="sec"><h2>大盤環境與資金流向（近 ${REPORT_DAYS} 個交易日）</h2>
+      <div class="small muted">五張圖共用同一條時間軸；台指期與匯率下方是每日變化。</div>${flowCharts(fl)}</div>
+      <div class="sec"><h2>錢流到哪裡（近 ${REPORT_DAYS} 個交易日累計）</h2>${flowBubble(fl, REPORT_DAYS)}</div>` : ""}
     ${holdSec(st)}${sec("go", "上車／加碼訊號")}${sec("wait", "觀察中")}${sec("stop", "轉弱／不宜加碼")}${sec("na", "資料不足")}
     <div class="sec"><h2>精簡表</h2>${tableHTML(st)}</div>
     ${e.model ? `<div class="small ${e.model.status === "偏離" ? "" : "muted"}" style="margin:8px 0">${e.model.status === "偏離" ? "⚠ " : ""}模型追蹤：${esc(e.model.status)}。${esc(e.model.text)}</div>` : ""}
-    <div class="small muted">資料來源：證交所、櫃買中心${st.some(s => (s.data.source || "").includes("FinMind")) ? "、FinMind" : ""}。以上為籌碼訊號整理，非投資建議。</div>
+    <div class="sec glossary"><h2>名詞說明</h2><dl>${[["外資買賣超", "foreign"], ["投信買賣超", "trust"], ["自營商買賣超", "dealer"], ["外資態度", "attitude"],
+      ["外資現貨 5 日", "spot5"], ["外資台指期淨空單", "fut"], ["美元兌新台幣", "fx"], ["市場廣度", "breadth"]].map(([k, t]) => `<dt>${k}</dt><dd>${esc(TIPS[t])}</dd>`).join("")}
+      <dt>其他本土（差額）</dt><dd>三大法人合計的反向，是推算出來的；證交所沒有公布是誰，推測包括公股行庫與國安基金、壽險、企業與大股東，以及用現股買賣的散戶。</dd>
+      <dt>燈號</dt><dd>綠＝上車／加碼訊號，黃＝觀察中（還差哪些條件寫在下方），紅＝轉弱／不宜加碼。</dd></dl></div>
+    <div class="small muted">資料來源：證交所、櫃買中心、期貨交易所${st.some(s => (s.data.source || "").includes("FinMind")) ? "、FinMind" : ""}。以上為籌碼訊號整理，非投資建議。</div>
    </article>`;
   $("#dsel").addEventListener("change", ev => location.hash = "#/report/" + ev.target.value);
   $("#printBtn").addEventListener("click", () => window.print());
+  $("#offBtn").addEventListener("click", () => downloadOffline(d).catch(err => toast("下載失敗：" + err.message)));
 }
 
 /* ---------- 頁面：設定與狀態 ---------- */

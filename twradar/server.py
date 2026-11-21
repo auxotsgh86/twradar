@@ -72,10 +72,11 @@ class App:
                 "dealerAmt": None if m["dealer_amt"] is None else round(m["dealer_amt"] / 1e8, 2),
                 "unit": "億元", "source": m["src"], "climate": self.climate_of(d)}
 
-    def flows(self, days: int = 120) -> dict:
+    def flows(self, days: int = 120, until: str | None = None) -> dict:
         """資金流向頁：大盤、三大法人現貨、融資金額增減、外資台指期、匯率、市場廣度（每日序列）＋最新外資態度。"""
         days = max(10, min(int(days), 500))
-        m = self.db.q("SELECT * FROM market WHERE taiex IS NOT NULL ORDER BY date DESC LIMIT ?", (days,))[::-1]
+        m = self.db.q("SELECT * FROM market WHERE taiex IS NOT NULL AND date<=? ORDER BY date DESC LIMIT ?",
+                      (until or "99999999", days))[::-1]
         if not m:
             return {"dates": [], "series": {}, "climate": None}
         a, z = m[0]["date"], m[-1]["date"]
@@ -690,7 +691,8 @@ def make_handler(app: App):
                     n = int((qs.get("days") or ["120"])[0])
                 except ValueError:
                     return self.err(400, "days 必須是數字")
-                return self.json(app.flows(n))
+                d = parse_date((qs.get("date") or [None])[0]) if qs.get("date") else None
+                return self.json(app.flows(n, d))
 
             if head == "stocks" and len(parts) == 2 and parts[1] == "search" and method == "GET":
                 return self.json(app.lookup((qs.get("q") or [""])[0]))
