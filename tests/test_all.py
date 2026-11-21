@@ -2167,6 +2167,16 @@ class LongHistoryTests(unittest.TestCase):
         self.assertEqual([r["change"] for r in rows], [0.35, -0.2, None])
         self.assertEqual(parse("0050", {"stat": "很抱歉，沒有符合條件的資料!"}), [])
 
+    def test_fix_jumps(self):
+        from twradar.longhist import fix_jumps
+        rows = [{"date": f"d{i}", "open": c, "high": c, "low": c, "close": c} for i, c in enumerate([200, 202, 50.5, 51, 52])]
+        out, fixed = fix_jumps(rows)
+        self.assertAlmostEqual(out[0]["close"], 50.0)          # 前面除以 4 接起來
+        self.assertAlmostEqual(out[2]["close"] / out[1]["close"], 1.0)
+        self.assertEqual(len(fixed), 1)
+        ok = [{"date": f"d{i}", "open": c, "high": c, "low": c, "close": c} for i, c in enumerate([100, 109.9, 99])]
+        self.assertEqual(fix_jumps(ok)[1], [])                   # 漲跌停以內不動
+
     def test_yahoo(self):
         from twradar.longhist import parse_yahoo
         js = {"chart": {"result": [{"meta": {"gmtoffset": 28800},

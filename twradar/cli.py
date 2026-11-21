@@ -240,7 +240,11 @@ def run_timing_study(cfg, args) -> int:
         if "error" in r:
             print(r["error"])
             continue
-        print(f"\n== {'0050（還原除息，開盤成交）' if asset == '0050' else '加權報酬指數（含息，收盤成交）'}：{r['start']}～{r['end']}，{r['days']} 個交易日")
+        label = {"0050": "0050（還原除息，開盤成交）", "tr": "加權報酬指數（含息，收盤成交）",
+                 "taiex": "加權指數本身（不含股息，開盤成交）"}.get(asset, asset)
+        print(f"\n== {label}：{r['start']}～{r['end']}，{r['days']} 個交易日")
+        if r.get("fixed"):
+            print("資料修正（單日跳動超過 12%，視為資料源還原錯誤，已接起來）：" + "、".join(r["fixed"]))
         print(f"{'規則':<22}{'總報酬':>10}{'年化':>8}{'最大回落':>9}{'進出':>6}{'持有':>7}")
         for k, v in r["rules"].items():
             print(f"{k:<22}{v.get('total', 0):>9}%{v.get('cagr', 0):>7}%{v.get('maxDD', 0):>8}%{v.get('switches', 0):>6}{v.get('exposure', 0):>6}%")
@@ -470,7 +474,7 @@ def main(argv=None) -> None:
     lh.add_argument("--interval", type=float, default=8.0, help="每個請求間隔秒數（預設 8；太快會被證交所暫時封鎖）")
     ts = sub.add_parser("timing-study", help="長期歷史上比較「抱 0050、大盤空頭時空手」各種規則")
     ts.add_argument("--start", help="開始日（預設：資料最早一天）")
-    ts.add_argument("--asset", default="0050,tr", help="0050、tr（逗號分隔）")
+    ts.add_argument("--asset", default="0050,tr", help="0050、tr、taiex（逗號分隔；taiex＝加權指數本身，不含股息，可從 2008 起）")
     ts.add_argument("--years", action="store_true", help="另外列出每年的報酬")
     mh = sub.add_parser("macro-history", help="大盤環境歷史：外資台指期、新台幣匯率（期交所）與市場廣度")
     mh.add_argument("--start", help="開始日（預設：資料庫第一個交易日）")

@@ -203,6 +203,25 @@ def adjusted(rows: list[dict]) -> list[dict]:
     return out
 
 
+def fix_jumps(rows: list[dict], limit: float = 0.12) -> tuple[list[dict], list[str]]:
+    """修正資料源的還原錯誤：台股單日漲跌幅上限 10%，相鄰兩天收盤差超過 limit（預設 12%）一定是資料問題
+    （例如 Yahoo 的 0050 在 2025 年 1 拆 4 後，只還原了部分歷史）→ 把之前的價格乘上比例接起來。回傳（修正後, 修正的日子）。"""
+    out = [dict(r) for r in rows]
+    fixed = []
+    for i in range(len(out) - 1, 0, -1):
+        a, b = out[i - 1]["close"], out[i]["close"]
+        if not a or not b:
+            continue
+        k = b / a
+        if k > 1 + limit or k < 1 - limit:
+            fixed.append(f"{out[i]['date']}（{(k - 1) * 100:+.0f}%）")
+            for j in range(i):
+                for f in ("open", "high", "low", "close"):
+                    if out[j][f] is not None:
+                        out[j][f] *= k
+    return out, fixed[::-1]
+
+
 # ---------------- 大盤進出規則 ----------------
 
 def _ma(xs: list[float], i: int, n: int) -> float | None:
@@ -292,11 +311,13 @@ def by_year(curve: list[tuple[str, float]]) -> dict[str, float]:
 
 
 def study(db: DB, start: str = "", asset: str = "0050") -> dict:
-    """在長期歷史上比較各種大盤進出規則與一直抱著。asset：0050（還原除息、開盤成交）或 tr（加權報酬指數、收盤成交）。"""
+    """在長期歷史上比較各種大盤進出規則與一直抱著。
+    asset：0050（還原除息、開盤成交）、tr（加權報酬指數、收盤成交）、taiex（加權指數本身，不含股息，可從 2008 年起）。"""
     tx = load(db, "taiex")
     a = load(db, asset)
     if asset == "0050":
         a = adjusted(a)
+    a, fixed = fix_jumps(a) if asset != "taiex" else (a, [])
     if start:
         tx = [r for r in tx if r["date"] >= start]
     common = sorted({r["date"] for r in tx} & {r["date"] for r in a})
@@ -305,10 +326,11 @@ def study(db: DB, start: str = "", asset: str = "0050") -> dict:
     tset = set(common)
     tx = [r for r in tx if r["date"] in tset]
     flags = bear_flags(tx)
-    hold = simulate(a, common, [False] * len(common), use_open=asset == "0050")
-    out = {"asset": asset, "start": common[0], "end": common[-1], "days": len(common),
+    use_open = asset in ("0050", "taiex")
+    hold = simulate(a, common, [False] * len(common), use_open=use_open)
+    out = {"asset": asset, "start": common[0], "end": common[-1], "days": len(common), "fixed": fixed,
            "rules": {"一直抱著": {**stats(hold["curve"]), "switches": 1, "exposure": 100.0, "years": by_year(hold["curve"])}}}
     for name, f in flags.items():
-        s = simulate(a, common, f, use_open=asset == "0050")
+        s = simulate(a, common, f, use_open=use_open)
         out["rules"][name] = {**stats(s["curve"]), "switches": s["switches"], "exposure": s["exposure"], "years": by_year(s["curve"])}
     return out
