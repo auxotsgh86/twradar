@@ -165,7 +165,10 @@ def run_macro_history(cfg, args) -> int:
         first = db.one("SELECT MIN(date) AS d FROM market WHERE taiex IS NOT NULL")["d"]
         start = args.start or first or "20240101"
         from .config import now_tw
+        last_day = db.one("SELECT MAX(date) AS d FROM market WHERE taiex IS NOT NULL")["d"]
         end = args.end or now_tw().strftime("%Y%m%d")
+        if last_day and end > last_day:   # 期交所查詢的結束日超過最新資料日會回傳錯誤頁
+            end = last_day
         opts = st.source_plan(cfg.env)[2].get("taifex") or {}
         tf = Taifex(Fetcher(max(cfg.request_interval, 3.0), cfg.user_agent), **({"base": opts["base"]} if opts.get("base") else {}))
         a = to_date(start)

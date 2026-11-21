@@ -42,7 +42,10 @@ def _rows(body: bytes) -> list[list[str]]:
         low = text[:3000].lower()
         if "查無資料" in text or "no data" in low:
             return []
-        raise FetchError("parse", "回應是 HTML，不是 CSV")
+        import re
+        msg = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", re.sub(r"(?is)<(script|style).*?</\1>", " ", text))).strip()
+        hint = next((m for m in re.findall(r"[^ ]*(?:日期|錯誤|請|查詢)[^ ]*", msg)), "")
+        raise FetchError("parse", "回應是 HTML，不是 CSV" + (f"（{hint[:60]}）" if hint else ""))
     return [r for r in csv.reader(io.StringIO(text)) if r and any(x.strip() for x in r)]
 
 
