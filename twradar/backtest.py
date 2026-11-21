@@ -543,7 +543,7 @@ def _veto_ids(settings: dict) -> list[str]:
 
 def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
     """內建的規則對照組：
-    climate-grid  v0.6 穩健性：v0.5、外資撤出 3 項、2 項但期貨空單 1000／4000 口、新台幣貶 0.2／0.5%
+    climate-grid  v0.6 穩健性：v0.5、外資撤出 2 項、3 項但期貨空單 1000／4000 口、新台幣貶 0.2／0.5%
     v05     前一版規則
     climate 大盤環境（以 v0.5 為底）：市場廣度 30／40／50%、指數漲廣度跌、外資撤出（3 項、2 項）、外資撤出＋廣度
     tdcc    集保籌碼集中（大戶連升＋股東人數連降）：試單、試單須集中、上車須集中、上車須大戶連升
@@ -614,9 +614,9 @@ def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
         elif n == "climate-grid":   # v0.6 穩健性：外資撤出的門檻換成相鄰數值
             from .rules import v05_playbooks
             out.append(("v0.5（不看外資）", {"_playbooks": v05_playbooks()}))
-            out.append(("外資撤出 3 項", {"foreignExitSignals": 3}))
+            out.append(("外資撤出 2 項", {"foreignExitSignals": 2}))
             for lots, fx in ((1000, 0.3), (4000, 0.3), (2000, 0.2), (2000, 0.5), (1000, 0.2), (4000, 0.5)):
-                out.append((f"2 項：空單 {lots} 口、貶 {fx}%", {"foreignFutChgLots": lots, "foreignFxPct": fx}))
+                out.append((f"3 項：空單 {lots} 口、貶 {fx}%", {"foreignFutChgLots": lots, "foreignFxPct": fx}))
         elif n == "market":
             out.append(("不用大盤逆風", {"_drop": ["marketWeak"]}))
         else:

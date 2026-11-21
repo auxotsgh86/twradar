@@ -72,6 +72,32 @@ class App:
                 "dealerAmt": None if m["dealer_amt"] is None else round(m["dealer_amt"] / 1e8, 2),
                 "unit": "億元", "source": m["src"], "climate": self.climate_of(d)}
 
+    def flows(self, days: int = 120) -> dict:
+        """資金流向頁：大盤、三大法人現貨、融資金額增減、外資台指期、匯率、市場廣度（每日序列）＋最新外資態度。"""
+        days = max(10, min(int(days), 500))
+        m = self.db.q("SELECT * FROM market WHERE taiex IS NOT NULL ORDER BY date DESC LIMIT ?", (days,))[::-1]
+        if not m:
+            return {"dates": [], "series": {}, "climate": None}
+        a, z = m[0]["date"], m[-1]["date"]
+        mac = {r["date"]: dict(r) for r in self.db.q("SELECT * FROM macro WHERE date>=? AND date<=?", (a, z))}
+        mg = {r["date"]: r["amt"] for r in self.db.q(
+            "SELECT g.date AS date, SUM((g.margin_bal - g.margin_prev) * q.close) * 1000 AS amt FROM margin g "
+            "JOIN quotes q ON q.date = g.date AND q.code = g.code WHERE g.date>=? AND g.date<=? "
+            "AND g.margin_bal IS NOT NULL AND g.margin_prev IS NOT NULL AND q.close IS NOT NULL GROUP BY g.date", (a, z))}
+        e8 = lambda v: None if v is None else round(v / 1e8, 2)  # noqa: E731
+        dates = [r["date"] for r in m]
+        ser = {
+            "taiex": [r["taiex"] for r in m],
+            "foreign": [e8(r["foreign_amt"]) for r in m],
+            "trust": [e8(r["trust_amt"]) for r in m],
+            "dealer": [e8(r["dealer_amt"]) for r in m],
+            "margin": [e8(mg.get(d)) for d in dates],
+            "futForeign": [(mac.get(d) or {}).get("fut_foreign") for d in dates],
+            "usdTwd": [(mac.get(d) or {}).get("usd_twd") for d in dates],
+            "breadth": [(mac.get(d) or {}).get("breadth20") for d in dates],
+        }
+        return {"dates": dates, "series": ser, "climate": self.climate_of(z), "date": z, "unit": "億元"}
+
     def climate_of(self, d: str) -> dict:
         """大盤環境：外資態度（現貨、台指期、匯率，近 5 日）與市場廣度。"""
         from datetime import timedelta
@@ -80,7 +106,7 @@ class App:
         f = Macro(self.db, d, (to_date(d) - timedelta(days=40)).strftime("%Y%m%d")).fields(d)
         P = rules_of(self.settings)
         hit, have, why = foreign_signals(f, P)
-        need = P.get("foreignExitSignals", 2)
+        need = P.get("foreignExitSignals", 3)
         state = "na" if have < need else "exit" if hit >= need else "ok"
         return {**f, "foreignHit": hit, "foreignHave": have, "foreignNeed": need, "foreignWhy": why, "foreignState": state}
 
@@ -650,6 +676,13 @@ def make_handler(app: App):
                 if fmt == "status":
                     return self.json(app.day_status(d))
                 return self.json(app.envelope(d))
+
+            if head == "flows" and method == "GET":
+                try:
+                    n = int((qs.get("days") or ["120"])[0])
+                except ValueError:
+                    return self.err(400, "days 必須是數字")
+                return self.json(app.flows(n))
 
             if head == "stocks" and len(parts) == 2 and parts[1] == "search" and method == "GET":
                 return self.json(app.lookup((qs.get("q") or [""])[0]))

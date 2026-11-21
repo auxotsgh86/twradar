@@ -64,7 +64,7 @@ def v03_playbooks() -> dict:
 
 def default_playbooks() -> dict:
     """預設規則 v0.6（2026-11-21，見 docs/STRATEGY.md 第 12 節）：v0.5 ＋ 外資撤出時不上車
-    （外資現貨 5 日賣超、台指期淨空單 5 日增加、新台幣 5 日貶值，三項中成立 foreignExitSignals 項）。"""
+    （外資現貨 5 日賣超、台指期淨空單 5 日增加、新台幣 5 日貶值，三項中成立 foreignExitSignals 項，預設 3 項都成立）。"""
     return veto_with("foreignExit")
 
 
@@ -201,7 +201,7 @@ ENGINE_PARAMS = [
     {"id": "maxBiasMa5Pct", "label": "試單：收盤距 5 日線 ≤", "value": 5, "unit": "%", "min": 0, "max": 50, "note": "對照組「試單」用，不追高"},
     {"id": "breadthMinPct", "label": "市場廣度：站上月線的股票比例 <", "value": 40, "unit": "%", "min": 0, "max": 100, "note": "對照組「大盤環境」用"},
     {"id": "breadthDropPts", "label": "廣度背離：指數漲、廣度 10 日下降 ≥", "value": 10, "unit": "點", "min": 0, "max": 100, "note": ""},
-    {"id": "foreignExitSignals", "label": "外資撤出：成立訊號數 ≥", "value": 2, "unit": "項", "min": 1, "max": 3, "note": "現貨賣超、期貨空單增加、新台幣貶值"},
+    {"id": "foreignExitSignals", "label": "外資撤出：成立訊號數 ≥", "value": 3, "unit": "項", "min": 1, "max": 3, "note": "現貨賣超、期貨空單增加、新台幣貶值"},
     {"id": "foreignFutChgLots", "label": "外資撤出：台指期淨空單 5 日增加 ≥", "value": 2000, "unit": "口", "min": 0, "max": None, "note": ""},
     {"id": "foreignFxPct", "label": "外資撤出：新台幣 5 日貶值 ≥", "value": 0.3, "unit": "%", "min": 0, "max": 10, "note": ""},
     {"id": "baseRangePct", "label": "籌碼沉澱：起漲前整理區間高低差 ≤", "value": 25, "unit": "%", "min": 0, "max": 200, "note": "對照組「沉澱」用"},
@@ -267,10 +267,6 @@ def upgrade(s: dict) -> dict:
         for p in s.get("params", []):
             if isinstance(p, dict) and p.get("id") in PARAM_DEFAULT_CHANGES and p.get("value") == PARAM_DEFAULT_CHANGES[p["id"]][0]:
                 p["value"] = PARAM_DEFAULT_CHANGES[p["id"]][1]
-    if v < 6:   # v0.6：外資撤出改成 3 項中 2 項成立（使用者沒改過才換）
-        for p in s.get("params", []):
-            if isinstance(p, dict) and p.get("id") == "foreignExitSignals" and p.get("value") == 3:
-                p["value"] = 2
     s["rulesVersion"] = RULES_VERSION
     return s
 

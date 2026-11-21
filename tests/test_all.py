@@ -1887,9 +1887,9 @@ class MacroTests(unittest.TestCase):
         ev = lambda cid, rec, **kw: BUILTIN[cid].fn(Ctx(rec, {}, {**P, **kw})).state  # noqa: E731
         bad = {"foreignSpot5d": -300, "futForeignChg5": -5000, "usdTwdChg5Pct": 0.5}
         self.assertEqual(ev("foreignExit", bad), PASS)
-        self.assertEqual(ev("foreignExit", {**bad, "usdTwdChg5Pct": 0.1}), PASS)                 # 預設 2 項
-        self.assertEqual(ev("foreignExit", {**bad, "usdTwdChg5Pct": 0.1}, foreignExitSignals=3), FAIL)
-        self.assertEqual(ev("foreignExit", {**bad, "usdTwdChg5Pct": 0.1, "futForeignChg5": 100}), FAIL)
+        self.assertEqual(ev("foreignExit", {**bad, "usdTwdChg5Pct": 0.1}), FAIL)                 # 預設 3 項
+        self.assertEqual(ev("foreignExit", {**bad, "usdTwdChg5Pct": 0.1}, foreignExitSignals=2), PASS)
+        self.assertEqual(ev("foreignExit", {**bad, "usdTwdChg5Pct": 0.1, "futForeignChg5": 100}, foreignExitSignals=2), FAIL)
         self.assertEqual(ev("foreignExit", {"foreignSpot5d": -300}), NA)
         self.assertEqual(ev("breadthWeak", {"breadth20": 35}), PASS)
         self.assertEqual(ev("breadthWeak", {"breadth20": 55}), FAIL)
@@ -1915,12 +1915,29 @@ class MacroTests(unittest.TestCase):
         self.assertNotIn("foreignExit", json.dumps(g[0][1]["_playbooks"]))
 
     def test_v06_upgrade(self):
-        """v0.5 的預設設定升級到 v0.6：否決加外資撤出，外資撤出門檻 3 → 2（沒改過才換）。"""
+        """v0.5 的預設設定升級到 v0.6：否決加外資撤出；使用者設定的門檻不動。"""
         from twradar.rules import default_playbooks, upgrade, v05_playbooks
-        s = {"rulesVersion": 5, "playbooks": v05_playbooks(), "params": [{"id": "foreignExitSignals", "value": 3}]}
+        s = {"rulesVersion": 5, "playbooks": v05_playbooks(), "params": [{"id": "foreignExitSignals", "value": 2}]}
         upgrade(s)
         self.assertEqual(s["playbooks"], default_playbooks())
         self.assertEqual(s["params"][0]["value"], 2)
+
+    def test_flows_api(self):
+        from twradar.jobs import Crawler
+        from twradar.server import App
+        days = weekdays(30)
+        fx = FakeExchange(days)
+        _, opts = start_fake(fx)
+        cfg, db, st = setup_env(opts)
+        cr = Crawler(db, cfg, st, transport=Fetcher(0, "test"))
+        for d in days[-8:]:
+            cr.crawl_day(d, final=True, analyze=False)
+        db.put_macro([{"date": d, "fut_foreign": -90000 + i * 100, "usd_twd": 32.0, "breadth20": 40.0} for i, d in enumerate(days)])
+        f = App(cfg, db, st, start_background=False).flows(20)
+        self.assertEqual(len(f["dates"]), 8)
+        self.assertEqual(f["series"]["futForeign"][-1], -90000 + 29 * 100)
+        self.assertTrue(all(len(v) == 8 for v in f["series"].values()))
+        self.assertIn("foreignState", f["climate"])
 
 
 class TdccHistoryTests(unittest.TestCase):

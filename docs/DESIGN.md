@@ -470,8 +470,12 @@ class Provider:
   `breadthWeak`（廣度 < `breadthMinPct`）、`breadthDiverge`（指數 10 日漲、廣度 10 日降 ≥ `breadthDropPts` 點）。資料不足為 NA（不否決）。
 - 每日：抓完行情後算廣度；最近 7 天內的日子抓近 14 天的期貨與匯率（同一天只抓一次）。網址可在 `sources.options.taifex.base` 改。
 - 歷史：`twradar macro-history [--start] [--end] [--no-fetch]`（每段一年），最後印出最新一天的欄位與外資撤出訊號。
-- v0.6（`RULES_VERSION` 6）：否決加 `foreignExit`，`foreignExitSignals` 預設 2（升級時沒改過的 3 換成 2）。
+- v0.6（`RULES_VERSION` 6）：否決加 `foreignExit`，`foreignExitSignals` 預設 3（穩健性測試後由 2 改回 3）。
   總覽大盤區塊顯示外資態度（`market.climate`）。對照組 `v05`（前一版）、`climate-grid`（門檻穩健性）。
+- 資金流向頁（`#/flows`，API `GET /flows?days=`）：外資態度、共用時間軸的五條序列（加權指數、外資現貨、
+  外資台指期淨單、美元兌新台幣、市場廣度；滑鼠或手指移動時同步顯示同一天數值）、近 N 日累計的法人氣泡圖
+  （散戶與其他＝三大法人合計的反向；融資金額增減＝Σ（融資餘額變化×收盤價）另列，不計入平衡）。
+  圖的座標寬度依畫面寬度決定，手機上字不會縮小。
 - 條件研究：只看大盤層級欄位的條件（`study.MARKET_FIELDS`）同一天每檔都一樣，改用原始報酬（扣同日平均會抵消）。
 - 回溯結果每組加 `byMonth`（依進場月份）。
 - 對照組 `climate`（以 v0.5 為底）：廣度 < 30／40／50% 不上車、指數漲廣度跌不上車、外資撤出（3 項／2 項）不上車、外資撤出＋廣度 < 40%。

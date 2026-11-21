@@ -193,6 +193,96 @@ function hBars(items, {color = s => "var(--accent)", unit = ""} = {}) {
 }
 const lightColor = it => ({go: "var(--go)", wait: "var(--wait)", stop: "var(--stop)", na: "var(--na)"})[it.light];
 
+/* ---------- 頁面：資金流向 ---------- */
+let FLOW_DAYS = 60;
+let FW = 1200;   // 依畫面寬度決定，讓圖上的字維持原本大小
+function syncChart(dates, vals, {h = 130, bar = false, title = "", unit = "", ref = null, digits = 0} = {}) {
+  const W = FW, L = 64, R = 12, T = 18, B = 6, ch = h - T - B, n = dates.length;
+  const xs = i => L + (n < 2 ? 0 : i * (W - L - R) / (n - 1));
+  const nums = vals.filter(isNum); let lo = Math.min(...nums, ...(bar || ref !== null ? [ref ?? 0] : [])), hi = Math.max(...nums, ...(bar || ref !== null ? [ref ?? 0] : []));
+  let g = `<text x="0" y="12" style="fill:var(--fg);font-weight:700">${esc(title)}</text>`;
+  if (!nums.length) return `<svg class="chart sync" viewBox="0 0 ${W} ${h}" data-l="${L}" data-r="${R}" data-n="${n}">${g}<text x="${W / 2}" y="${h / 2}" text-anchor="middle">沒有資料</text><line class="xh" y1="${T}" y2="${h - B}" stroke="var(--muted)" stroke-dasharray="3 3" visibility="hidden"/></svg>`;
+  const pad = (hi - lo) * .08 || 1; lo -= pad; hi += pad;
+  const y = v => T + (hi - v) / (hi - lo) * ch;
+  g += niceTicks(lo, hi, 3).map(v => `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${fmt(v, Math.abs(v) < 100 && digits ? digits : 0)}</text>`).join("");
+  if (ref !== null) g += `<line x1="${L}" x2="${W - R}" y1="${y(ref)}" y2="${y(ref)}" stroke="var(--muted)" stroke-dasharray="4 3"/>`;
+  if (bar) {
+    const bw = Math.max(1, (W - L - R) / Math.max(n, 1) * .7);
+    g += vals.map((v, i) => isNum(v) ? `<rect x="${Math.max(L, xs(i) - bw / 2)}" y="${Math.min(y(v), y(0))}" width="${i === 0 ? bw / 2 : i === n - 1 ? bw / 2 : bw}" height="${Math.max(1, Math.abs(y(v) - y(0)))}" fill="var(${v >= 0 ? "--up" : "--down"})"/>` : "").join("");
+  } else {
+    let p = "", on = false; vals.forEach((v, i) => { if (isNum(v)) { p += (on ? "L" : "M") + xs(i).toFixed(1) + "," + y(v).toFixed(1); on = true; } else on = false; });
+    g += `<path d="${p}" fill="none" stroke="var(--accent)" stroke-width="1.8"/>`;
+  }
+  g += `<line class="xh" y1="${T}" y2="${h - B}" stroke="var(--muted)" stroke-dasharray="3 3" visibility="hidden"/>`;
+  return `<svg class="chart sync" viewBox="0 0 ${W} ${h}" data-l="${L}" data-r="${R}" data-n="${n}" role="img" aria-label="${esc(title)}">${g}</svg>`;
+}
+function axisRow(dates) {
+  const W = FW, L = 64, R = 12, n = dates.length, step = Math.max(1, Math.ceil(n / 7));
+  const xs = i => L + (n < 2 ? 0 : i * (W - L - R) / (n - 1));
+  return `<svg class="chart" viewBox="0 0 ${W} 18">${dates.map((d, i) => i % step === 0 ? `<text x="${xs(i)}" y="13" text-anchor="middle">${d.slice(2, 4)}/${d.slice(4, 6)}/${d.slice(6)}</text>` : "").join("")}</svg>`;
+}
+function bubbleSVG(items, center = "台股現貨") {
+  const W = FW, maxR = Math.min(90, FW * .11), cx = FW / 2, xl = FW * .25, xr = FW * .75, mx = Math.max(...items.map(i => Math.abs(i.v)), 1);
+  const r = v => Math.max(16, maxR * Math.sqrt(Math.abs(v) / mx));
+  const cols = {sell: items.filter(i => i.v < 0).sort((a, b) => a.v - b.v), buy: items.filter(i => i.v >= 0).sort((a, b) => b.v - a.v)};
+  const place = (arr, x) => { let yy = 14; return arr.map(it => { const rr = r(it.v); const o = {...it, x, y: yy + rr, r: rr}; yy += rr * 2 + 26; return o; }); };
+  const P = [...place(cols.sell, xl), ...place(cols.buy, xr)];
+  const H = Math.max(200, ...P.map(p => p.y + p.r + 22)), cy = H / 2;
+  let g = `<rect x="${cx - 50}" y="${cy - 22}" width="100" height="44" rx="8" fill="var(--surface2)" stroke="var(--line)"/><text x="${cx}" y="${cy + 5}" text-anchor="middle" style="fill:var(--fg);font-weight:700">${esc(center)}</text>`;
+  for (const p of P) {
+    const buy = p.v >= 0, col = buy ? "var(--up)" : "var(--down)";
+    const [x1, y1, x2, y2] = buy ? [cx + 50, cy, p.x - p.r - 4, p.y] : [p.x + p.r + 4, p.y, cx - 50, cy];
+    if (!p.side) g += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${col}" stroke-width="${1 + 4 * Math.abs(p.v) / mx}" opacity=".45"/>`;
+    g += `<circle cx="${p.x}" cy="${p.y}" r="${p.r}" fill="${col}" fill-opacity="${p.side ? .06 : .16}" stroke="${col}" ${p.side ? 'stroke-dasharray="5 4"' : ""}/>`;
+    const out = p.r < 48 && FW > 700, tx = out ? (buy ? p.x + p.r + 8 : p.x - p.r - 8) : p.x, an = out ? (buy ? "start" : "end") : "middle";
+    g += `<text x="${tx}" y="${p.y - 2}" text-anchor="${an}" style="fill:var(--fg);font-weight:700;font-size:12px">${esc(p.label)}</text>`;
+    g += `<text x="${tx}" y="${p.y + 14}" text-anchor="${an}" style="fill:${col};font-size:12px">${p.side ? (buy ? "增加" : "減少") : buy ? "買超" : "賣超"} ${fmt(Math.abs(p.v), 0)} 億</text>`;
+  }
+  g += `<text x="${xl}" y="${H - 4}" text-anchor="middle">賣方</text><text x="${xr}" y="${H - 4}" text-anchor="middle">買方</text>`;
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="近期資金流向氣泡圖">${g}</svg>`;
+}
+async function viewFlows() {
+  FW = Math.max(340, Math.min(1200, ($("#view").clientWidth || 1200) - 34));
+  const f = await api("/flows?days=" + FLOW_DAYS), S = f.series || {}, D = f.dates || [];
+  const sum = k => (S[k] || []).reduce((a, v) => a + (isNum(v) ? v : 0), 0);
+  const fo = sum("foreign"), tr = sum("trust"), de = sum("dealer"), mg = sum("margin");
+  const items = [{label: "外資", v: fo}, {label: "投信", v: tr}, {label: "自營商", v: de}, {label: "散戶與其他（差額）", v: -(fo + tr + de)}];
+  if ((S.margin || []).some(isNum)) items.push({label: "融資增減", v: mg, side: true});
+  const fut = (S.futForeign || []).filter(isNum), fut0 = fut[0], fut1 = fut[fut.length - 1];
+  const ymd = d => d ? `${d.slice(0, 4)}/${d.slice(4, 6)}/${d.slice(6)}` : "—";
+  $("#view").innerHTML = `
+    <div class="head"><h1>資金流向｜資料日 ${ymd(f.date)}</h1>
+      <div class="row">${[20, 60, 120, 250].map(n => `<button type="button" class="${n === FLOW_DAYS ? "primary" : ""}" data-days="${n}">近 ${n} 日</button>`).join("")}</div></div>
+    <div class="panel flowclim">${climateHTML(f.climate) || `<div class="empty">沒有外資態度資料</div>`}</div>
+    <div class="panel"><h2>趨勢（共用時間軸，滑鼠移到圖上看同一天的數值）</h2>
+      <div id="xread" class="small muted">　</div>
+      ${syncChart(D, S.taiex || [], {title: "加權指數"})}
+      ${syncChart(D, S.foreign || [], {title: "外資現貨買賣超（億）", bar: true})}
+      ${syncChart(D, S.futForeign || [], {title: "外資台指期淨未平倉（口）", ref: 0})}
+      ${syncChart(D, S.usdTwd || [], {title: "美元兌新台幣（往上＝新台幣貶）", digits: 2})}
+      ${syncChart(D, S.breadth || [], {title: "市場廣度：站上月線的股票 %", ref: 50})}
+      ${axisRow(D)}</div>
+    <div class="panel"><h2>錢流到哪裡（近 ${FLOW_DAYS} 日累計）</h2>
+      ${D.length ? bubbleSVG(items) : `<div class="empty">沒有資料</div>`}
+      <p class="small muted">圓面積與金額成正比。「散戶與其他」＝三大法人合計的反向，是推估值；虛線圓「融資增減」是散戶槓桿，不計入買賣平衡。
+      外資台指期淨單 ${isNum(fut1) ? fmtS(fut1, 0) + " 口" : "—"}${isNum(fut0) && isNum(fut1) ? `（期間 ${fmtS(fut1 - fut0, 0)} 口，負＝空單增加）` : ""}，不按比例。</p></div>`;
+  document.querySelectorAll("[data-days]").forEach(b => b.onclick = () => { FLOW_DAYS = +b.dataset.days; viewFlows(); });
+  const svgs = [...document.querySelectorAll("svg.sync")], read = $("#xread");
+  const show = i => {
+    if (i < 0) { svgs.forEach(s => s.querySelector(".xh").setAttribute("visibility", "hidden")); read.textContent = "　"; return; }
+    svgs.forEach(s => { const L = +s.dataset.l, R = +s.dataset.r, n = +s.dataset.n, x = L + (n < 2 ? 0 : i * (FW - L - R) / (n - 1));
+      const l = s.querySelector(".xh"); l.setAttribute("x1", x); l.setAttribute("x2", x); l.setAttribute("visibility", "visible"); });
+    const v = (k, dg = 0) => isNum((S[k] || [])[i]) ? fmt(S[k][i], dg) : "—";
+    read.innerHTML = `<b>${ymd(D[i])}</b>　加權 ${v("taiex", 0)}　外資現貨 ${isNum(S.foreign[i]) ? fmtS(S.foreign[i], 0) : "—"} 億　台指期淨單 ${isNum((S.futForeign || [])[i]) ? fmtS(S.futForeign[i], 0) : "—"} 口　美元 ${v("usdTwd", 3)}　廣度 ${v("breadth", 0)}%`;
+  };
+  svgs.forEach(s => {
+    s.addEventListener("pointermove", ev => { const b = s.getBoundingClientRect(), L = +s.dataset.l, R = +s.dataset.r, n = +s.dataset.n;
+      const x = (ev.clientX - b.left) * FW / b.width; show(Math.max(0, Math.min(n - 1, Math.round((x - L) / (FW - L - R) * (n - 1))))); });
+    s.addEventListener("pointerleave", () => show(-1));
+  });
+  if (D.length) show(D.length - 1);
+}
+
 /* ---------- 頁面：總覽 ---------- */
 let FILTER = "all";
 async function viewHome(date) {
@@ -613,13 +703,14 @@ document.addEventListener("click", ev => { const b = ev.target.closest("[data-ho
 async function route() {
   const h = location.hash.replace(/^#/, "") || "/";
   const [, page, arg] = h.split("/");
-  document.querySelectorAll("#tabs a").forEach(a => a.classList.toggle("on", a.dataset.tab === (["report", "settings", "scan"].includes(page) ? page : "home")));
+  document.querySelectorAll("#tabs a").forEach(a => a.classList.toggle("on", a.dataset.tab === (["report", "settings", "scan", "flows"].includes(page) ? page : "home")));
   try {
     if (page !== "settings" && !Object.keys(LABELS).length) await loadLabels();
     if (page !== "stock") { try { sessionStorage.removeItem("twradar-from"); } catch (e) {} }
     if (page === "report") await viewReport(arg);
     else if (page === "settings") await viewSettings();
     else if (page === "scan") await viewScan();
+    else if (page === "flows") await viewFlows();
     else if (page === "stock" && arg) await viewStock(arg);
     else await viewHome(page === "day" ? arg : null);
     applySorts();
