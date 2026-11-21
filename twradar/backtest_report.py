@@ -219,6 +219,58 @@ def _equity_svg(results: list[dict], split: str, start: str, end: str) -> str:
             f'<div class="lg">{"".join(legend)}</div>')
 
 
+def _bench_section(res: dict) -> str:
+    """最關鍵的問題：照訊號操作，有沒有贏過直接買 0050／大盤？"""
+    r0 = res["results"][0]
+    pf, bm = r0.get("portfolio") or {}, res.get("benchmarks") or {}
+    if not pf:
+        return ""
+    cfg = res["config"]
+
+    def row(name, x, extra=""):
+        return (f"<tr><td>{_e(name)}</td><td class='num {_cls(x.get('total'))}'>{_num(x.get('total'), 1, sign=True, pct=True)}</td>"
+                f"<td class='num {_cls(x.get('cagr'))}'>{_num(x.get('cagr'), 1, sign=True, pct=True)}</td>"
+                f"<td class='num'>{_num(x.get('maxDD'), 1, pct=True)}</td>"
+                f"<td class='num {_cls(x.get('in'))}'>{_num(x.get('in'), 1, sign=True, pct=True)}</td>"
+                f"<td class='num {_cls(x.get('out'))}'>{_num(x.get('out'), 1, sign=True, pct=True)}</td><td class='num'>{extra}</td></tr>")
+    rows = "".join(row(f"照訊號操作：資金分 {n} 份", x, f"{_num(x.get('exposure'), 0)}%（買 {x.get('taken', 0)}、錯過 {x.get('skipped', 0)}）")
+                   for n, x in pf.items())
+    rows += "".join(row(k, v, "100%") for k, v in bm.items())
+    # 曲線：10 份 vs 對照
+    lines = [("照訊號操作（10 份）", (pf.get("10") or {}).get("curve") or [], "#b71c1c", 2.6)]
+    lines += [(k, v.get("curve") or [], c, 1.6) for (k, v), c in zip(bm.items(), ("#1f4e79", "#2e7d32"))]
+    vals = [v for _, cv, _, _ in lines for _, v in cv]
+    svg = ""
+    if vals:
+        from .dates import to_date
+        W, H, L, R, T, B = 1000, 300, 56, 14, 12, 24
+        lo, hi = min(vals), max(vals)
+        pad = (hi - lo) * .06 or .05
+        lo, hi = lo - pad, hi + pad
+        a, z = to_date(cfg["start"]), to_date(cfg["end"])
+        span = max(1, (z - a).days)
+        X = lambda d: L + (to_date(d) - a).days / span * (W - L - R)  # noqa: E731
+        Y = lambda v: T + (hi - v) / (hi - lo) * (H - T - B)          # noqa: E731
+        g = [f'<line x1="{L}" x2="{W - R}" y1="{Y(1):.1f}" y2="{Y(1):.1f}" stroke="#90a4ae" stroke-dasharray="3 3"/>'
+             f'<text x="{L - 6}" y="{Y(1) + 4:.1f}" text-anchor="end" class="ax">起點</text>']
+        for v in (lo + (hi - lo) * k / 4 for k in (0, 1, 3, 4)):
+            g.append(f'<text x="{L - 6}" y="{Y(v) + 4:.1f}" text-anchor="end" class="ax">{(v - 1) * 100:+.0f}%</text>')
+        if cfg["start"] < cfg["split"] <= cfg["end"]:
+            g.append(f'<line x1="{X(cfg["split"]):.1f}" x2="{X(cfg["split"]):.1f}" y1="{T}" y2="{H - B}" stroke="#90a4ae" stroke-dasharray="4 3"/>'
+                     f'<text x="{X(cfg["split"]) + 4:.1f}" y="{T + 10}" class="ax">樣本外 →</text>')
+        leg = []
+        for name, cv, c, w in lines:
+            if cv:
+                g.append(f'<polyline points="{" ".join(f"{X(d):.1f},{Y(v):.1f}" for d, v in cv)}" fill="none" stroke="{c}" stroke-width="{w}"/>')
+                leg.append(f'<span><i style="background:{c};height:3px"></i>{_e(name)}</span>')
+        svg = f'<svg viewBox="0 0 {W} {H}" style="width:100%;height:auto">{"".join(g)}</svg><div class="lg">{"".join(leg)}</div>'
+    return f"""<h2>最關鍵的比較：照訊號操作 vs 直接買 0050／大盤</h2><section>
+<p class="sm">把訊號放進一個真實的投資組合：資金分成 N 份，有訊號且有空位才買（同一天太多檔時依代號順序），每次用當時總資產的 1/N；
+開盤成交、逐日以收盤計價，沒用到的錢放現金。簡化：不含加碼、減碼。0050 為還原股息的報酬；加權指數是價格指數，不含股息（會低估約每年 2～3%）。</p>
+<div class="tw"><table><tr><th>方式</th><th>總報酬</th><th>年化</th><th>最大回落</th><th>樣本內</th><th>樣本外</th><th>平均持股比例</th></tr>{rows}</table></div>
+{svg}</section>"""
+
+
 def render(res: dict) -> str:
     cfg, cov = res["config"], res["coverage"]
     r0 = res["results"][0]
@@ -231,7 +283,9 @@ def render(res: dict) -> str:
             f"<td class='num'>{r['trades'][s].get('n', 0)}</td><td class='num {_cls(r['trades'][s].get('meanRet'))}'>"
             f"{_num(r['trades'][s].get('meanRet'), sign=True, pct=True)}</td><td class='num'>{_num(r['trades'][s].get('win'), 0)}%</td>"
             f"<td class='num'>{_num(r['trades'][s].get('profitFactor'))}</td><td class='num'>{_num(r['trades'][s].get('maxDD'))}</td>"
-            for s in ("樣本內", "樣本外")) + "</tr>" for r in res["results"])
+            for s in ("樣本內", "樣本外"))
+        + f"<td class='num {_cls(((r.get('portfolio') or {}).get('10') or {}).get('total'))}'>{_num(((r.get('portfolio') or {}).get('10') or {}).get('total'), 1, sign=True, pct=True)}</td>"
+          f"<td class='num'>{_num(((r.get('portfolio') or {}).get('10') or {}).get('maxDD'), 1, pct=True)}</td></tr>" for r in res["results"])
     bh = "".join(f"<tr><td>{_e(k)}</td><td class='num'>{v.get('n', 0)}</td><td class='num {_cls(v.get('mean'))}'>"
                  f"{_num(v.get('mean'), sign=True, pct=True)}</td><td class='num'>{_num(v.get('median'), sign=True, pct=True)}</td>"
                  f"<td class='num'>{_num(v.get('win'), 0)}%</td></tr>" for k, v in res["buyHold"].items())
@@ -265,6 +319,7 @@ th{{background:#f0f3f7;font-weight:600}} td.num{{text-align:right;font-variant-n
 <div>多頭／盤整／空頭（天）<b>{cov['regimeDays'].get('多頭', 0)}／{cov['regimeDays'].get('盤整', 0)}／{cov['regimeDays'].get('空頭', 0)}</b></div>
 <div>集保資料（週）<b>{cov['holdersWeeks']}</b></div><div>訊號事件<b>{r0.get('eventCount', 0):,}</b></div></div></section>
 
+{_bench_section(res)}
 <h2>摘要</h2><section><ul>{findings}</ul>
 <p class="sm">「超額」＝訊號後平均報酬 − 同期、同組、同大盤環境下所有股票每天的平均報酬（基準）。進場訊號超額為正、出場訊號超額為負，代表訊號有用。
 報酬以「訊號隔日開盤買進」計算，使用還原股價，未扣費用。</p></section>
@@ -291,8 +346,8 @@ th{{background:#f0f3f7;font-weight:600}} td.num{{text-align:right;font-variant-n
 <h3>累積損益（資金曲線）</h3>
 <p class="sm">依出場日累加每筆交易的損益；每次買進投入 1 單位，所以縱軸是「賺了幾個單位」。曲線下彎的段落就是虧損期，越平穩越好。粗線是目前設定，括號內是期末累積損益。</p>
 {_equity_svg(res["results"], cfg["split"], cfg["start"], cfg["end"])}
-<div class="tw" style="margin-top:12px"><table><tr><th rowspan=2>組合</th><th colspan=5>樣本內</th><th colspan=5>樣本外</th></tr>
-<tr><th>筆數</th><th>平均報酬</th><th>勝率</th><th>獲利因子</th><th>最大回落</th><th>筆數</th><th>平均報酬</th><th>勝率</th><th>獲利因子</th><th>最大回落</th></tr>
+<div class="tw" style="margin-top:12px"><table><tr><th rowspan=2>組合</th><th colspan=5>樣本內</th><th colspan=5>樣本外</th><th colspan=2>投資組合（10 份）</th></tr>
+<tr><th>筆數</th><th>平均報酬</th><th>勝率</th><th>獲利因子</th><th>最大回落</th><th>筆數</th><th>平均報酬</th><th>勝率</th><th>獲利因子</th><th>最大回落</th><th>總報酬</th><th>最大回落</th></tr>
 {variants}</table></div><p class="sm">選參數時以樣本外為準，並優先選「相鄰數值表現也接近」的參數，避免只是配合過去走勢。</p></section>
 
 <h2>對照：一直抱著</h2><section><p class="sm">股票在股票池期間第一天買、最後一天賣的報酬（還原股價，未扣費用）。</p>

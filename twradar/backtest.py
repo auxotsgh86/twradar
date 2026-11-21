@@ -365,6 +365,89 @@ def simulate(hist: History, code: str, dates: list[str], universe: dict, P: dict
     return trades
 
 
+SLOTS = (5, 10, 20)   # 投資組合模擬：資金分成幾份
+
+
+def _curve_stats(curve: list[tuple[str, float]], split: str) -> dict:
+    """總報酬、年化、最大回落（逐日市值）、樣本內／外各自的報酬。"""
+    from .dates import to_date
+    if len(curve) < 2:
+        return {}
+    v0, v1 = curve[0][1], curve[-1][1]
+    yrs = max((to_date(curve[-1][0]) - to_date(curve[0][0])).days / 365.25, 1e-9)
+    peak, dd = -math.inf, 0.0
+    for _, v in curve:
+        peak = max(peak, v)
+        dd = min(dd, v / peak - 1)
+    at = next((v for d, v in curve if d >= split), None)
+    before = [v for d, v in curve if d < split]
+    return {"total": round((v1 / v0 - 1) * 100, 2), "cagr": round(((v1 / v0) ** (1 / yrs) - 1) * 100, 2),
+            "maxDD": round(dd * 100, 2),
+            "in": round((before[-1] / v0 - 1) * 100, 2) if before else None,
+            "out": round((v1 / before[-1] - 1) * 100, 2) if before and at is not None else None}
+
+
+def portfolio(trades: list[dict], hist: History, dates: list[str], split: str, slots: int, fee: float, tax: float) -> dict:
+    """把交易放進一個真實的投資組合：資金分成 slots 份，訊號來時有空位才買（同一天多檔時依代號順序），
+    每次買進用「當時總資產 ÷ slots」；開盤成交、逐日以收盤計價，沒用到的錢放現金（不計利息）。
+    簡化：不含加碼與減碼（每筆一次買進、一次賣出）。"""
+    by_in: dict[str, list] = {}
+    by_out: dict[str, list] = {}
+    for k, t in enumerate(sorted(trades, key=lambda t: (t["entry"], t["code"]))):
+        by_in.setdefault(t["entry"], []).append((k, t))
+        if t["reason"] != "期末未平倉":
+            by_out.setdefault(t["exit"], []).append(k)
+    cash, pos, last = 1.0, {}, {}
+    curve, taken, skipped, expo = [], 0, 0, []
+
+    def px(code, d, key):
+        b = hist.adj.get(code, {}).get(d)
+        v = b and (b.get(key) or b.get("close"))
+        if v:
+            last[code] = b.get("close") or v
+        return v or last.get(code)
+    for d in dates:
+        for k in by_out.get(d, []):
+            if k in pos:
+                code, sh = pos.pop(k)
+                p = px(code, d, "open")
+                cash += sh * p * (1 - fee - tax) if p else 0
+        for k, t in by_in.get(d, []):
+            if len(pos) >= slots:
+                skipped += 1
+                continue
+            p = px(t["code"], d, "open")
+            if not p:
+                continue
+            eq = cash + sum(sh * (last.get(c) or 0) for c, sh in pos.values())
+            alloc = min(cash, eq / slots)
+            if alloc <= 0:
+                continue
+            pos[k] = (t["code"], alloc / (p * (1 + fee)))
+            cash -= alloc
+            taken += 1
+        held = sum(sh * (px(c, d, "close") or 0) for c, sh in pos.values())
+        curve.append((d, cash + held))
+        expo.append(held / (cash + held) if cash + held else 0)
+    out = _curve_stats(curve, split)
+    out.update(slots=slots, taken=taken, skipped=skipped, exposure=round(sum(expo) / len(expo) * 100, 1) if expo else None,
+               curve=[[d, round(v, 4)] for d, v in curve[::5]] + ([[curve[-1][0], round(curve[-1][1], 4)]] if curve else []))
+    return out
+
+
+def benchmarks(db: DB, hist: History, dates: list[str], split: str) -> dict:
+    """對照：加權指數（價格指數，不含股息）、0050（還原股息，含 0.1425% 買進手續費）。"""
+    out = {}
+    tx = [(d, hist.taiex.get(d)) for d in dates if hist.taiex.get(d)]
+    if len(tx) >= 2:
+        out["加權指數"] = {**_curve_stats(tx, split), "curve": [[d, round(v / tx[0][1], 4)] for d, v in tx[::5] + [tx[-1]]]}
+    h = History(db, ["0050"], dates[-1])
+    e = [(d, h.adj["0050"][d]["close"]) for d in dates if h.adj["0050"].get(d) and h.adj["0050"][d].get("close")]
+    if len(e) >= 2:
+        out["0050（含息）"] = {**_curve_stats(e, split), "curve": [[d, round(v / e[0][1], 4)] for d, v in e[::5] + [e[-1]]]}
+    return out
+
+
 def equity_curve(trades: list[dict]) -> list[list]:
     """累積損益（依出場日加總；每次買進投入 1 單位）：[[日期, 累積損益], ...]。"""
     by: dict[str, float] = {}
@@ -509,6 +592,10 @@ def run(db: DB, settings: dict, cfg: BTConfig, progress=None) -> dict:
                            for m in sorted({t["entry"][:6] for t in trades})},
                "byTag": {tag: summarize_trades([t for t in trades if tag in t["tags"]], cfg.split)
                          for tag in sorted({x for t in trades for x in t["tags"]})}}
+        fee_, tax_ = P.get("feePct", 0.1425) / 100, P.get("taxPct", 0.3) / 100
+        res["portfolio"] = {str(n): portfolio(trades, hist, dates, cfg.split, n, fee_, tax_) for n in SLOTS}
+        if vi:   # 對照組只留 10 份的數字，不留曲線
+            res["portfolio"] = {"10": {k: v for k, v in res["portfolio"]["10"].items() if k != "curve"}}
         if vi == 0 and cfg.study:
             from .study import condition_study
             res["conditions"] = condition_study(hist, dates, universe, P, S, cfg.split, rec_cache, regimes)
@@ -528,6 +615,7 @@ def run(db: DB, settings: dict, cfg: BTConfig, progress=None) -> dict:
         from .scan import study as scan_study
         scan_res = scan_study(db, dates, cfg.split, progress=(lambda i, n: progress(len(cfg.variants), len(cfg.variants) + 1, i, n))
                               if progress else None)
+    bench = benchmarks(db, hist, dates, cfg.split)
     bh = {}
     for tag in sorted({x for u in universe.values() for tags in u.values() for x in tags}):
         rets = []
@@ -541,7 +629,7 @@ def run(db: DB, settings: dict, cfg: BTConfig, progress=None) -> dict:
     return {"config": {"start": cfg.start, "end": cfg.end, "split": cfg.split, "universe": cfg.universe,
                        "maxAdds": cfg.max_adds, "horizons": list(HORIZONS)},
             "coverage": coverage, "baseline": {"|".join(k): v for k, v in baseline.items()},
-            "buyHold": bh, "results": results, "scan": scan_res}
+            "buyHold": bh, "benchmarks": bench, "results": results, "scan": scan_res}
 
 
 def parse_grid(items: list[str]) -> list[tuple[str, dict]]:

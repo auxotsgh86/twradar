@@ -1359,10 +1359,13 @@ class BacktestTests(unittest.TestCase):
         self.assertIn("全期", summary["trades"])
         self.assertEqual(code, 0, buf.getvalue())
         html_ = (out / "report.html").read_text(encoding="utf-8")
-        for k in ("回溯分析", "進場訊號", "規則與參數對照", "profitTargetPct=8", "條件研究", "全市場掃描驗證", "注意事項", "累積損益（資金曲線）"):
+        for k in ("回溯分析", "進場訊號", "規則與參數對照", "profitTargetPct=8", "條件研究", "全市場掃描驗證", "注意事項", "累積損益（資金曲線）", "最關鍵的比較"):
             self.assertIn(k, html_)
         res = json.loads((out / "result.json").read_text(encoding="utf-8"))
         self.assertEqual(len(res["results"]), 5)
+        self.assertEqual(set(res["results"][0]["portfolio"]), {"5", "10", "20"})
+        self.assertIn("加權指數", res["benchmarks"])
+        self.assertIn("total", res["results"][1]["portfolio"]["10"])
         self.assertTrue((out / "trades.csv").exists())
 
     def test_rule_variants(self):
@@ -1969,6 +1972,26 @@ class MacroTests(unittest.TestCase):
         g = preset_variants(["climate-grid"], S)
         self.assertEqual(len(g), 8)
         self.assertNotIn("foreignExit", json.dumps(g[0][1]["_playbooks"]))
+
+    def test_portfolio(self):
+        """兩筆交易、資金 2 份：A 從 100 漲到 110、B 從 50 跌到 45；扣費前組合應約 +0%。"""
+        from twradar.backtest import portfolio
+
+        class H:
+            adj = {"A": {"d1": {"open": 100, "close": 100}, "d2": {"open": 110, "close": 110}, "d3": {"open": 110, "close": 110}},
+                   "B": {"d1": {"open": 50, "close": 50}, "d2": {"open": 45, "close": 45}, "d3": {"open": 45, "close": 45}}}
+        tr = [{"code": "A", "entry": "d1", "exit": "d2", "reason": "獲利出場"}, {"code": "B", "entry": "d1", "exit": "d2", "reason": "停損"},
+              {"code": "B", "entry": "d1", "exit": "d3", "reason": "停損"}]
+        D = ["20260105", "20260106", "20260107"]
+        H.adj = {c: {D[int(k[1]) - 1]: v for k, v in x.items()} for c, x in H.adj.items()}
+        for t in tr:
+            t["entry"], t["exit"] = D[int(t["entry"][1]) - 1], D[int(t["exit"][1]) - 1]
+        p = portfolio(tr, H(), D, D[2], 2, 0, 0)
+        self.assertEqual(p["taken"], 2)
+        self.assertEqual(p["skipped"], 1)          # 第三筆沒有空位
+        self.assertAlmostEqual(p["total"], 0.0)    # (+10% − 10%) / 2
+        p1 = portfolio(tr[:1], H(), D, D[2], 2, 0, 0)
+        self.assertAlmostEqual(p1["total"], 5.0)   # 只用一半資金，賺 10%
 
     def test_largecap_conditions(self):
         from twradar.backtest import apply_variant, preset_variants
