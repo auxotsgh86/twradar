@@ -20,45 +20,81 @@ def _common(code: str) -> bool:
     return len(code) == 4 and code.isdigit() and code[0] != "0"
 
 
+BREADTH_LONG = 200      # 長期廣度：站上 200 日均線的比例
+BREADTH_VERSION = 2     # 2：改用除權息還原價（之前用原始收盤，7～9 月除息旺季會低估）
+
+
 def compute_breadth(db: DB, dates: list[str] | None = None) -> int:
-    """計算並存入 dates（預設：全部交易日中尚未計算的）每天的市場廣度：普通股收盤站上自己 20 日均線的比例（%）。"""
+    """計算並存入市場廣度：普通股收盤站上自己 20 日、200 日均線的比例（%）。
+
+    價格先做除權息還原（和 analysis.adjust_prices 同一套判斷：收盤 − 漲跌 ≠ 上一筆收盤 → 之前的價格乘上比例），
+    否則股價一除息就可能從均線上方「跌破」，造成 7～9 月廣度偏低。
+    dates 預設為全部交易日中還沒算過的；換了計算方法（BREADTH_VERSION）時全部重算。"""
+    import math
+
+    from .analysis import LIMIT
     trading = [r["date"] for r in db.q("SELECT date FROM market WHERE taiex IS NOT NULL ORDER BY date")]
     if not trading:
         return 0
+    ver = (db.get_setting("breadth") or {}).get("version")
+    if ver != BREADTH_VERSION:
+        dates = None
+        with db.tx() as c:
+            c.execute("UPDATE macro SET breadth20=NULL, breadth200=NULL")
     if dates is None:
         have = {r["date"] for r in db.q("SELECT date FROM macro WHERE breadth20 IS NOT NULL")}
         dates = [d for d in trading[BREADTH_N - 1:] if d not in have]
     want = sorted(set(dates) & set(trading))
     if not want:
+        if ver != BREADTH_VERSION:
+            db.set_setting("breadth", {"version": BREADTH_VERSION})
         return 0
     ix = {d: i for i, d in enumerate(trading)}
-    start = trading[max(0, ix[want[0]] - BREADTH_N + 1)]
-    win: dict[str, deque] = {}
-    sums: dict[str, float] = {}
+    start = trading[max(0, ix[want[0]] - BREADTH_LONG + 1)]
     rows: dict[str, list] = {}
-    for r in db.q("SELECT date, code, close FROM quotes WHERE date>=? AND date<=? AND close IS NOT NULL ORDER BY date",
+    for r in db.q("SELECT date, code, close, change FROM quotes WHERE date>=? AND date<=? AND close IS NOT NULL ORDER BY date",
                   (start, want[-1])):
         if _common(r["code"]):
-            rows.setdefault(r["date"], []).append((r["code"], r["close"]))
+            rows.setdefault(r["date"], []).append((r["code"], r["close"], r["change"]))
+    wins = {BREADTH_N: {}, BREADTH_LONG: {}}
+    sums = {BREADTH_N: {}, BREADTH_LONG: {}}
+    last: dict[str, tuple[int, float]] = {}
     wset, out = set(want), []
     for d in trading[ix[start]:ix[want[-1]] + 1]:
         i = ix[d]
-        up = n = 0
-        for code, close in rows.get(d, []):
-            q = win.get(code)
-            if q is None:
-                q = win[code] = deque()
-                sums[code] = 0.0
-            q.append((i, close))
-            sums[code] += close
-            while q and q[0][0] <= i - BREADTH_N:
-                sums[code] -= q.popleft()[1]
-            if len(q) == BREADTH_N:
-                n += 1
-                up += close > sums[code] / BREADTH_N
-        if d in wset and n >= 50:
-            out.append({"date": d, "breadth20": round(up / n * 100, 2)})
+        cnt = {BREADTH_N: [0, 0], BREADTH_LONG: [0, 0]}
+        for code, close, chg in rows.get(d, []):
+            prev = last.get(code)
+            if prev and chg is not None:
+                ref, p = close - chg, prev[1]
+                if ref > 0 and abs(ref - p) > max(0.011, p * 0.001):
+                    ratio, skipped = ref / p, i - prev[0] - 1
+                    if 0.05 <= ratio <= 20 and (skipped <= 0 or abs(math.log(ratio)) > (skipped + 1) * math.log(LIMIT)):
+                        for n in wins:   # 還原：視窗內較早的價格乘上比例
+                            q = wins[n].get(code)
+                            if q:
+                                wins[n][code] = deque((k, v * ratio) for k, v in q)
+                                sums[n][code] *= ratio
+            last[code] = (i, close)
+            for n in wins:
+                q = wins[n].get(code)
+                if q is None:
+                    q = wins[n][code] = deque()
+                    sums[n][code] = 0.0
+                q.append((i, close))
+                sums[n][code] += close
+                while q and q[0][0] <= i - n:
+                    sums[n][code] -= q.popleft()[1]
+                if len(q) == n:
+                    cnt[n][1] += 1
+                    cnt[n][0] += close > sums[n][code] / n
+        if d in wset and cnt[BREADTH_N][1] >= 50:
+            row = {"date": d, "breadth20": round(cnt[BREADTH_N][0] / cnt[BREADTH_N][1] * 100, 2)}
+            if cnt[BREADTH_LONG][1] >= 50:
+                row["breadth200"] = round(cnt[BREADTH_LONG][0] / cnt[BREADTH_LONG][1] * 100, 2)
+            out.append(row)
     db.put_macro(out)
+    db.set_setting("breadth", {"version": BREADTH_VERSION})
     return len(out)
 
 
@@ -75,6 +111,7 @@ class Macro:
         self.fut = [mac.get(d, {}).get("fut_foreign") for d in self.days]
         self.fx = [mac.get(d, {}).get("usd_twd") for d in self.days]
         self.br = [mac.get(d, {}).get("breadth20") for d in self.days]
+        self.br200 = [mac.get(d, {}).get("breadth200") for d in self.days]
         self._cache: dict[str, dict] = {}
 
     def fields(self, d: str) -> dict:
@@ -100,6 +137,10 @@ class Macro:
                 out["breadth20"] = self.br[i]
                 if k >= 0 and self.br[k] is not None:
                     out["breadth20Chg10"] = round(self.br[i] - self.br[k], 2)
+            if self.br200[i] is not None:
+                out["breadth200"] = self.br200[i]
+                if i - 20 >= 0 and self.br200[i - 20] is not None:
+                    out["breadth200Chg20"] = round(self.br200[i] - self.br200[i - 20], 2)
             if k >= 0 and self.taiex[k]:
                 out["mktChg10Pct"] = round((self.taiex[i] / self.taiex[k] - 1) * 100, 2)
         self._cache[d] = out
@@ -131,7 +172,7 @@ def foreign_signals(rec: dict, P: dict) -> tuple[int, int, list[str]]:
 def history_rank(db: DB, d: str, rec: dict) -> dict:
     """目前數值在歷史（macro 表全部日子）中的位置：低於或等於它的天數比例（%）。"""
     out = {}
-    for key, col in (("breadth20", "breadth20"), ("futForeign", "fut_foreign")):
+    for key, col in (("breadth20", "breadth20"), ("breadth200", "breadth200"), ("futForeign", "fut_foreign")):
         v = rec.get(key)
         if v is None:
             continue
@@ -161,6 +202,10 @@ CONCEPT = {
     ("breadth", "b30"): "不到一半的股票在月線上，行情集中在少數族群，選股難度高。",
     ("breadth", "b50"): "多數股票在月線上，市場普遍健康。",
     ("breadth", "b80"): "幾乎全面上漲，市場情緒熱，常伴隨短線過熱與拉回。",
+    ("long", "l0"): "長期廣度很低：大多數股票跌破 200 日線，長期多頭結構已經破壞，通常要花比較久的時間修復。",
+    ("long", "l30"): "長期廣度偏低：不到一半的股票守住 200 日線，長期趨勢轉弱，反彈容易遇到解套賣壓。",
+    ("long", "l50"): "長期廣度過半：多數股票還在 200 日線上，長期結構仍在；短線的下跌比較像多頭中的修正。",
+    ("long", "l70"): "長期廣度很高：絕大多數股票在 200 日線上，長期多頭結構完整。",
     ("diverge", "yes"): "指數漲、多數股票卻跌，代表只有少數權值股在撐，行情基礎不穩。",
     ("state", "exit"): "這是系統規則，不是預測：外資在現貨、期貨、匯率同時撤出時暫停上車（回溯顯示能減少虧損）。",
     ("state", "ok"): "這是系統規則，不是預測：外資沒有同時在三個地方撤出，個股訊號照常判斷。",
@@ -183,6 +228,9 @@ def classify(f: dict, P: dict, fut_hi: float | None = None) -> dict:
     b = f.get("breadth20")
     if b is not None:
         out["breadth"] = "b0" if b < 10 else "b10" if b < 30 else "b30" if b < 50 else "b50" if b < 80 else "b80"
+    b2 = f.get("breadth200")
+    if b2 is not None:
+        out["long"] = "l0" if b2 < 30 else "l30" if b2 < 50 else "l50" if b2 < 70 else "l70"
     mc, bc = f.get("mktChg10Pct"), f.get("breadth20Chg10")
     if mc is not None and bc is not None and mc > 0 and bc <= -P.get("breadthDropPts", 10):
         out["diverge"] = "yes"
@@ -277,6 +325,10 @@ def reading(f: dict, rank: dict, state: str, hit: int, need: int, P: dict, stats
         br = rank.get("breadth20")
         pos = f"（近 {br['days']} 個交易日中，只有 {br['pct']:.0f}% 的日子這麼低或更低）" if br and br["pct"] <= 20 else ""
         item("breadth", f"市場廣度 {b:.0f}%：{'幾乎所有' if b < 10 else '大多數' if b < 30 else '超過一半的' if b < 50 else '只有少數' if b < 80 else '幾乎沒有'}股票在月線下{pos}。")
+    if "long" in cls:
+        b2, c2 = f["breadth200"], f.get("breadth200Chg20")
+        item("long", f"長期廣度 {b2:.0f}%：{'大多數' if b2 < 30 else '超過一半的' if b2 < 50 else '多數' if b2 < 70 else '絕大多數'}股票"
+                     f"{'跌破' if b2 < 50 else '守在'} 200 日線{'' if b2 < 50 else '上'}" + (f"（20 日{'增加' if c2 >= 0 else '減少'} {abs(c2):.0f} 點）" if c2 is not None else "") + "。")
     if "diverge" in cls:
         item("diverge", f"加權指數 10 日漲 {f['mktChg10Pct']:.1f}%，但廣度降了 {-f['breadth20Chg10']:.0f} 點。")
     if state == "exit":

@@ -96,6 +96,7 @@ class App:
             "futForeign": [(mac.get(d) or {}).get("fut_foreign") for d in dates],
             "usdTwd": [(mac.get(d) or {}).get("usd_twd") for d in dates],
             "breadth": [(mac.get(d) or {}).get("breadth20") for d in dates],
+            "breadth200": [(mac.get(d) or {}).get("breadth200") for d in dates],
         }
         return {"dates": dates, "series": ser, "climate": self.climate_of(z), "date": z, "unit": "億元"}
 

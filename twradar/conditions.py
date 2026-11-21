@@ -790,7 +790,7 @@ COMPARE_FIELDS = {
     "foreign5d": "外資 5 日合計（張）", "trust5d": "投信 5 日合計（張）",
     "ma5": "5 日線", "ma20Prev": "昨日月線", "amt": "成交金額（萬元）", "amt5": "5 日均成交金額（萬元）",
     "instNet": "外資＋投信買賣超（張）", "holdersTotal": "集保股東人數", "holdersChgPct": "股東人數週增減%",
-    "mktClose": "加權指數", "mktMa20": "加權指數月線", "breadth20": "市場廣度（站上月線%）",
+    "mktClose": "加權指數", "mktMa20": "加權指數月線", "breadth20": "市場廣度（站上月線%）", "breadth200": "長期廣度（站上 200 日線%）",
     "foreignSpot5d": "外資現貨 5 日（億元）", "futForeign": "外資台指期淨未平倉（口）", "futForeignChg5": "外資台指期 5 日增減（口）",
     "usdTwd": "美元兌新台幣", "usdTwdChg5Pct": "新台幣 5 日貶值%", "capAmt": "市值（億元）", "peakClose": "買進後最高收盤",
     "marginChg": "融資增減（張）", "shortChg": "融券增減（張）", "marginStreak": "融資連增天數", "marginPos60": "融資 60 日位置%",

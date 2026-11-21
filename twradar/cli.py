@@ -182,9 +182,10 @@ def run_macro_history(cfg, args) -> int:
             print(f"{s}～{e}：外資期貨 {fut} 天、匯率 {fx} 天" + ("；" + "；".join(errs) if errs else ""), flush=True)
             a = b + timedelta(days=1)
     n = compute_breadth(db)
-    print(f"市場廣度：新算 {n} 天")
-    r = db.one("SELECT COUNT(fut_foreign) AS f, COUNT(usd_twd) AS x, COUNT(breadth20) AS b, MIN(date) AS a, MAX(date) AS z FROM macro")
-    print(f"資料庫：外資期貨 {r['f']} 天、匯率 {r['x']} 天、廣度 {r['b']} 天（{r['a']}～{r['z']}）")
+    print(f"市場廣度：新算 {n} 天（除權息還原；短期＝站上月線、長期＝站上 200 日線）")
+    r = db.one("SELECT COUNT(fut_foreign) AS f, COUNT(usd_twd) AS x, COUNT(breadth20) AS b, COUNT(breadth200) AS b2, "
+               "MIN(date) AS a, MAX(date) AS z FROM macro")
+    print(f"資料庫：外資期貨 {r['f']} 天、匯率 {r['x']} 天、短期廣度 {r['b']} 天、長期廣度 {r['b2']} 天（{r['a']}～{r['z']}）")
     last = db.one("SELECT MAX(date) AS d FROM market WHERE taiex IS NOT NULL")["d"]
     if last:
         from .analysis import DEFAULT_RULES

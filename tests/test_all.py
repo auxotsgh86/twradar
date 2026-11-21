@@ -1881,6 +1881,28 @@ class MacroTests(unittest.TestCase):
         # 判定日以前的資料才算：days[29] 時外資還沒開始賣
         self.assertEqual(Macro(db, days[-1]).fields(days[29])["foreignSpot5d"], 50.0)
 
+    def test_breadth_ex_dividend(self):
+        """除息不算跌破：60 檔每天小漲，第 30 天全部除息 5 元（漲跌欄仍是 +0.1）。還原後廣度應維持 100%。"""
+        from twradar.db import DB
+        from twradar.macro import compute_breadth
+        db = DB(Path(tempfile.mkdtemp()) / "t.sqlite3")
+        days = weekdays(40)
+        for d in days:
+            db.put_market({"date": d, "taiex": 20000})
+        rows = []
+        for k in range(60):
+            c = 100.0
+            for i, d in enumerate(days):
+                c = c + 0.1 - (5 if i == 30 else 0)
+                rows.append((d, f"{1100 + k}", c, 0.1))
+        with db.tx() as cx:
+            cx.executemany("INSERT INTO quotes(date, code, close, change) VALUES(?,?,?,?)", rows)
+        compute_breadth(db)
+        got = {r["date"]: r["breadth20"] for r in db.q("SELECT date, breadth20 FROM macro")}
+        self.assertEqual(got[days[30]], 100.0)
+        self.assertEqual(got[days[35]], 100.0)
+        self.assertEqual(db.get_setting("breadth")["version"], 2)
+
     def test_conditions(self):
         from twradar.conditions import BUILTIN, Ctx, NA, PASS, FAIL
         P = dict(DEFAULT_RULES)

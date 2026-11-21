@@ -63,7 +63,8 @@ CREATE TABLE IF NOT EXISTS alerts (            -- 注意股、處置股公告（
   start TEXT, end TEXT, measure TEXT, src TEXT, PRIMARY KEY (date, code, kind)
 );
 CREATE TABLE IF NOT EXISTS macro (             -- 大盤環境：外資台指期淨未平倉（口）、美元兌新台幣、市場廣度（站上月線家數%）
-  date TEXT PRIMARY KEY, fut_foreign INTEGER, fut_trust INTEGER, fut_dealer INTEGER, usd_twd REAL, breadth20 REAL, src TEXT
+  date TEXT PRIMARY KEY, fut_foreign INTEGER, fut_trust INTEGER, fut_dealer INTEGER, usd_twd REAL, breadth20 REAL, src TEXT,
+  breadth200 REAL
 );
 CREATE INDEX IF NOT EXISTS idx_alerts_code ON alerts(code, date);
 CREATE INDEX IF NOT EXISTS idx_quotes_code ON quotes(code, date);
@@ -82,6 +83,10 @@ class DB:
         self.conn.row_factory = sqlite3.Row
         with _lock:
             self.conn.executescript(SCHEMA)
+            cols = {r[1] for r in self.conn.execute("PRAGMA table_info(macro)")}
+            if "breadth200" not in cols:   # 2026-11-21 新增：長期廣度（站上 200 日線）
+                self.conn.execute("ALTER TABLE macro ADD COLUMN breadth200 REAL")
+                self.conn.commit()
 
     @contextmanager
     def tx(self):
@@ -197,7 +202,7 @@ class DB:
             out[r["code"]].setdefault("name", r["name"])
         return out
 
-    MACRO_COLS = ("fut_foreign", "fut_trust", "fut_dealer", "usd_twd", "breadth20", "src")
+    MACRO_COLS = ("fut_foreign", "fut_trust", "fut_dealer", "usd_twd", "breadth20", "breadth200", "src")
 
     def put_macro(self, rows: list[dict]) -> int:
         """合併寫入（只更新有值的欄位）。"""

@@ -463,7 +463,10 @@ class Provider:
 - 來源（`providers/taifex.py`，2026/11 實測）：期交所 `futContractsDateDown`（POST，commodityId=TXF，Big5 CSV，
   一次可查約兩年）取各身分別「多空未平倉口數淨額」；`dailyFXRateDown` 取「美元／新台幣」。存入 `macro` 表。
   央行 `cpx.cbc.gov.tw/api/OpenData/FTDOpenData_Day`（2008 起的銀行間收盤）也能用，目前未接。
-- 市場廣度：普通股（4 碼、非 0 開頭）收盤站上自己 20 日均線的比例，由已有的行情計算（`macro.compute_breadth`），每天抓完行情就算。
+- 市場廣度：普通股（4 碼、非 0 開頭）收盤站上自己 20 日（短期）、200 日（長期，`breadth200`）均線的比例，
+  由已有的行情計算（`macro.compute_breadth`），每天抓完行情就算。價格先做除權息還原（同 `adjust_prices` 的判斷），
+  否則除息會被當成跌破（7～9 月偏低；參考 tw-market-breadth-skill 的說明）。`BREADTH_VERSION` 變更時全部重算。
+  沒有採用該專案的 6 因子評分與美股門檻（0.4／0.6／0.7）：長期廣度的意義改用「過去資料」統計呈現。
 - 欄位（`macro.Macro.fields`，只用判定日含以前）：`foreignSpot5d`（外資現貨 5 日，億元）、`futForeign`／`futForeignChg5`（口）、
   `usdTwd`／`usdTwdChg5Pct`（正＝新台幣貶）、`breadth20`／`breadth20Chg10`、`mktChg10Pct`。
 - 條件：`foreignExit`（現貨 5 日賣超、期貨淨空單 5 日增加 ≥ `foreignFutChgLots`、新台幣 5 日貶 ≥ `foreignFxPct`，成立 ≥ `foreignExitSignals` 項）、

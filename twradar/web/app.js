@@ -83,7 +83,8 @@ const TIPS = {
   spot5: "外資最近 5 個交易日買賣超的加總。負數代表外資這週整體在賣。",
   fut: "外資在台指期貨「空單比多單多出幾口」，也就是淨空單；數字越大，外資押注下跌或避險的部位越大（新聞常說的「外資淨空單 10 萬口」就是這個）。旁邊是 5 日變化：空單減少（回補）偏多，空單增加偏空。",
   fx: "1 美元可以換多少新台幣。數字變大＝新台幣貶值，常伴隨外資把錢匯出；數字變小＝新台幣升值、資金流入。",
-  breadth: "全部上市櫃普通股中，收盤價站在自己月線（20 日均價）之上的比例。指數在漲但廣度很低，代表只有少數權值股在撐盤。",
+  breadth: "全部上市櫃普通股中，收盤價站在自己月線（20 日均價）之上的比例，看短線強弱。指數在漲但廣度很低，代表只有少數權值股在撐盤。價格已做除權息還原，除息不會被當成跌破。",
+  breadth200: "全部上市櫃普通股中，收盤價站在自己 200 日均線之上的比例，看長期結構。短期廣度很低、長期廣度還過半，通常是多頭中的修正；長期廣度也跌破一半，代表長期趨勢轉弱。",
 };
 const kv = (tip, k, v) => `<div class="kv" tabindex="0" data-tip="${esc(TIPS[tip] || "")}"><span class="k">${k}</span><span class="v">${v}</span></div>`;
 function marketHTML(m) {
@@ -107,7 +108,7 @@ function climateHTML(c, {reading = true} = {}) {
     ${kv("spot5", "外資現貨 5 日（億）", `<span class="num ${cls(c.foreignSpot5d)}">${fmtS(c.foreignSpot5d, 0)}</span>`)}
     ${kv("fut", P(c.futForeign) || c.futForeign <= 0 ? "外資台指期淨空單（口）" : "外資台指期淨多單（口）", `<span class="num ${cls(c.futForeign)}">${P(c.futForeign) ? "—" : fmt(Math.abs(c.futForeign), 0)}</span><span class="small num ${cls(c.futForeignChg5)}"> ${P(c.futForeignChg5) || c.futForeignChg5 === 0 ? "" : `5日空單${c.futForeignChg5 > 0 ? "減少" : "增加"} ${fmt(Math.abs(c.futForeignChg5), 0)}`}</span>`)}
     ${kv("fx", "美元兌新台幣", `<span class="num">${fmt(c.usdTwd, 3)}</span><span class="small num ${cls(-(c.usdTwdChg5Pct || 0))}"> ${P(c.usdTwdChg5Pct) ? "" : (c.usdTwdChg5Pct > 0 ? "5日貶 " : "5日升 ") + Math.abs(c.usdTwdChg5Pct).toFixed(2) + "%"}</span>`)}
-    ${kv("breadth", "市場廣度（站上月線）", `<span class="num">${P(c.breadth20) ? "—" : c.breadth20.toFixed(0) + "%"}</span>`)}</div>${rd}`;
+    ${kv("breadth", "市場廣度（月線／200 日線）", `<span class="num">${P(c.breadth20) ? "—" : c.breadth20.toFixed(0) + "%"}</span><span class="small num muted">${P(c.breadth200) ? "" : "／" + c.breadth200.toFixed(0) + "%"}</span>`)}</div>${rd}`;
 }
 const ck = (label, st, why) => `<span class="ck ${st}" title="${esc(why || "")}">${{pass: "✓", fail: "✕", na: "?"}[st] || "?"} ${label}</span>`;
 /* 注意股、處置股標示 */
@@ -210,10 +211,10 @@ const lightColor = it => ({go: "var(--go)", wait: "var(--wait)", stop: "var(--st
 /* ---------- 頁面：資金流向 ---------- */
 let FLOW_DAYS = 60;
 let FW = 1200;   // 依畫面寬度決定，讓圖上的字維持原本大小
-function syncChart(dates, vals, {h = 130, bar = false, title = "", unit = "", ref = null, digits = 0, delta = false, goodUp = true, sub = ""} = {}) {
+function syncChart(dates, vals, {h = 130, bar = false, title = "", unit = "", ref = null, digits = 0, delta = false, goodUp = true, sub = "", extra = []} = {}) {
   const W = FW, L = 64, R = 12, T = 18, B = 6, n = dates.length, band = delta ? Math.round((h - T - B) * .34) : 0, ch = h - T - B - band - (delta ? 8 : 0);
   const xs = i => L + (n < 2 ? 0 : i * (W - L - R) / (n - 1));
-  const nums = vals.filter(isNum); let lo = Math.min(...nums, ...(bar || ref !== null ? [ref ?? 0] : [])), hi = Math.max(...nums, ...(bar || ref !== null ? [ref ?? 0] : []));
+  const nums = [...vals, ...extra.flatMap(e => e.values)].filter(isNum); let lo = Math.min(...nums, ...(bar || ref !== null ? [ref ?? 0] : [])), hi = Math.max(...nums, ...(bar || ref !== null ? [ref ?? 0] : []));
   let g = `<text x="0" y="12" style="fill:var(--fg);font-weight:700">${esc(title)}</text>${sub ? `<text x="${W - R}" y="12" text-anchor="end" style="fill:var(--fg)">${esc(sub)}</text>` : ""}`;
   if (!nums.length) return `<svg class="chart sync" viewBox="0 0 ${W} ${h}" data-l="${L}" data-r="${R}" data-n="${n}">${g}<text x="${W / 2}" y="${h / 2}" text-anchor="middle">沒有資料</text><line class="xh" y1="${T}" y2="${h - B}" stroke="var(--muted)" stroke-dasharray="3 3" visibility="hidden"/></svg>`;
   const pad = (hi - lo) * .08 || 1; lo -= pad; hi += pad;
@@ -226,6 +227,10 @@ function syncChart(dates, vals, {h = 130, bar = false, title = "", unit = "", re
   } else {
     let p = "", on = false; vals.forEach((v, i) => { if (isNum(v)) { p += (on ? "L" : "M") + xs(i).toFixed(1) + "," + y(v).toFixed(1); on = true; } else on = false; });
     g += `<path d="${p}" fill="none" stroke="var(--accent)" stroke-width="1.8"/>`;
+    for (const e of extra) {
+      let p2 = "", on2 = false; e.values.forEach((v, i) => { if (isNum(v)) { p2 += (on2 ? "L" : "M") + xs(i).toFixed(1) + "," + y(v).toFixed(1); on2 = true; } else on2 = false; });
+      g += `<path d="${p2}" fill="none" stroke="${e.color}" stroke-width="1.8" stroke-dasharray="${e.dash || ""}"/>`;
+    }
   }
   if (delta) {   // 下方：每日變化（顏色：偏多＝紅、偏空＝綠）
     const dv = vals.map((v, i) => i > 0 && isNum(v) && isNum(vals[i - 1]) ? v - vals[i - 1] : null), m = Math.max(...dv.filter(isNum).map(Math.abs), 1e-9);
@@ -276,7 +281,7 @@ function flowCharts(f) {
       ${syncChart(D, S.foreign || [], {title: "外資現貨買賣超（億）", bar: true})}
       ${syncChart(D, SHORT, {title: "外資台指期淨空單（口，越高越看空；負數＝淨多單）", h: 170, delta: true, goodUp: false, sub: chgTxt(SHORT, v => fmt(v, 0) + " 口", "增加", "減少", false, true) + "　長條：紅＝空單減少　綠＝空單增加"})}
       ${syncChart(D, S.usdTwd || [], {title: "美元兌新台幣（往上＝新台幣貶）", h: 170, digits: 2, delta: true, goodUp: false, sub: chgTxt(S.usdTwd, v => fmtS(v, 3), "新台幣貶", "新台幣升", true)})}
-      ${syncChart(D, S.breadth || [], {title: "市場廣度：站上月線的股票 %", ref: 50})}
+      ${syncChart(D, S.breadth || [], {title: "市場廣度 %：實線＝站上月線（短期）、虛線＝站上 200 日線（長期）", ref: 50, extra: (S.breadth200 || []).some(isNum) ? [{values: S.breadth200, color: "var(--c-ma60)", dash: "6 4"}] : []})}
       ${axisRow(D)}`;
 }
 function flowBubble(f, days) {
@@ -317,7 +322,7 @@ async function viewFlows() {
     svgs.forEach(s => { const L = +s.dataset.l, R = +s.dataset.r, n = +s.dataset.n, x = L + (n < 2 ? 0 : i * (FW - L - R) / (n - 1));
       const l = s.querySelector(".xh"); l.setAttribute("x1", x); l.setAttribute("x2", x); l.setAttribute("visibility", "visible"); });
     const v = (k, dg = 0) => isNum((S[k] || [])[i]) ? fmt(S[k][i], dg) : "—";
-    read.innerHTML = `<b>${ymd(D[i])}</b>　加權 ${v("taiex", 0)}　外資現貨 ${isNum(S.foreign[i]) ? fmtS(S.foreign[i], 0) : "—"} 億　台指期淨空單 ${isNum(SHORT[i]) ? fmt(SHORT[i], 0) : "—"} 口　美元 ${v("usdTwd", 3)}　廣度 ${v("breadth", 0)}%`;
+    read.innerHTML = `<b>${ymd(D[i])}</b>　加權 ${v("taiex", 0)}　外資現貨 ${isNum(S.foreign[i]) ? fmtS(S.foreign[i], 0) : "—"} 億　台指期淨空單 ${isNum(SHORT[i]) ? fmt(SHORT[i], 0) : "—"} 口　美元 ${v("usdTwd", 3)}　廣度 ${v("breadth", 0)}%／長期 ${v("breadth200", 0)}%`;
   };
   svgs.forEach(s => {
     s.addEventListener("pointermove", ev => { const b = s.getBoundingClientRect(), L = +s.dataset.l, R = +s.dataset.r, n = +s.dataset.n;
@@ -433,7 +438,7 @@ async function viewReport(date) {
     <div class="sec"><h2>精簡表</h2>${tableHTML(st)}</div>
     ${e.model ? `<div class="small ${e.model.status === "偏離" ? "" : "muted"}" style="margin:8px 0">${e.model.status === "偏離" ? "⚠ " : ""}模型追蹤：${esc(e.model.status)}。${esc(e.model.text)}</div>` : ""}
     <div class="sec glossary"><h2>名詞說明</h2><dl>${[["外資買賣超", "foreign"], ["投信買賣超", "trust"], ["自營商買賣超", "dealer"], ["外資態度", "attitude"],
-      ["外資現貨 5 日", "spot5"], ["外資台指期淨空單", "fut"], ["美元兌新台幣", "fx"], ["市場廣度", "breadth"]].map(([k, t]) => `<dt>${k}</dt><dd>${esc(TIPS[t])}</dd>`).join("")}
+      ["外資現貨 5 日", "spot5"], ["外資台指期淨空單", "fut"], ["美元兌新台幣", "fx"], ["市場廣度（短期）", "breadth"], ["長期廣度", "breadth200"]].map(([k, t]) => `<dt>${k}</dt><dd>${esc(TIPS[t])}</dd>`).join("")}
       <dt>其他本土（差額）</dt><dd>三大法人合計的反向，是推算出來的；證交所沒有公布是誰，推測包括公股行庫與國安基金、壽險、企業與大股東，以及用現股買賣的散戶。</dd>
       <dt>燈號</dt><dd>綠＝上車／加碼訊號，黃＝觀察中（還差哪些條件寫在下方），紅＝轉弱／不宜加碼。</dd></dl></div>
     <div class="small muted">資料來源：證交所、櫃買中心、期貨交易所${st.some(s => (s.data.source || "").includes("FinMind")) ? "、FinMind" : ""}。以上為籌碼訊號整理，非投資建議。</div>

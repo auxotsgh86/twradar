@@ -20,7 +20,7 @@ GROUPS = ("大型", "中型", "上櫃", "觀察清單")
 SKIP = {"noData", "isHolding", "notHolding", "addProfitOk", "stopLoss", "profitTarget", "belowKeyLevel", "giveback"}
 
 
-MARKET_FIELDS = {"mktClose", "mktMa20", "mktMa20Prev", "mktChg10Pct", "breadth20", "breadth20Chg10",
+MARKET_FIELDS = {"mktClose", "mktMa20", "mktMa20Prev", "mktChg10Pct", "breadth20", "breadth20Chg10", "breadth200", "breadth200Chg20",
                  "foreignSpot5d", "futForeign", "futForeignChg5", "usdTwd", "usdTwdChg5Pct"}
 
 
