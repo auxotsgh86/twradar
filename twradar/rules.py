@@ -30,7 +30,7 @@ LIGHT_LABEL = {"go": "加碼訊號", "wait": "觀察中", "stop": "不宜加碼"
 CHIP_CONDS = ("inst", "main", "retail")
 
 
-RULES_VERSION = 6
+RULES_VERSION = 7
 
 
 def v03_playbooks() -> dict:
@@ -65,7 +65,17 @@ def v03_playbooks() -> dict:
 
 
 def default_playbooks() -> dict:
-    """預設規則 v0.6（2026-11-21，見 docs/STRATEGY.md 第 12 節）：v0.5 ＋ 外資撤出時不上車
+    """預設規則 v0.7（2026-11-22，見 docs/STRATEGY.md 第 13 節）：v0.6，上車的法人條件只看 5 日累計
+    （拿掉「法人由賣轉買」這個入口：單日轉買雜訊大，回溯兩段樣本的每筆品質都提升）。"""
+    pb = v06_playbooks()
+    for r in pb["entry"]:
+        if r.get("label") == "上車":
+            r["when"] = {"all": [x for x in r["when"]["all"] if not (isinstance(x, dict) and "instTurn" in json.dumps(x))] + ["inst5dBuy"]}
+    return pb
+
+
+def v06_playbooks() -> dict:
+    """v0.6（2026-11-21，見 docs/STRATEGY.md 第 12 節）：v0.5 ＋ 外資撤出時不上車
     （外資現貨 5 日賣超、台指期淨空單 5 日增加、新台幣 5 日貶值，三項中成立 foreignExitSignals 項，預設 3 項都成立）。"""
     return veto_with("foreignExit")
 
@@ -175,8 +185,8 @@ def neon_playbooks(inst: str = "", entry_extra: tuple = (), quality: bool = Fals
     """外部建議的修正（以目前預設為底）。
     inst：「5d」上車只看法人 5 日累計（拿掉法人由賣轉買）；「strong」由賣轉買必須當日力道夠。
     entry_extra：上車另外要求的條件；quality：帶量紅K改成實體紅K；no_blowoff：出貨警訊拿掉「爆量長黑」（保留高檔爆量長黑）；
-    bull_profit：大盤多頭時，獲利出場的「跌破月線」改成深跌破下彎月線。"""
-    pb = default_playbooks()
+    bull_profit：大盤多頭時，獲利出場的「跌破月線」改成深跌破下彎月線。以 v0.6 為底（2026-11-21 的回溯）。"""
+    pb = v06_playbooks()
     for r in pb["entry"]:
         if r.get("label") != "上車":
             continue
@@ -334,7 +344,7 @@ def upgrade(s: dict) -> dict:
         return s
     pb = s.get("playbooks")
     if isinstance(pb, dict):
-        olds = [v03_playbooks(), v04_playbooks(), v05_playbooks()] + ([p3_playbooks()] if v < 3 else [])
+        olds = [v03_playbooks(), v04_playbooks(), v05_playbooks(), v06_playbooks()] + ([p3_playbooks()] if v < 3 else [])
         for k in ("entry", "hold"):
             if not pb.get(k) or any(pb.get(k) == old[k] for old in olds):
                 pb[k] = default_playbooks()[k]

@@ -506,6 +506,9 @@ class Provider:
 - 對照組 `neon`（2026-11-21，外部建議）：不加碼（`_maxAdds`）、上車只看法人 5 日、`instTurnStrong`（轉買須當日買超 ≥ `instTurnPct`）、
   上車加 `biasMa5Ok`、`redVolKQuality`（收漲、上影 < `maxUpperShadowPct`；指標 `upperShadowPct`）、出貨警訊拿掉 `blowoffBlack`、
   多頭時獲利出場的跌破月線改 `breakMa20Deep`、全上、全上＋不加碼。以投資組合（10 份、30 份排序）的總報酬判斷。
+- v0.7（`RULES_VERSION` 7）：上車的法人條件只剩 `inst5dBuy`（拿掉 `instTurn`）；`v06_playbooks()` 保留給對照組 `v06`。
+- 大盤進出的穩健性：`timing_rules` 加空頭連 2 日、跌破月線 1／2% 且下彎、季線空頭（`mktMa60`）、只看跌破月線、只看月線下彎；
+  核心＋衛星改成 0050 空頭空手 30／50／70% ＋ 照訊號（30 份排序）。
 - 條件研究：只看大盤層級欄位的條件（`study.MARKET_FIELDS`）同一天每檔都一樣，改用原始報酬（扣同日平均會抵消）。
 - 回溯結果每組加 `byMonth`（依進場月份）。
 - 對照組 `climate`（以 v0.5 為底）：廣度 < 30／40／50% 不上車、指數漲廣度跌不上車、外資撤出（3 項／2 項）不上車、外資撤出＋廣度 < 40%。

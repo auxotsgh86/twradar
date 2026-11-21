@@ -196,7 +196,7 @@ class History:
 
     def market(self, d: str) -> dict:
         i = bisect.bisect_right(self.trading, d)
-        xs = [self.taiex[x] for x in reversed(self.trading[max(0, i - 21):i])]
+        xs = [self.taiex[x] for x in reversed(self.trading[max(0, i - 61):i])]
         out = {}
         if xs:
             out["mktClose"] = xs[0]
@@ -204,6 +204,9 @@ class History:
             out["mktMa20"] = sum(xs[:20]) / 20
         if len(xs) >= 21:
             out["mktMa20Prev"] = sum(xs[1:21]) / 20
+        if len(xs) >= 61:   # 季線（只給大盤進出的對照用）
+            out["mktMa60"] = sum(xs[:60]) / 60
+            out["mktMa60Prev"] = sum(xs[1:61]) / 60
         out.update(self.macro.fields(d))
         return out
 
@@ -676,12 +679,40 @@ def run(db: DB, settings: dict, cfg: BTConfig, progress=None) -> dict:
 
     def fexit(n):
         return lambda m, reg: (lambda h: h[1] >= n and h[0] >= n)(foreign_signals(m, P1))
+    def ok(m, *ks):
+        return all(m.get(k) is not None for k in ks)
+
+    def bear(m, ma="20", tol=0.0):
+        """加權指數在均線下（扣 tol%）且均線下彎。"""
+        c, a, b = m.get("mktClose"), m.get(f"mktMa{ma}"), m.get(f"mktMa{ma}Prev")
+        return ok(m, "mktClose", f"mktMa{ma}", f"mktMa{ma}Prev") and c < a * (1 - tol / 100) and a < b
+
+    def days2(f):
+        """要連 2 天成立才空手；空手後要連 2 天不成立才買回。"""
+        st = {"prev": False, "out": False}
+
+        def g(m, reg):
+            now = f(m, reg)
+            if now and st["prev"]:
+                st["out"] = True
+            elif not now and not st["prev"]:
+                st["out"] = False
+            st["prev"] = now
+            return st["out"]
+        return g
     timing_rules = {
         "0050＋外資撤出（3 項）時空手": fexit(3),
         "0050＋外資撤出（2 項）時空手": fexit(2),
         "0050＋大盤非多頭時空手": lambda m, reg: reg in ("盤整", "空頭"),
         "0050＋大盤空頭時空手": lambda m, reg: reg == "空頭",
         "0050＋外資撤出（2 項）且大盤非多頭時空手": lambda m, reg: fexit(2)(m, reg) and reg in ("盤整", "空頭"),
+        # 「大盤空頭空手」的穩健性：相鄰的定義
+        "空頭（連 2 日）時空手": days2(lambda m, reg: bear(m)),
+        "空頭（跌破月線 1% 且下彎）時空手": lambda m, reg: bear(m, tol=1),
+        "空頭（跌破月線 2% 且下彎）時空手": lambda m, reg: bear(m, tol=2),
+        "季線空頭（跌破下彎季線）時空手": lambda m, reg: bear(m, "60"),
+        "只要跌破月線就空手": lambda m, reg: ok(m, "mktClose", "mktMa20") and m["mktClose"] < m["mktMa20"],
+        "只要月線下彎就空手": lambda m, reg: ok(m, "mktMa20", "mktMa20Prev") and m["mktMa20"] < m["mktMa20Prev"],
     }
     timing = {k: timed_0050(db, hist, dates, cfg.split, P1, f) for k, f in timing_rules.items()}
     combo = {}
@@ -690,9 +721,10 @@ def run(db: DB, settings: dict, cfg: BTConfig, progress=None) -> dict:
     sig = full0.get("30排序") if results else None
     if hold and sig:
         combo["一半抱 0050、一半照訊號（30 份排序）"] = mix(hold, sig, .5, cfg.split)
-        t3 = timing["0050＋外資撤出（3 項）時空手"].get("full")
-        if t3:
-            combo["一半 0050＋外資撤出空手、一半照訊號"] = mix(t3, sig, .5, cfg.split)
+        tb = timing["0050＋大盤空頭時空手"].get("full")
+        if tb:
+            for w in (.3, .5, .7):
+                combo[f"{w * 100:.0f}% 0050＋空頭空手、{100 - w * 100:.0f}% 照訊號（30 份排序）"] = mix(tb, sig, w, cfg.split)
     for v in timing.values():
         v.pop("full", None)
     bh = {}
@@ -809,6 +841,9 @@ def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
             out.append(("外資撤出（3 項）不上車", {"_playbooks": veto_with("foreignExit")}))
             out.append(("外資撤出（2 項）不上車", {"_playbooks": veto_with("foreignExit"), "foreignExitSignals": 2}))
             out.append(("外資撤出＋廣度 < 40% 不上車", {"_playbooks": veto_with("foreignExit", "breadthWeak")}))
+        elif n == "v06":
+            from .rules import v06_playbooks
+            out.append(("v0.6（前一版）", {"_playbooks": v06_playbooks()}))
         elif n == "neon":   # 外部建議：堵法人轉買後門、不追高、實體紅K、持有面少洗盤、不加碼對照
             from .rules import neon_playbooks as nb
             out.append(("不加碼（只看上車訊號）", {"_maxAdds": 0}))
@@ -843,7 +878,7 @@ def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
         elif n == "market":
             out.append(("不用大盤逆風", {"_drop": ["marketWeak"]}))
         else:
-            raise ValueError(f"未知的對照組：{n}（可用：neon、largecap、climate、climate-grid、v05、tdcc、settled、trial、bullhold、bullstop、bullstop-grid、bull、veto、inst1d、market、v04、v03）")
+            raise ValueError(f"未知的對照組：{n}（可用：v06、neon、largecap、climate、climate-grid、v05、tdcc、settled、trial、bullhold、bullstop、bullstop-grid、bull、veto、inst1d、market、v04、v03）")
     return out
 
 

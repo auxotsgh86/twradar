@@ -1133,7 +1133,7 @@ class V3RulesTests(unittest.TestCase):
         path.write_text(json.dumps(data), encoding="utf-8")
         s = SettingsStore(path, 50).get()
         self.assertEqual(s["playbooks"]["entry"][1]["label"], "自訂")
-        self.assertEqual(s["rulesVersion"], 6)
+        self.assertEqual(s["rulesVersion"], 7)
         # v0.3 預設 → 升級為目前預設；參數不再重設
         from twradar.rules import v03_playbooks
         data["playbooks"], data["rulesVersion"] = v03_playbooks(), 3
@@ -1142,7 +1142,7 @@ class V3RulesTests(unittest.TestCase):
                 p_["value"] = 20
         path.write_text(json.dumps(data), encoding="utf-8")
         s = SettingsStore(path, 50).get()
-        self.assertEqual((s["playbooks"], s["rulesVersion"]), (default_playbooks(), 6))
+        self.assertEqual((s["playbooks"], s["rulesVersion"]), (default_playbooks(), 7))
         # v0.4 預設 → v0.5
         from twradar.rules import v04_playbooks
         data["playbooks"], data["rulesVersion"] = v04_playbooks(), 4
@@ -1367,7 +1367,7 @@ class BacktestTests(unittest.TestCase):
         self.assertIn("加權指數", res["benchmarks"])
         self.assertIn("total", res["results"][1]["portfolio"]["10"])
         self.assertIn("total", res["results"][1]["portfolio"]["30排序"])
-        self.assertEqual(len(res["timing"]), 5)
+        self.assertEqual(len(res["timing"]), 11)
         self.assertNotIn("full", json.dumps(res["results"][0]["portfolio"]))
         self.assertTrue((out / "trades.csv").exists())
 
@@ -2042,6 +2042,17 @@ class MacroTests(unittest.TestCase):
         self.assertEqual(len(vs), 8)
         for _, o in vs:
             apply_variant(S, o)
+
+    def test_v07_upgrade(self):
+        """v0.6 的預設升級到 v0.7：上車只看法人 5 日累計。"""
+        import json as _j
+        from twradar.rules import default_playbooks, upgrade, v06_playbooks
+        s = {"rulesVersion": 6, "playbooks": v06_playbooks(), "params": []}
+        upgrade(s)
+        self.assertEqual(s["playbooks"], default_playbooks())
+        up = next(r for r in s["playbooks"]["entry"] if r["label"] == "上車")
+        self.assertNotIn("instTurn", _j.dumps(up))
+        self.assertIn("inst5dBuy", up["when"]["all"])
 
     def test_v06_upgrade(self):
         """v0.5 的預設設定升級到 v0.6：否決加外資撤出；使用者設定的門檻不動。"""
