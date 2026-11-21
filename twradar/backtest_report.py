@@ -166,6 +166,59 @@ def _scan_section(sc: dict | None) -> str:
 <div class="tw"><table><tr><th>方法</th><th>基準</th><th>樣本內</th><th>樣本外</th><th>多頭</th><th>盤整</th><th>空頭</th></tr>{''.join(rows)}</table></div></section>"""
 
 
+PALETTE = ("#b71c1c", "#1f4e79", "#2e7d32", "#b7791f", "#7a5cb8", "#00838f", "#6d4c41", "#c2185b", "#455a64", "#9e9d24")
+
+
+def _equity_svg(results: list[dict], split: str, start: str, end: str) -> str:
+    """各組合的累積損益曲線（依出場日；每次買進 1 單位）。第一條（目前設定）加粗。"""
+    from .dates import to_date
+    series = [(r["name"], r.get("equity") or []) for r in results]
+    vals = [v for _, e in series for _, v in e]
+    if not vals:
+        return '<p class="sm">沒有交易。</p>'
+    W, H, L, R, T, B = 1000, 340, 64, 14, 14, 26
+    lo, hi = min(0.0, *vals), max(0.0, *vals)
+    pad = (hi - lo) * .06 or 1
+    lo, hi = lo - pad, hi + pad
+    a, z = to_date(start), to_date(end)
+    span = max(1, (z - a).days)
+    X = lambda d: L + (to_date(d) - a).days / span * (W - L - R)  # noqa: E731
+    Y = lambda v: T + (hi - v) / (hi - lo) * (H - T - B)          # noqa: E731
+    g = []
+    step = 10 ** int(f"{(hi - lo) / 4:e}".split("e")[1])
+    for m in (1, 2, 5, 10):
+        if (hi - lo) / (step * m) <= 6:
+            step *= m
+            break
+    v = (lo // step + 1) * step
+    while v < hi:
+        g.append(f'<line x1="{L}" x2="{W - R}" y1="{Y(v):.1f}" y2="{Y(v):.1f}" stroke="#e6eaef"/>'
+                 f'<text x="{L - 6}" y="{Y(v) + 4:.1f}" text-anchor="end" class="ax">{v:g}</text>')
+        v += step
+    g.append(f'<line x1="{L}" x2="{W - R}" y1="{Y(0):.1f}" y2="{Y(0):.1f}" stroke="#90a4ae"/>')
+    y0, m0 = a.year, a.month
+    while (y0, m0) <= (z.year, z.month):
+        d = f"{y0}{m0:02d}01"
+        if start <= d <= end and m0 in (1, 4, 7, 10):
+            g.append(f'<text x="{X(d):.1f}" y="{H - 8}" text-anchor="middle" class="ax">{y0 % 100:02d}/{m0:02d}</text>')
+        m0 += 1
+        if m0 > 12:
+            y0, m0 = y0 + 1, 1
+    if start < split <= end:
+        g.append(f'<line x1="{X(split):.1f}" x2="{X(split):.1f}" y1="{T}" y2="{H - B}" stroke="#90a4ae" stroke-dasharray="4 3"/>'
+                 f'<text x="{X(split) + 4:.1f}" y="{T + 10}" class="ax">樣本外 →</text>')
+    legend = []
+    for i, (name, e) in enumerate(series):
+        if not e:
+            continue
+        c, w = PALETTE[i % len(PALETTE)], 2.6 if i == 0 else 1.4
+        pts = f"{X(start):.1f},{Y(0):.1f} " + " ".join(f"{X(d):.1f},{Y(v):.1f}" for d, v in e)
+        g.append(f'<polyline points="{pts}" fill="none" stroke="{c}" stroke-width="{w}" opacity="{1 if i == 0 else .75}"/>')
+        legend.append(f'<span><i style="background:{c};height:{4 if i == 0 else 2}px"></i>{_e(name)}（{e[-1][1]:+.1f}）</span>')
+    return (f'<svg viewBox="0 0 {W} {H}" style="width:100%;height:auto">{"".join(g)}</svg>'
+            f'<div class="lg">{"".join(legend)}</div>')
+
+
 def render(res: dict) -> str:
     cfg, cov = res["config"], res["coverage"]
     r0 = res["results"][0]
@@ -201,7 +254,8 @@ section{{background:#fff;border:1px solid #dde3ea;border-radius:10px;padding:14p
 th{{background:#f0f3f7;font-weight:600}} td.num{{text-align:right;font-variant-numeric:tabular-nums}} .sm{{font-size:11px;color:#6b7785}}
 .up{{color:#c62828}} .down{{color:#2e7d32}} .good{{background:#fdecea;font-weight:600}} .bad{{background:#e8f5e9}} .muted{{color:#6b7785}}
 .kv{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px}} .kv div{{background:#f7f9fb;border-radius:8px;padding:8px}}
-.kv b{{display:block;font-size:18px}} li{{margin:4px 0}} @media print{{body{{background:#fff}} section{{break-inside:avoid}}}}
+.kv b{{display:block;font-size:18px}} li{{margin:4px 0}} .ax{{font-size:11px;fill:#6b7785}}
+.lg{{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:12px;margin-top:6px}} .lg i{{display:inline-block;width:18px;vertical-align:middle;margin-right:5px}} @media print{{body{{background:#fff}} section{{break-inside:avoid}}}}
 </style></head><body><main>
 <h1>右側加碼雷達：回溯分析</h1>
 <div class="muted">期間 {_d(cfg['start'])}～{_d(cfg['end'])}；{_d(cfg['split'])} 起為樣本外。股票池：{_e('每季依前 60 日成交金額排名（上市前 50＝大型、51～150＝中型、上櫃前 50＝上櫃）＋觀察清單' if cfg['universe'] == 'auto' else cfg['universe'])}。</div>
@@ -234,7 +288,10 @@ th{{background:#f0f3f7;font-weight:600}} td.num{{text-align:right;font-variant-n
 </section>
 
 <h2>規則與參數對照</h2><section>
-<div class="tw"><table><tr><th rowspan=2>組合</th><th colspan=5>樣本內</th><th colspan=5>樣本外</th></tr>
+<h3>累積損益（資金曲線）</h3>
+<p class="sm">依出場日累加每筆交易的損益；每次買進投入 1 單位，所以縱軸是「賺了幾個單位」。曲線下彎的段落就是虧損期，越平穩越好。粗線是目前設定，括號內是期末累積損益。</p>
+{_equity_svg(res["results"], cfg["split"], cfg["start"], cfg["end"])}
+<div class="tw" style="margin-top:12px"><table><tr><th rowspan=2>組合</th><th colspan=5>樣本內</th><th colspan=5>樣本外</th></tr>
 <tr><th>筆數</th><th>平均報酬</th><th>勝率</th><th>獲利因子</th><th>最大回落</th><th>筆數</th><th>平均報酬</th><th>勝率</th><th>獲利因子</th><th>最大回落</th></tr>
 {variants}</table></div><p class="sm">選參數時以樣本外為準，並優先選「相鄰數值表現也接近」的參數，避免只是配合過去走勢。</p></section>
 

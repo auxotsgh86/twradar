@@ -348,6 +348,18 @@ def simulate(hist: History, code: str, dates: list[str], universe: dict, P: dict
     return trades
 
 
+def equity_curve(trades: list[dict]) -> list[list]:
+    """累積損益（依出場日加總；每次買進投入 1 單位）：[[日期, 累積損益], ...]。"""
+    by: dict[str, float] = {}
+    for t in trades:
+        by[t["exit"]] = by.get(t["exit"], 0.0) + t["pnl"]
+    out, acc = [], 0.0
+    for d in sorted(by):
+        acc += by[d]
+        out.append([d, round(acc, 3)])
+    return out
+
+
 def _close(pos: Position, d: str, reason: str) -> dict:
     from .dates import to_date
     ret = (pos.proceeds / pos.invested - 1) * 100 if pos.invested else 0.0
@@ -474,7 +486,7 @@ def run(db: DB, settings: dict, cfg: BTConfig, progress=None) -> dict:
             trades += simulate(hist, code, dates, universe, P, S, cfg, rec_cache, events, regimes)
             if progress:
                 progress(vi, len(cfg.variants), ci + 1, len(codes))
-        res = {"name": name, "params": over, "trades": summarize_trades(trades, cfg.split),
+        res = {"name": name, "params": over, "trades": summarize_trades(trades, cfg.split), "equity": equity_curve(trades),
                "byMonth": {m: summarize_trades([t for t in trades if t["entry"][:6] == m], "99999999")["全期"]
                            for m in sorted({t["entry"][:6] for t in trades})}}
         if vi == 0 and cfg.study:

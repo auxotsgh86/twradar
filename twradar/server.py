@@ -335,6 +335,28 @@ class App:
                             "value": ov.get(p["id"], p["value"]), "source": "label" if p["id"] in ov else "default"}
                            for p in S["params"]]}
 
+    def stock_trades(self, code: str, days: int = 120) -> dict | None:
+        """用目前規則（含這檔的策略標籤）模擬近 days 個交易日：如果完全照訊號操作，會在哪裡買、在哪裡賣。
+        和回溯分析同一套模擬：訊號隔日開盤執行、加碼最多 2 次、減碼賣一半、退場全賣，扣手續費與證交稅。"""
+        from .backtest import BTConfig, History, simulate
+        S = self.settings.get()
+        w = self._stock_for(S, code)
+        if not w:
+            return None
+        trading = [r["date"] for r in self.db.q("SELECT date FROM market WHERE taiex IS NOT NULL ORDER BY date")]
+        if len(trading) < 30:
+            return {"code": code, "trades": []}
+        days = max(20, min(int(days), 500))
+        dates = trading[-days:]
+        since = trading[max(0, len(trading) - days - 160)]
+        R = rules_of(self.settings)
+        Pw, Sw, strat = L.resolve(S, w, R)
+        hist = History(self.db, [code], dates[-1], since)
+        cfg = BTConfig(start=dates[0], end=dates[-1], split=dates[-1])
+        trades = simulate(hist, code, dates, {d: {code: {"個股"}} for d in dates}, Pw, Sw, cfg, {}, None, {})
+        return {"code": code, "from": dates[0], "to": dates[-1], "strategy": strat,
+                "trades": [{k: t[k] for k in ("entry", "exit", "rule", "reason", "ret", "adds", "reduced", "days")} for t in trades]}
+
     def stock_trial(self, code: str, labels: list[str] | None = None) -> dict | None:
         """用最近一個交易日的資料試算，逐條列出條件是否成立。"""
         S = self.settings.get()
@@ -725,6 +747,14 @@ def make_handler(app: App):
                         else [] if re.search(r"[?&]labels=(&|$)", self.path) else None)
                 out = app.stock_rules(code, labs) if parts[2] == "rules" else app.stock_trial(code, labs)
                 return self.json(out) if out else self.err(404, f"{code} 不在觀察清單，或還沒有資料")
+
+            if head == "stocks" and len(parts) == 3 and parts[2] == "trades" and method == "GET":
+                try:
+                    n = int((qs.get("days") or ["120"])[0])
+                except ValueError:
+                    return self.err(400, "days 必須是數字")
+                out = app.stock_trades(parts[1].upper(), n)
+                return self.json(out) if out is not None else self.err(404, "找不到這檔股票")
 
             if head == "stocks" and len(parts) >= 3 and parts[2] == "history" and method == "GET":
                 code = parts[1].upper()

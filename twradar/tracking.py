@@ -208,9 +208,10 @@ def summary(db: DB, window: int = WINDOW) -> dict:
         wk["signals"] += r["n"]
         wk["dates"].append(r["date"])
     weekly = []
-    for wk, v in sorted(weeks.items())[-8:]:
+    for wk, v in sorted(weeks.items())[-26:]:
         b = _block(ex.get("上車", {}), v["dates"], 5)
-        weekly.append({"week": wk, "signals": v["signals"], "matured": b.get("n", 0), "excess5": b.get("excess")})
+        weekly.append({"week": wk, "from": v["dates"][0], "signals": v["signals"], "matured": b.get("n", 0),
+                       "excess5": b.get("excess"), "se5": b.get("se")})
     versions = [dict(r) for r in db.q("SELECT version, MIN(date) AS since, MAX(date) AS until, COUNT(*) AS n "
                                       "FROM track GROUP BY version ORDER BY since")]
     return {"status": status, "text": text, "since": first["a"], "latest": first["b"], "rows": first["n"],
@@ -223,4 +224,5 @@ def summary(db: DB, window: int = WINDOW) -> dict:
 def brief(db: DB) -> dict:
     """給晨報的一行。"""
     s = cached(db)
-    return {"status": s["status"], "text": s["text"]}
+    past = ((s.get("kinds") or {}).get("上車") or {}).get("past", {}).get("f5", {})
+    return {"status": s["status"], "text": s["text"], "weekly": s.get("weekly") or [], "pastExcess5": past.get("excess")}

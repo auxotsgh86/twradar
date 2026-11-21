@@ -1359,7 +1359,7 @@ class BacktestTests(unittest.TestCase):
         self.assertIn("全期", summary["trades"])
         self.assertEqual(code, 0, buf.getvalue())
         html_ = (out / "report.html").read_text(encoding="utf-8")
-        for k in ("回溯分析", "進場訊號", "規則與參數對照", "profitTargetPct=8", "條件研究", "全市場掃描驗證", "注意事項"):
+        for k in ("回溯分析", "進場訊號", "規則與參數對照", "profitTargetPct=8", "條件研究", "全市場掃描驗證", "注意事項", "累積損益（資金曲線）"):
             self.assertIn(k, html_)
         res = json.loads((out / "result.json").read_text(encoding="utf-8"))
         self.assertEqual(len(res["results"]), 5)
@@ -1994,6 +1994,10 @@ class MacroTests(unittest.TestCase):
         self.assertEqual(f["series"]["futForeign"][-1], -90000 + 29 * 100)
         self.assertTrue(all(len(v) == 8 for v in f["series"].values()))
         self.assertIn("foreignState", f["climate"])
+        t = App(cfg, db, st, start_background=False).stock_trades("2330", 20)
+        self.assertEqual(t["code"], "2330")
+        self.assertIsInstance(t["trades"], list)
+        self.assertIsNone(App(cfg, db, st, start_background=False).stock_trades("9999", 20))
 
 
 class TdccHistoryTests(unittest.TestCase):

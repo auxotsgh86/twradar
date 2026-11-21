@@ -164,7 +164,7 @@ function niceTicks(min, max, n = 4) {
   for (let v = Math.ceil(min / step) * step; v <= max + 1e-9; v += step) out.push(+v.toFixed(10));
   return out;
 }
-function lineChart(labels, series, {h = 220, bars = null} = {}) {
+function lineChart(labels, series, {h = 220, bars = null, marks = []} = {}) {
   const W = 760, L = 56, R = 12, T = 10, B = 24, ch = h - T - B - (bars ? 50 : 0);
   const all = series.flatMap(s => s.values).filter(isNum); if (!all.length) return `<div class="empty">沒有資料</div>`;
   let lo = Math.min(...all), hi = Math.max(...all); const pad = (hi - lo) * .06 || 1; lo -= pad; hi += pad;
@@ -176,6 +176,13 @@ function lineChart(labels, series, {h = 220, bars = null} = {}) {
     let p = "", on = false; s.values.forEach((v, i) => { if (isNum(v)) { p += (on ? "L" : "M") + x(i).toFixed(1) + "," + y(v).toFixed(1); on = true; } else on = false; });
     g += `<path d="${p}" fill="none" stroke="${s.color}" stroke-width="${s.width || 1.6}"/>`;
     const li = s.values.map(isNum).lastIndexOf(true); if (li >= 0 && s.dot) g += `<circle cx="${x(li)}" cy="${y(s.values[li])}" r="3.5" fill="${s.color}"/>`;
+  }
+  for (const m of marks) {   // 買賣點：▲ 買進（收盤下方）、▼ 賣出（收盤上方）
+    const v = series[0].values[m.i]; if (!isNum(v)) continue;
+    const cx = x(m.i), cy = y(v), buy = m.kind === "buy", col = buy ? "var(--up)" : m.win ? "var(--up)" : "var(--down)";
+    const p = buy ? `${cx},${cy + 8} ${cx - 6},${cy + 18} ${cx + 6},${cy + 18}` : `${cx},${cy - 8} ${cx - 6},${cy - 18} ${cx + 6},${cy - 18}`;
+    g += `<polygon points="${p}" fill="${buy ? "var(--up)" : col}" stroke="var(--surface)" stroke-width="1"><title>${esc(m.title)}</title></polygon>`;
+    if (m.label) g += `<text x="${cx}" y="${buy ? cy + 30 : cy - 22}" text-anchor="middle" style="fill:${buy ? "var(--up)" : col};font-weight:700">${esc(m.label)}</text>`;
   }
   if (bars) {
     const top = T + ch + 10, bh = 40, mx = Math.max(...bars.filter(isNum), 1), bw = Math.max(1, (W - L - R) / labels.length * .7);
@@ -359,9 +366,28 @@ async function viewHome(date) {
 }
 
 /* ---------- 頁面：個股 ---------- */
+/* 個股頁：用目前規則模擬的買賣點 */
+function tradeMarks(L, tr) {
+  if (!tr || !tr.trades) return [];
+  const idx = d => L.indexOf(`${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6)}`), out = [];
+  for (const t of tr.trades) {
+    const a = idx(t.entry), b = idx(t.exit), open = t.reason === "期末未平倉";
+    if (a >= 0) out.push({i: a, kind: "buy", label: "買", title: `${t.entry} 買進（${t.rule}）`});
+    if (b >= 0 && !open) out.push({i: b, kind: "sell", win: t.ret > 0, label: "賣", title: `${t.exit} 賣出：${t.reason}，報酬 ${fmtS(t.ret, 1)}%`});
+  }
+  return out;
+}
+function tradesHTML(tr) {
+  if (!tr) return "";
+  const ymd = d => `${d.slice(4, 6)}/${d.slice(6)}`;
+  const note = `<div class="small muted">▲買／▼賣：用目前規則${tr.strategy ? `（策略「${esc(tr.strategy)}」）` : ""}模擬，假設這段期間完全照訊號操作：訊號隔日開盤買進、最多加碼 2 次、退場全賣，扣手續費與證交稅。和你實際的買賣無關。</div>`;
+  if (!tr.trades.length) return note + `<div class="small">這段期間沒有出現買進訊號。</div>`;
+  return note + `<div class="tablewrap" style="margin-top:6px"><table class="sortable" data-sort="stocktrades"><thead><tr><th class="l">買進</th><th class="l">賣出</th><th class="l">進場規則</th><th class="l">出場原因</th><th>加碼</th><th>天數</th><th>報酬</th></tr></thead><tbody>
+    ${tr.trades.map(t => `<tr><td class="l num">${ymd(t.entry)}</td><td class="l num">${t.reason === "期末未平倉" ? "持有中" : ymd(t.exit)}</td><td class="l">${esc(t.rule || "")}</td><td class="l">${t.reason === "期末未平倉" ? "—" : esc(t.reason)}</td><td class="num">${t.adds}</td><td class="num">${t.days}</td><td class="num ${cls(t.ret)}">${fmtS(t.ret, 1)}%</td></tr>`).join("")}</tbody></table></div>`;
+}
 async function viewStock(code) {
   const days = 120;
-  const h = await api(`/stocks/${code}/history?days=${days}`);
+  const [h, tr] = await Promise.all([api(`/stocks/${code}/history?days=${days}`), api(`/stocks/${code}/trades?days=${days}`).catch(() => null)]);
   const rows = h.rows, L = rows.map(r => r.date), last = rows[rows.length - 1] || {};
   const r60 = rows.slice(-60), L60 = r60.map(r => r.date), g = h.signal;
   const back = (document.referrer || "").includes("#/scan") || sessionStorage.getItem("twradar-from") === "scan" ? "#/scan" : "#/";
@@ -371,8 +397,9 @@ async function viewStock(code) {
    ${g ? `<section class="panel" style="display:flex;flex-direction:column;gap:6px"><div class="row">${badge(g.light, g.lightLabel)}${g.hold ? `<button type="button" class="linkish" data-hold="${esc(code)}" title="調整持股">${badge(g.hold.light)}</button>` : ""}<span class="small muted">雷達判定（資料日 ${esc(h.date || "")}${h.inWatchlist ? "" : "，不在觀察清單，以未持有、全域預設規則判定"}${g.rule ? "・" + esc(g.rule) : ""}）</span></div>
      ${g.needs && g.needs.length ? `<div class="small"><b>還差：</b>${esc(g.needs.join("；"))}</div>` : ""}${g.warnings && g.warnings.length ? `<div class="small"><b>原因：</b>${esc(g.warnings.join("；"))}</div>` : ""}
      ${g.missing && g.missing.length ? `<div class="small muted">未取得：${esc(g.missing.join("、"))}${h.inWatchlist ? "" : "（集保大戶、散戶資料只抓觀察清單的股票）"}</div>` : ""}</section>` : ""}
-   <section class="panel"><div class="row between"><h2>收盤價與均線（近 ${rows.length} 日）</h2><div class="legend"><span><i style="background:var(--fg)"></i>收盤</span><span><i style="background:var(--c-ma20)"></i>月線 MA20</span><span><i style="background:var(--c-ma60)"></i>季線 MA60</span></div></div>
-    ${lineChart(L, [{values: rows.map(r => r.close), color: "var(--fg)", width: 2, dot: true}, {values: rows.map(r => r.ma20), color: "var(--c-ma20)"}, {values: rows.map(r => r.ma60), color: "var(--c-ma60)"}], {h: 300, bars: rows.map(r => r.volume)})}</section>
+   <section class="panel"><div class="row between"><h2>收盤價、均線與模擬買賣點（近 ${rows.length} 日）</h2><div class="legend"><span><i style="background:var(--fg)"></i>收盤</span><span><i style="background:var(--c-ma20)"></i>月線 MA20</span><span><i style="background:var(--c-ma60)"></i>季線 MA60</span></div></div>
+    ${lineChart(L, [{values: rows.map(r => r.close), color: "var(--fg)", width: 2, dot: true}, {values: rows.map(r => r.ma20), color: "var(--c-ma20)"}, {values: rows.map(r => r.ma60), color: "var(--c-ma60)"}], {h: 320, bars: rows.map(r => r.volume), marks: tradeMarks(L, tr)})}
+    ${tradesHTML(tr)}</section>
    <section class="panel"><div class="row between"><h2>外資／投信買賣超（張，近 60 日）</h2><div class="legend"><span><i style="background:var(--c-foreign)"></i>外資</span><span><i style="background:var(--c-trust)"></i>投信</span></div></div>
     ${divBars(L60, [{values: r60.map(r => r.foreign), color: "var(--c-foreign)"}, {values: r60.map(r => r.trust), color: "var(--c-trust)"}])}</section>
    <section class="panel"><h2>融資餘額（張，近 60 日）</h2>${lineChart(L60, [{values: r60.map(r => r.marginBal), color: "var(--accent)", dot: true}], {h: 180})}</section>
@@ -391,6 +418,27 @@ function holdSec(st) {
     return `<p style="margin:8px 0"><button type="button" class="linkish" data-hold="${esc(s.code)}" title="調整持股">${badge(h.light)}</button> <b>${esc(s.code)} ${esc(s.name)}</b> <button type="button" class="linkish small no-print" data-hold="${esc(s.code)}">調整持股</button>　收 ${fmt(r.close, pd(r.close))}（<span class="${cls(r.chgPct)}">${fmtP(r.chgPct)}</span>）<br><span class="muted">${esc(holdLine(h) || "—")}</span></p>`; }).join("")}</div>`;
 }
 const REPORT_DAYS = 60;
+/* 模型追蹤：每週上車訊號的 5 日超額報酬（已滿 5 日者），對照過去平均 */
+function modelWeeklyHTML(m) {
+  const w = ((m || {}).weekly || []).filter(x => x.signals);
+  if (w.length < 2) return "";
+  const vals = w.map(x => isNum(x.excess5) ? x.excess5 : null), past = m.pastExcess5;
+  const W = FW || 1000, L = 56, R = 12, T = 12, B = 40, H = 210, ch = H - T - B;
+  const all = [...vals.filter(isNum), ...(isNum(past) ? [past] : []), 0], mx = Math.max(...all.map(Math.abs), .5) * 1.15;
+  const y = v => T + ch / 2 - v / mx * ch / 2, slot = (W - L - R) / w.length, bw = slot * .6;
+  let g = `<line x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}" stroke="var(--muted)"/>`;
+  g += [mx * .8, -mx * .8].map(v => `<text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${fmtS(v, 1)}%</text>`).join("");
+  w.forEach((x, i) => { const cx = L + i * slot + slot / 2, v = vals[i];
+    if (isNum(v)) g += `<rect x="${cx - bw / 2}" y="${Math.min(y(v), y(0))}" width="${bw}" height="${Math.max(1, Math.abs(y(v) - y(0)))}" fill="var(${v >= 0 ? "--up" : "--down"})" opacity=".85"><title>${esc(x.week)}：${fmtS(v, 2)}%（${x.matured} 筆已滿 5 日）</title></rect>`;
+    else g += `<text x="${cx}" y="${y(0) - 4}" text-anchor="middle">…</text>`;
+    if (i % Math.max(1, Math.ceil(w.length / 9)) === 0) g += `<text x="${cx}" y="${H - 22}" text-anchor="middle">${x.from ? x.from.slice(4, 6) + "/" + x.from.slice(6) : x.week}</text>`;
+    g += `<text x="${cx}" y="${H - 6}" text-anchor="middle" style="font-size:10px">${x.signals}</text>`; });
+  if (isNum(past)) g += `<line x1="${L}" x2="${W - R}" y1="${y(past)}" y2="${y(past)}" stroke="var(--accent)" stroke-dasharray="6 4"/><text x="${W - R}" y="${y(past) - 4}" text-anchor="end" style="fill:var(--accent)">過去平均 ${fmtS(past, 2)}%</text>`;
+  return `<div class="sec"><h2>模型追蹤：每週上車訊號的表現</h2>
+    <div class="small muted">長條＝那一週上車訊號買進後 5 個交易日的超額報酬（比同組股票平均多賺幾 %），紅＝比平均好、綠＝比平均差；虛線＝過去的平均。
+    下方數字是當週訊號筆數；「…」表示還沒滿 5 日。連續幾週明顯低於虛線，代表規則最近不太靈。</div>
+    <svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="每週上車訊號表現">${g}</svg></div>`;
+}
 /* 離線報表：把目前的報表連同樣式存成一個 HTML 檔，沒有網路也能打開 */
 async function downloadOffline(d) {
   const css = await fetch("app.css", {cache: "no-store"}).then(r => r.text()).catch(() => "");
@@ -437,6 +485,7 @@ async function viewReport(date) {
     ${holdSec(st)}${sec("go", "上車／加碼訊號")}${sec("wait", "觀察中")}${sec("stop", "轉弱／不宜加碼")}${sec("na", "資料不足")}
     <div class="sec"><h2>精簡表</h2>${tableHTML(st)}</div>
     ${e.model ? `<div class="small ${e.model.status === "偏離" ? "" : "muted"}" style="margin:8px 0">${e.model.status === "偏離" ? "⚠ " : ""}模型追蹤：${esc(e.model.status)}。${esc(e.model.text)}</div>` : ""}
+    ${modelWeeklyHTML(e.model)}
     <div class="sec glossary"><h2>名詞說明</h2><dl>${[["外資買賣超", "foreign"], ["投信買賣超", "trust"], ["自營商買賣超", "dealer"], ["外資態度", "attitude"],
       ["外資現貨 5 日", "spot5"], ["外資台指期淨空單", "fut"], ["美元兌新台幣", "fx"], ["市場廣度（短期）", "breadth"], ["長期廣度", "breadth200"]].map(([k, t]) => `<dt>${k}</dt><dd>${esc(TIPS[t])}</dd>`).join("")}
       <dt>其他本土（差額）</dt><dd>三大法人合計的反向，是推算出來的；證交所沒有公布是誰，推測包括公股行庫與國安基金、壽險、企業與大股東，以及用現股買賣的散戶。</dd>
