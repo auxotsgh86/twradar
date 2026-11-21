@@ -98,6 +98,11 @@ def fetch(db: DB, transport, start: str, end: str, series=("taiex", "0050", "tr"
             except FetchError as e:
                 fail += 1
                 log(f"{SERIES[s][0]} {m[:6]}：{e}")
+                if e.kind == "blocked":   # 被證交所暫時封鎖：立刻停，繼續打只會封更久
+                    stats[s] = {"fetched": got, "skipped": skip, "failed": fail, "blocked": True,
+                                "days": db.one("SELECT COUNT(*) AS n FROM long_px WHERE series=?", (s,))["n"]}
+                    stats["blocked"] = m[:6]
+                    return stats
                 continue
             with db.tx() as c:
                 c.executemany("INSERT OR REPLACE INTO long_px(series,date,open,high,low,close,change) VALUES(?,?,?,?,?,?,?)",

@@ -207,8 +207,13 @@ def run_long_history(cfg, args) -> int:
     series = tuple(x for x in args.series.split(",") if x)
     print(f"抓 {','.join(series)}：{args.start[:6]}～{end[:6]}，每個請求間隔 {args.interval} 秒", flush=True)
     st = fetch(db, Fetcher(args.interval, cfg.user_agent), args.start, end, series)
+    blocked = st.pop("blocked", None)
     for k, v in st.items():
         print(f"{k}：新抓 {v['fetched']} 個月、略過 {v['skipped']}、失敗 {v['failed']}，資料庫共 {v['days']} 天")
+    if blocked:
+        print(f"\n抓到 {blocked} 時被證交所暫時封鎖，已停止。請等 30～60 分鐘後再執行同一個指令，"
+              "已抓的月份會跳過；可以加 --interval 12 放慢。")
+        return 2
     return 0
 
 
@@ -429,7 +434,7 @@ def main(argv=None) -> None:
     lh.add_argument("--start", default="20080101", help="開始月份（預設 20080101）")
     lh.add_argument("--end", help="結束日（預設：今天）")
     lh.add_argument("--series", default="taiex,0050,tr", help="taiex、0050、tr（逗號分隔）")
-    lh.add_argument("--interval", type=float, default=3.0, help="每個請求間隔秒數（預設 3）")
+    lh.add_argument("--interval", type=float, default=8.0, help="每個請求間隔秒數（預設 8；太快會被證交所暫時封鎖）")
     ts = sub.add_parser("timing-study", help="長期歷史上比較「抱 0050、大盤空頭時空手」各種規則")
     ts.add_argument("--start", help="開始日（預設：資料最早一天）")
     ts.add_argument("--asset", default="0050,tr", help="0050、tr（逗號分隔）")
