@@ -2084,6 +2084,42 @@ class MacroTests(unittest.TestCase):
         self.assertIsNone(App(cfg, db, st, start_background=False).stock_trades("9999", 20))
 
 
+class LongHistoryTests(unittest.TestCase):
+    def test_parse(self):
+        from twradar.longhist import parse
+        idx = {"stat": "OK", "fields": ["日期", "開盤指數", "最高指數", "最低指數", "收盤指數"],
+               "data": [["97/01/02", "8,491.24", "8,520.00", "8,300.11", "8,323.05"]]}
+        self.assertEqual(parse("taiex", idx)[0]["close"], 8323.05)
+        self.assertEqual(parse("taiex", idx)[0]["date"], "20080102")
+        sd = {"stat": "OK", "fields": ["日期", "成交股數", "成交金額", "開盤價", "最高價", "最低價", "收盤價", "漲跌價差", "成交筆數"],
+              "data": [["114/06/18", "1", "1", "47.00", "47.50", "46.80", "47.10", "+0.35", "1"],
+                       ["114/06/19", "1", "1", "47.00", "47.50", "46.80", "46.90", "-0.20", "1"],
+                       ["114/07/17", "1", "1", "47.00", "47.50", "46.80", "46.90", "X0.00", "1"]]}
+        rows = parse("0050", sd)
+        self.assertEqual([r["change"] for r in rows], [0.35, -0.2, None])
+        self.assertEqual(parse("0050", {"stat": "很抱歉，沒有符合條件的資料!"}), [])
+
+    def test_adjust_and_study(self):
+        from twradar.longhist import adjusted, bear_flags, simulate, stats
+        rows = [{"date": f"2008{m:02d}{d:02d}", "open": 100.0, "high": 100.0, "low": 100.0, "close": 100.0, "change": 0.0}
+                for m in (1, 2) for d in range(1, 11)]
+        rows[10] = {**rows[10], "open": 25, "close": 25.0, "change": 0.0}            # 1 拆 4
+        for r in rows[11:]:
+            r.update(open=25.0, close=25.0)
+        adj = adjusted(rows)
+        self.assertAlmostEqual(adj[0]["close"], 25.0)
+        tx = [{"date": f"d{i:03d}", "close": 100 + (i if i < 60 else 120 - i * 1.0)} for i in range(120)]
+        f = bear_flags(tx)
+        self.assertFalse(any(f["空頭（跌破下彎月線）"][:60]))
+        self.assertTrue(f["空頭（跌破下彎月線）"][-1])
+        self.assertTrue(f["空頭連 2 日"][-1])
+        asset = [{"date": r["date"], "open": r["close"], "close": r["close"]} for r in tx]
+        hold = simulate(asset, [r["date"] for r in tx], [False] * 120, fee=0, tax=0)
+        timed = simulate(asset, [r["date"] for r in tx], f["空頭（跌破下彎月線）"], fee=0, tax=0)
+        self.assertGreater(timed["curve"][-1][1], hold["curve"][-1][1])     # 跌段有躲掉
+        self.assertEqual(hold["switches"], 1)
+
+
 class TdccHistoryTests(unittest.TestCase):
     WEEKS = ["20261113", "20261106", "20261030", "20251121"]
 

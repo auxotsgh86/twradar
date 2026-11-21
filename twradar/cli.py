@@ -197,6 +197,44 @@ def run_macro_history(cfg, args) -> int:
     return 0
 
 
+def run_long_history(cfg, args) -> int:
+    """長期歷史（加權指數、0050、加權報酬指數），一個月一個請求，可中斷續跑。"""
+    from .config import now_tw
+    from .longhist import fetch
+    from .net import Fetcher
+    db, _ = open_all(cfg)
+    end = args.end or now_tw().strftime("%Y%m%d")
+    series = tuple(x for x in args.series.split(",") if x)
+    print(f"抓 {','.join(series)}：{args.start[:6]}～{end[:6]}，每個請求間隔 {args.interval} 秒", flush=True)
+    st = fetch(db, Fetcher(args.interval, cfg.user_agent), args.start, end, series)
+    for k, v in st.items():
+        print(f"{k}：新抓 {v['fetched']} 個月、略過 {v['skipped']}、失敗 {v['failed']}，資料庫共 {v['days']} 天")
+    return 0
+
+
+def run_timing_study(cfg, args) -> int:
+    """長期歷史上比較「抱 0050、大盤空頭時空手」各種規則與一直抱著。"""
+    from .longhist import study
+    db, _ = open_all(cfg)
+    for asset in args.asset.split(","):
+        r = study(db, args.start or "", asset)
+        if "error" in r:
+            print(r["error"])
+            continue
+        print(f"\n== {'0050（還原除息，開盤成交）' if asset == '0050' else '加權報酬指數（含息，收盤成交）'}：{r['start']}～{r['end']}，{r['days']} 個交易日")
+        print(f"{'規則':<22}{'總報酬':>10}{'年化':>8}{'最大回落':>9}{'進出':>6}{'持有':>7}")
+        for k, v in r["rules"].items():
+            print(f"{k:<22}{v.get('total', 0):>9}%{v.get('cagr', 0):>7}%{v.get('maxDD', 0):>8}%{v.get('switches', 0):>6}{v.get('exposure', 0):>6}%")
+        if args.years:
+            ys = sorted(r["rules"]["一直抱著"]["years"])
+            names = list(r["rules"])
+            print("\n年度報酬（%）：" + "、".join(f"{i}＝{n}" for i, n in enumerate(names)))
+            print("年    " + "".join(f"{i:>7}" for i in range(len(names))))
+            for y in ys:
+                print(y + "  " + "".join(f"{r['rules'][n]['years'].get(y, 0):>7}" for n in names))
+    return 0
+
+
 def run_holders_history(cfg, args) -> int:
     import time as _t
 
@@ -387,6 +425,15 @@ def main(argv=None) -> None:
     hh.add_argument("--codes", default="universe", help="universe（回溯股票池＋觀察清單，預設）、watchlist，或逗號分隔代號")
     hh.add_argument("--weeks", type=int, default=0, help="只抓最近幾週（0＝查詢頁上全部）")
     hh.add_argument("--interval", type=float, default=3.0, help="每次查詢間隔秒數（預設 3；太短可能被封鎖）")
+    lh = sub.add_parser("long-history", help="長期歷史：加權指數、0050、加權報酬指數（驗證大盤進出規則用）")
+    lh.add_argument("--start", default="20080101", help="開始月份（預設 20080101）")
+    lh.add_argument("--end", help="結束日（預設：今天）")
+    lh.add_argument("--series", default="taiex,0050,tr", help="taiex、0050、tr（逗號分隔）")
+    lh.add_argument("--interval", type=float, default=3.0, help="每個請求間隔秒數（預設 3）")
+    ts = sub.add_parser("timing-study", help="長期歷史上比較「抱 0050、大盤空頭時空手」各種規則")
+    ts.add_argument("--start", help="開始日（預設：資料最早一天）")
+    ts.add_argument("--asset", default="0050,tr", help="0050、tr（逗號分隔）")
+    ts.add_argument("--years", action="store_true", help="另外列出每年的報酬")
     mh = sub.add_parser("macro-history", help="大盤環境歷史：外資台指期、新台幣匯率（期交所）與市場廣度")
     mh.add_argument("--start", help="開始日（預設：資料庫第一個交易日）")
     mh.add_argument("--end", help="結束日（預設：今天）")
@@ -475,6 +522,10 @@ def main(argv=None) -> None:
         sys.exit(run_track(cfg, args))
     elif args.cmd == "holders-history":
         sys.exit(run_holders_history(cfg, args))
+    elif args.cmd == "long-history":
+        sys.exit(run_long_history(cfg, args))
+    elif args.cmd == "timing-study":
+        sys.exit(run_timing_study(cfg, args))
     elif args.cmd == "macro-history":
         sys.exit(run_macro_history(cfg, args))
     elif args.cmd == "alerts":
