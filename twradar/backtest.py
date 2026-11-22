@@ -373,7 +373,7 @@ def simulate(hist: History, code: str, dates: list[str], universe: dict, P: dict
 
 
 SLOTS = (5, 10, 20, 30, 50)   # 投資組合模擬：資金分成幾份
-RANKED = (20, 30, 50)         # 另外試「同一天訊號太多時，挑法人買超最強的」
+RANKED = (10, 20, 30, 50)     # 另外試「同一天訊號太多時，挑法人買超最強的」
 
 
 def _curve_stats(curve: list[tuple[str, float]], split: str) -> dict:
@@ -651,8 +651,9 @@ def run(db: DB, settings: dict, cfg: BTConfig, progress=None) -> dict:
         if vi == 0:
             full0 = {k: v.pop("full") for k, v in pf.items()}
             res["portfolio"] = pf
-        else:     # 對照組只留 10 份與 30 份排序的數字，不留曲線
-            res["portfolio"] = {k: {x: y for x, y in pf[k].items() if x not in ("curve", "full")} for k in ("10", "30排序")}
+        else:     # 對照組只留 10 份（代號順序）與 10／20／30 份排序的數字，不留曲線
+            res["portfolio"] = {k: {x: y for x, y in pf[k].items() if x not in ("curve", "full")}
+                                for k in ("10", "10排序", "20排序", "30排序")}
         if vi == 0 and cfg.study:
             from .study import condition_study
             res["conditions"] = condition_study(hist, dates, universe, P, S, cfg.split, rec_cache, regimes)
@@ -774,6 +775,7 @@ def _veto_ids(settings: dict) -> list[str]:
 
 def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
     """內建的規則對照組：
+    v08     v0.8 候選：v0.7 不加碼、A＋B 含／不加碼、A＋乾淨紅K、A＋不追高
     audit   個股訊號修復稽核（v0.6 為底）：v0.6 含／不加碼、Fix A～D、全修復含／不加碼
     neon    外部建議：不加碼、法人只看 5 日、轉買須力道、不追高、實體紅K、出貨警訊拿掉爆量長黑、多頭獲利出場放寬、全上
     largecap 大型權值股：停損放寬（3%、5%、不因法人賣超、連 2 日）、不追高（距月線 4%、6%）、盤整不進場（月線 10 日 1%、2%）
@@ -860,6 +862,14 @@ def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
             out.append(("Fix D：多頭同步放寬獲利出場", {"_playbooks": nb(**fd)}))
             out.append(("全修復（不加碼）", {"_playbooks": nb(**allf), "_maxAdds": 0}))
             out.append(("全修復（含加碼）", {"_playbooks": nb(**allf)}))
+        elif n == "v08":   # v0.8 候選：v0.7（Fix A）再加 Fix B（不追高＋乾淨紅K）
+            from .rules import neon_playbooks as nb
+            ab = dict(inst="5d", entry_extra=("biasMa5Ok",), quality="clean")
+            out.append(("v0.7（不加碼）", {"_maxAdds": 0}))
+            out.append(("A＋B（含加碼）", {"_playbooks": nb(**ab)}))
+            out.append(("A＋B（不加碼）", {"_playbooks": nb(**ab), "_maxAdds": 0}))
+            out.append(("A＋乾淨紅K（不加不追高）", {"_playbooks": nb(inst="5d", quality="clean")}))
+            out.append(("A＋不追高（不加乾淨紅K）", {"_playbooks": nb(inst="5d", entry_extra=("biasMa5Ok",))}))
         elif n == "neon":   # 外部建議：堵法人轉買後門、不追高、實體紅K、持有面少洗盤、不加碼對照
             from .rules import neon_playbooks as nb
             out.append(("不加碼（只看上車訊號）", {"_maxAdds": 0}))

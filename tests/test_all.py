@@ -1308,6 +1308,57 @@ class BacktestTests(unittest.TestCase):
                                                variants=[("不加碼", {"_maxAdds": 0})], study=False, scan=False))
         self.assertEqual(sum(t["adds"] for t in trades0["results"][0]["tradeList"]), 0)
 
+    def test_paper_portfolio(self):
+        """實盤追蹤：只往後記錄、隔天開盤成交、份數上限、已處理的日子不重算。"""
+        from twradar import paper
+        from twradar.analysis import evaluate
+        from twradar.backtest import History
+        S = self.st.get()
+        S = {**S, "watchlist": S["watchlist"]}
+        paper.reset(self.db)
+        try:
+            ds = self.dates[95:140]
+            self.assertEqual(paper.step(self.db, S, ds[0]), 1)         # 第一次：從這天開始
+            self.assertEqual(paper.step(self.db, S, ds[-1]), len(ds) - 1)   # 補上中間的日子
+            self.assertEqual(paper.step(self.db, S, ds[-1]), 0)        # 已處理過：不重算
+            nav = self.db.q("SELECT * FROM paper_nav WHERE book=10 ORDER BY date")
+            self.assertEqual([r["date"] for r in nav], ds)
+            self.assertAlmostEqual(nav[0]["equity"], 1.0)
+            for b in paper.BOOKS:
+                self.assertTrue(all(r["npos"] <= b for r in self.db.q("SELECT npos FROM paper_nav WHERE book=?", (b,))))
+            buys = self.db.q("SELECT * FROM paper_log WHERE side='買進' ORDER BY date")
+            self.assertTrue(buys, "測試資料應該要有買進")
+            P = {**DEFAULT_RULES, **{p["id"]: p["value"] for p in S["params"]}}
+            h = History(self.db, sorted({r["code"] for r in buys}), self.dates[-1])
+            for r in buys:
+                self.assertEqual(self.dates[self.dates.index(r["sig_date"]) + 1], r["date"])   # 隔天成交
+                raw = h.raw[r["code"]][r["date"]]
+                self.assertEqual(r["px"], raw["open"] or raw["close"])                          # 開盤價
+                self.assertEqual(evaluate(h.rec(r["code"], r["sig_date"], P), {"code": r["code"]}, P, S)["light"], "go")
+            first = [dict(x) for x in self.db.q("SELECT * FROM paper_nav ORDER BY book, date")]
+            s = paper.summary(self.db)
+            self.assertEqual({b["slots"] for b in s["books"]}, set(paper.BOOKS))
+            self.assertEqual(s["books"][0]["latest"], ds[-1])
+            # 之後再往前推，過去的紀錄不變
+            paper.step(self.db, S, self.dates[-1])
+            again = [dict(x) for x in self.db.q("SELECT * FROM paper_nav WHERE date<=? ORDER BY book, date", (ds[-1],))]
+            self.assertEqual(first, again)
+            # 賣出：2330 在高檔買進後一路下跌，應該會出場，隔天開盤賣出、資產回到現金
+            paper.reset(self.db)
+            d0 = self.dates[118]
+            with self.db.tx() as c:
+                c.execute("INSERT INTO paper_nav(book,date,equity,cash,npos,bench,version,cands) VALUES(10,?,1,0.9,1,1,'t',0)", (d0,))
+                c.execute("INSERT INTO paper_pos(book,code,entry_date,entry_px,alloc,score,rule,why,sig_date) "
+                          "VALUES(10,'2330',?,110,0.1,NULL,'上車','',?)", (d0, self.dates[117]))
+            paper.step(self.db, S, self.dates[-1], books=(10,))
+            sold = self.db.one("SELECT * FROM paper_log WHERE book=10 AND code='2330' AND side='賣出'")
+            self.assertIsNotNone(sold)
+            self.assertEqual(self.dates[self.dates.index(sold["sig_date"]) + 1], sold["date"])
+            self.assertLess(sold["ret"], 0)
+            self.assertIsNone(self.db.one("SELECT 1 AS x FROM paper_pos WHERE book=10 AND code='2330'"))
+        finally:
+            paper.reset(self.db)
+
     def test_tracking_record_and_forward(self):
         """模型追蹤：判定與報酬定義都和回溯分析一致；未滿期的報酬之後會回填；收盤分析後自動記錄。"""
         from twradar import tracking
@@ -1381,7 +1432,7 @@ class BacktestTests(unittest.TestCase):
             self.assertIn(k, html_)
         res = json.loads((out / "result.json").read_text(encoding="utf-8"))
         self.assertEqual(len(res["results"]), 5)
-        self.assertEqual(set(res["results"][0]["portfolio"]), {"5", "10", "20", "30", "50", "20排序", "30排序", "50排序"})
+        self.assertEqual(set(res["results"][0]["portfolio"]), {"5", "10", "20", "30", "50", "10排序", "20排序", "30排序", "50排序"})
         self.assertIn("加權指數", res["benchmarks"])
         self.assertIn("total", res["results"][1]["portfolio"]["10"])
         self.assertIn("total", res["results"][1]["portfolio"]["30排序"])
@@ -2043,6 +2094,14 @@ class MacroTests(unittest.TestCase):
         self.assertIn("redVolKClean", fb)
         self.assertIn("biasMa5Ok", fb)
         for o in vs.values():
+            apply_variant(default_settings(), o)
+        v8 = dict(preset_variants(["v08"], default_settings()))
+        self.assertEqual(len(v8), 5)
+        ab = _j.dumps(v8["A＋B（含加碼）"]["_playbooks"], ensure_ascii=False)
+        for cid in ("inst5dBuy", "redVolKClean", "biasMa5Ok"):
+            self.assertIn(cid, ab)
+        self.assertEqual(v8["A＋B（不加碼）"]["_maxAdds"], 0)
+        for o in v8.values():
             apply_variant(default_settings(), o)
 
     def test_portfolio(self):

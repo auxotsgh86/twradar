@@ -389,6 +389,31 @@ def run_track(cfg, args) -> int:
     return 0
 
 
+def run_paper(cfg, args) -> int:
+    from . import paper
+    from .dates import norm_date
+    db, st = open_all(cfg)
+    if args.reset:
+        if not args.yes:
+            print("--reset 會清掉所有實盤追蹤紀錄（無法復原），確定請加 --yes")
+            return 1
+        paper.reset(db)
+        print("已清除實盤追蹤紀錄；下一個交易日收盤後重新開始。")
+        return 0
+    if args.date:
+        d = norm_date(args.date)
+        print(f"處理到 {d}：{paper.step(db, st.get(), d)} 個交易日", flush=True)
+    s = paper.summary(db)
+    if not s["books"]:
+        print("實盤追蹤還沒開始：收盤分析完成後會自動從當天開始記錄（或用 --date 指定今天）。")
+        return 0
+    for b in s["books"]:
+        print(f"{b['slots']:>2} 份｜{b['start']}～{b['latest']}（{b['days']} 天）｜資產 {b['totalPct']:+.2f}%（回落 {b['maxDD']}%）"
+              f"｜0050 {b['benchPct'] if b['benchPct'] is not None else '—'}%（回落 {b['benchMaxDD']}%）"
+              f"｜持股 {b['npos']} 檔、現金 {b['cashPct']}%｜已出場 {b['closed']} 筆，勝率 {b['winPct']}%，平均 {b['avgRet']}%")
+    return 0
+
+
 def run_backtest(cfg, args) -> int:
     import csv
     from datetime import datetime
@@ -489,6 +514,10 @@ def main(argv=None) -> None:
     sc.add_argument("--top", type=int, default=20)
     tk = sub.add_parser("track", help="模型追蹤：補建過去的紀錄並更新摘要")
     tk.add_argument("--since", help="從這天（YYYYMMDD）起補建，預設只更新報酬與摘要")
+    pp = sub.add_parser("paper", help="實盤追蹤（紙上投資組合）：顯示成績；收盤分析後會自動往前記錄")
+    pp.add_argument("--date", help="手動處理到這天（YYYYMMDD）；第一次執行就從這天開始")
+    pp.add_argument("--reset", action="store_true", help="清除所有紀錄、重新開始")
+    pp.add_argument("--yes", action="store_true")
     bt = sub.add_parser("backtest", help="回溯分析")
     bt.add_argument("--start", help="開始日（預設：資料庫最後一天往前約兩年，至少保留 61 天暖身）")
     bt.add_argument("--end", help="結束日（預設：資料庫最後一天）")
@@ -496,7 +525,7 @@ def main(argv=None) -> None:
     bt.add_argument("--universe", default="auto", help="auto（預設）、watchlist，或 CSV 檔（代號,組別）")
     bt.add_argument("--grid", action="append", default=[], help="參數組合，例：--grid profitTargetPct=8,10,15（可重複）")
     bt.add_argument("--compare", action="append", default=[],
-                    help="規則對照組：tdcc（集保籌碼集中）、settled（起漲前籌碼沉澱）、trial（試單）、bullhold／bullstop／bull（依大盤環境調整出場）、v04／v03（前幾版規則）、veto（否決條件逐條拿掉）、inst1d（法人改回看單日）、market（不用大盤逆風），可用逗號合併")
+                    help="規則對照組：tdcc（集保籌碼集中）、settled（起漲前籌碼沉澱）、trial（試單）、bullhold／bullstop／bull（依大盤環境調整出場）、v04／v03（前幾版規則）、veto（否決條件逐條拿掉）、inst1d（法人改回看單日）、v08（v0.8 候選：A＋B）、audit、market（不用大盤逆風），可用逗號合併")
     bt.add_argument("--no-study", action="store_true", help="不做條件研究")
     bt.add_argument("--no-scan", action="store_true", help="不做全市場掃描驗證")
     bt.add_argument("--max-adds", type=int, default=2)
@@ -562,6 +591,8 @@ def main(argv=None) -> None:
         sys.exit(run_backtest(cfg, args))
     elif args.cmd == "track":
         sys.exit(run_track(cfg, args))
+    elif args.cmd == "paper":
+        sys.exit(run_paper(cfg, args))
     elif args.cmd == "holders-history":
         sys.exit(run_holders_history(cfg, args))
     elif args.cmd == "vector-study":

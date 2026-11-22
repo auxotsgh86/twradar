@@ -66,6 +66,22 @@ CREATE TABLE IF NOT EXISTS macro (             -- 大盤環境：外資台指期
   date TEXT PRIMARY KEY, fut_foreign INTEGER, fut_trust INTEGER, fut_dealer INTEGER, usd_twd REAL, breadth20 REAL, src TEXT,
   breadth200 REAL
 );
+CREATE TABLE IF NOT EXISTS paper_nav (         -- 實盤追蹤（紙上投資組合）：每本帳（資金份數）每天收盤的資產；只往後記錄，不重算
+  book INTEGER NOT NULL, date TEXT NOT NULL, equity REAL, cash REAL, npos INTEGER, bench REAL, version TEXT, cands INTEGER,
+  PRIMARY KEY (book, date)
+);
+CREATE TABLE IF NOT EXISTS paper_pos (         -- 實盤追蹤：持有中（alloc＝投入金額，含手續費；entry_px＝成交當天原始開盤價）
+  book INTEGER NOT NULL, code TEXT NOT NULL, entry_date TEXT, entry_px REAL, alloc REAL, score REAL, rule TEXT, why TEXT,
+  sig_date TEXT, PRIMARY KEY (book, code)
+);
+CREATE TABLE IF NOT EXISTS paper_order (       -- 實盤追蹤：收盤後決定、隔天開盤成交的委託
+  book INTEGER NOT NULL, code TEXT NOT NULL, side TEXT NOT NULL, sig_date TEXT, rule TEXT, why TEXT, score REAL,
+  PRIMARY KEY (book, code)
+);
+CREATE TABLE IF NOT EXISTS paper_log (         -- 實盤追蹤：成交紀錄（買進、賣出、未成交）
+  id INTEGER PRIMARY KEY AUTOINCREMENT, book INTEGER NOT NULL, date TEXT NOT NULL, code TEXT NOT NULL, side TEXT NOT NULL,
+  px REAL, amount REAL, ret REAL, rule TEXT, why TEXT, sig_date TEXT, version TEXT
+);
 CREATE INDEX IF NOT EXISTS idx_alerts_code ON alerts(code, date);
 CREATE INDEX IF NOT EXISTS idx_quotes_code ON quotes(code, date);
 CREATE INDEX IF NOT EXISTS idx_inst_code ON inst(code, date);

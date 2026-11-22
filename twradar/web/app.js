@@ -849,11 +849,51 @@ async function positionDialog(code) {
 // 捕獲階段處理：卡片本身點了會開個股頁，這裡先攔下來
 document.addEventListener("click", ev => { const b = ev.target.closest("[data-hold]"); if (b) { ev.preventDefault(); ev.stopPropagation(); positionDialog(b.dataset.hold); } }, true);
 
+/* ---------- 頁面：實盤追蹤（紙上投資組合） ---------- */
+let paperBook = 30;
+const upDown = v => isNum(v) ? `<span style="color:${v > 0 ? "var(--up)" : v < 0 ? "var(--down)" : "inherit"}">${fmtP(v)}</span>` : "—";
+async function viewPaper() {
+  $("#view").innerHTML = `<div class="panel empty">載入中…</div>`;
+  const s = await api("/paper");
+  if (!s.books || !s.books.length) {
+    $("#view").innerHTML = `<section class="panel"><h2>實盤追蹤</h2><p>還沒開始。下一個交易日收盤分析完成後，會自動從那天起照目前的規則記錄，之後每天往前推進。</p>
+      <p class="small muted">也可以在伺服器上執行 <code>python3 -m twradar paper --date 今天日期</code> 立即開始。</p></section>`;
+    return;
+  }
+  if (!s.books.some(b => b.slots === paperBook)) paperBook = s.books[s.books.length - 1].slots;
+  const draw = () => {
+    const b = s.books.find(x => x.slots === paperBook), C = b.curve;
+    const chart = lineChart(C.map(r => r[0].slice(0, 4) + "-" + r[0].slice(4, 6) + "-" + r[0].slice(6)),
+      [{values: C.map(r => (r[1] - 1) * 100), color: "var(--up)", width: 2.2, dot: true}, {values: C.map(r => isNum(r[2]) ? (r[2] - 1) * 100 : null), color: "var(--na)", width: 1.6, dot: true}], {h: 240});
+    const rows = (xs, f) => xs.length ? xs.map(f).join("") : `<tr><td class="l muted" colspan="9">（無）</td></tr>`;
+    const link = r => `<a href="#/stock/${esc(r.code)}">${esc(r.code)}</a> ${esc(r.name || "")}`;
+    $("#view").innerHTML = `<section class="panel" style="display:flex;flex-direction:column;gap:12px">
+      <div class="row between"><div><h2>實盤追蹤（紙上投資組合）</h2><div class="small muted">${esc(b.start)} 起、共 ${b.days} 個交易日・最新 ${esc(b.latest)}・規則版本 ${b.versions.map(esc).join("、")}</div></div>
+        <div class="row"><label class="small muted" for="pbook">資金份數</label><select id="pbook">${s.books.map(x => `<option value="${x.slots}"${x.slots === paperBook ? " selected" : ""}>${x.slots} 份</option>`).join("")}</select></div></div>
+      <div class="banner small">每天收盤後照<b>當時</b>的規則決定、隔天開盤成交，記下後不再重算，所以這是完全沒有事後調整的成績。資金平均分成 ${b.slots} 份，訊號比空位多時挑法人 5 日買超最強的；不加碼、不減碼；扣手續費與證交稅。對照組是同一天開始持有 0050（含息）。</div>
+      <div class="market"><div><span class="muted small">訊號組合</span><br><b>${upDown(b.totalPct)}</b></div><div><span class="muted small">0050</span><br><b>${upDown(b.benchPct)}</b></div>
+        <div><span class="muted small">最大回落（組合／0050）</span><br><b>${fmt(b.maxDD, 2)}% ／ ${fmt(b.benchMaxDD, 2)}%</b></div>
+        <div><span class="muted small">持股／現金</span><br><b>${b.npos} 檔／${fmt(b.cashPct, 1)}%</b></div>
+        <div><span class="muted small">已出場</span><br><b>${b.closed} 筆${isNum(b.winPct) ? `，勝率 ${fmt(b.winPct, 1)}%，平均 ${fmtP(b.avgRet)}` : ""}</b></div></div>
+      <div><div class="small"><span style="color:var(--up)">━</span> 訊號組合　<span style="color:var(--na)">━</span> 0050（累積報酬 %）</div>${chart}</div>
+      <h3>持有中</h3><div class="tablewrap"><table><thead><tr><th class="l">股票</th><th class="l">買進日</th><th>買進價</th><th>收盤</th><th>報酬</th><th class="l">規則</th></tr></thead><tbody>
+        ${rows(b.positions, r => `<tr><td class="l">${link(r)}</td><td class="l num">${esc(r.entry)}</td><td class="num">${fmt(r.entryPx, 2)}</td><td class="num">${fmt(r.close, 2)}</td><td class="num">${upDown(r.retPct)}</td><td class="l">${esc(r.rule)}</td></tr>`)}</tbody></table></div>
+      <h3>明天開盤要執行</h3><div class="tablewrap"><table><thead><tr><th class="l">動作</th><th class="l">股票</th><th class="l">判定日</th><th class="l">原因</th><th>分數</th></tr></thead><tbody>
+        ${rows(b.orders, r => `<tr><td class="l">${r.side === "sell" ? "賣出" : "買進"}</td><td class="l">${link(r)}</td><td class="l num">${esc(r.sig_date)}</td><td class="l" style="white-space:normal">${esc(r.rule)}${r.why ? "：" + esc(r.why) : ""}</td><td class="num">${fmt(r.score, 1)}</td></tr>`)}</tbody></table></div>
+      <h3>最近成交</h3><div class="tablewrap"><table><thead><tr><th class="l">成交日</th><th class="l">動作</th><th class="l">股票</th><th>價格</th><th>報酬</th><th class="l">原因</th></tr></thead><tbody>
+        ${rows(b.log, r => `<tr><td class="l num">${esc(r.date)}</td><td class="l">${esc(r.side)}</td><td class="l">${link(r)}</td><td class="num">${fmt(r.px, 2)}</td><td class="num">${upDown(r.ret)}</td><td class="l" style="white-space:normal">${esc(r.rule)}${r.why ? "：" + esc(r.why) : ""}</td></tr>`)}</tbody></table></div>
+      <p class="small muted">紙上模擬，不是實際下單；成交價用開盤價，實際可能有滑價。至少累積幾個月、經歷過一次明顯修正，才足以判斷訊號是否真的有效。</p>
+    </section>`;
+    $("#pbook").addEventListener("change", ev => { paperBook = +ev.target.value; draw(); });
+  };
+  draw();
+}
+
 /* ---------- 路由 ---------- */
 async function route() {
   const h = location.hash.replace(/^#/, "") || "/";
   const [, page, arg] = h.split("/");
-  document.querySelectorAll("#tabs a").forEach(a => a.classList.toggle("on", a.dataset.tab === (["report", "settings", "scan", "flows"].includes(page) ? page : "home")));
+  document.querySelectorAll("#tabs a").forEach(a => a.classList.toggle("on", a.dataset.tab === (["report", "settings", "scan", "flows", "paper"].includes(page) ? page : "home")));
   try {
     if (page !== "settings" && !Object.keys(LABELS).length) await loadLabels();
     if (page !== "stock") { try { sessionStorage.removeItem("twradar-from"); } catch (e) {} }
@@ -861,6 +901,7 @@ async function route() {
     else if (page === "settings") await viewSettings();
     else if (page === "scan") await viewScan();
     else if (page === "flows") await viewFlows();
+    else if (page === "paper") await viewPaper();
     else if (page === "stock" && arg) await viewStock(arg);
     else await viewHome(page === "day" ? arg : null);
     applySorts();

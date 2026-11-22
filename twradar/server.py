@@ -711,6 +711,10 @@ def make_handler(app: App):
                     return self.json(app.day_status(d))
                 return self.json(app.envelope(d))
 
+            if head == "paper" and method == "GET":
+                from . import paper
+                return self.json(paper.summary(app.db))
+
             if head == "flows" and method == "GET":
                 try:
                     n = int((qs.get("days") or ["120"])[0])

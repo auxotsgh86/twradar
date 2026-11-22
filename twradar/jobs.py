@@ -182,6 +182,12 @@ class Crawler:
             except Exception as e:  # noqa: BLE001
                 log.exception("全市場追蹤 %s 失敗", d)
                 self.db.log("warn", f"{d} 全市場清單追蹤失敗：{e!r}")
+            from . import paper
+            try:
+                paper.step(self.db, self.settings.get(), d)
+            except Exception as e:  # noqa: BLE001
+                log.exception("實盤追蹤 %s 失敗", d)
+                self.db.log("warn", f"{d} 實盤追蹤（紙上投資組合）失敗：{e!r}")
 
     def crawl_weekly(self, d: str) -> str | None:
         """集保股權分散表：上次資料距今滿 7 天才抓（每週一次）；失敗只記錄，不影響當日狀態。"""
