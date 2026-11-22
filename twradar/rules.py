@@ -208,6 +208,33 @@ def neon_playbooks(inst: str = "", entry_extra: tuple = (), quality: bool = Fals
     return pb
 
 
+def accel_playbooks(exit_when=None, reduce_when=None, quiet_ma: bool = False, entry_extra: tuple = ()) -> dict:
+    """斜率×量×法人慣性的對照（以目前預設為底）。
+    exit_when／reduce_when：持有時另外的出場／減碼條件（排在停損之後）；
+    quiet_ma：月線相關的停損與獲利出場在量縮時不觸發（量縮跌破可能是洗盤）；entry_extra：上車另外要求的條件。"""
+    pb = entry_with(*entry_extra) if entry_extra else default_playbooks()
+    hold = []
+    for r in pb["hold"]:
+        if quiet_ma and r.get("label") in ("停損", "獲利出場"):
+            def q(x):
+                if isinstance(x, str) and (x.startswith("belowMa20") or x.startswith("breakMa20")):
+                    return {"all": [x, "notVolQuiet"]}
+                if isinstance(x, list):
+                    return [q(y) for y in x]
+                if isinstance(x, dict):
+                    return {k: q(v) if k in ("all", "any", "none", "not") else v for k, v in x.items()}
+                return x
+            r = {**r, "when": q(r["when"])}
+        hold.append(r)
+        if r.get("label") == "停損":
+            if exit_when is not None:
+                hold.append({"light": "exit", "label": "出場（減速／慣性）", "when": exit_when})
+            if reduce_when is not None:
+                hold.append({"light": "reduce", "label": "減碼（減速放量）", "when": reduce_when})
+    pb["hold"] = hold
+    return pb
+
+
 def veto_with(*conds: str) -> dict:
     """以 v0.5 為底，否決條件另外加上 conds（任一成立就不上車）。"""
     pb = v05_playbooks()
@@ -289,6 +316,13 @@ ENGINE_PARAMS = [
     {"id": "ma20SlopePct", "label": "盤整不進場：月線 10 日上升 ≥", "value": 1, "unit": "%", "min": -10, "max": 20, "note": "對照組「大型股」用"},
     {"id": "instTurnPct", "label": "法人轉買：當日買超佔成交量 ≥", "value": 3, "unit": "%", "min": 0, "max": 100, "note": "對照組用"},
     {"id": "maxUpperShadowPct", "label": "實體紅K：上影線佔整根 K 線 <", "value": 40, "unit": "%", "min": 0, "max": 100, "note": "對照組用"},
+    {"id": "slopeDecelPts", "label": "月線減速：近 10 日上升幅度比前 10 日少 ≥", "value": 1, "unit": "百分點", "min": 0, "max": 20, "note": "對照組「斜率×量×慣性」用"},
+    {"id": "volExpandRatio", "label": "量增：5 日均量 ≥ 之前 20 日均量的", "value": 1.3, "unit": "倍", "min": 0, "max": 10, "note": ""},
+    {"id": "volQuietRatio", "label": "量縮：5 日均量 ≤ 之前 20 日均量的", "value": 0.8, "unit": "倍", "min": 0, "max": 10, "note": ""},
+    {"id": "instEarlyMin", "label": "法人剛開始連買：連買天數 ≥", "value": 2, "unit": "日", "min": 1, "max": 30, "note": ""},
+    {"id": "instEarlyMax", "label": "法人剛開始連買：連買天數 ≤", "value": 4, "unit": "日", "min": 1, "max": 30, "note": ""},
+    {"id": "instPersistDays", "label": "法人持續買超：近 10 日買超天數 ≥", "value": 7, "unit": "日", "min": 1, "max": 10, "note": "慣性中斷也用"},
+    {"id": "instBreakDays", "label": "慣性中斷：轉為連續賣超 ≥", "value": 2, "unit": "日", "min": 1, "max": 10, "note": ""},
     {"id": "baseRangePct", "label": "籌碼沉澱：起漲前整理區間高低差 ≤", "value": 25, "unit": "%", "min": 0, "max": 200, "note": "對照組「沉澱」用"},
     {"id": "baseMarginPos", "label": "籌碼沉澱：融資在近 60 日區間的位置 ≤", "value": 40, "unit": "%", "min": 0, "max": 100, "note": "0＝最低、100＝最高"},
     {"id": "whaleUpWeeksMin", "label": "籌碼集中：大戶比例連續上升 ≥", "value": 3, "unit": "週", "min": 1, "max": 8, "note": "對照組「集保」用"},

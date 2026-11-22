@@ -12,6 +12,8 @@
   記下後不再重算；網頁「實盤追蹤」頁、`twradar paper` 指令、API `GET /api/v1/paper`。
 - 回溯對照 `audit`（Neon 的個股訊號修復稽核）、`v08`（v0.7＋不追高＋乾淨紅K）；組合模擬新增 10 份挑最強，
   對照組改列 10 份（代號順序）與 10／20／30 份挑最強。
+- 回溯對照 `accel`：月線斜率的變化（減速）、成交量的變化（5 日÷之前 20 日）、法人買超慣性（剛開始連買、持續買超、慣性中斷）；
+  新指標 ma20Ago20、volAccel、instBuyDays10、instPriorBuyDays10，新條件 slopeDecel、volExpand、notVolQuiet、instEarly、instPersistent、instBreak。
 
 ## 0.2.0（2026-11-21）
 

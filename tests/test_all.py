@@ -2073,6 +2073,49 @@ class MacroTests(unittest.TestCase):
         for o in vs.values():
             apply_variant(S, o)
 
+    def test_accel(self):
+        """斜率變化×成交量變化×法人慣性：指標方向、條件、對照組。"""
+        from twradar.analysis import _indicators
+        from twradar.backtest import apply_variant, preset_variants
+        from twradar.conditions import BUILTIN, Ctx, NA, PASS, FAIL
+        from twradar.settings import default_settings
+        P = dict(DEFAULT_RULES)
+        ev = lambda cid, rec: BUILTIN[cid].fn(Ctx(rec, {}, P)).state  # noqa: E731
+        # 月線：前 10 日 +3%、近 10 日 +1% → 減速；近 10 日 +3.5% → 加速；近 10 日 −1% → 不算（已下彎）
+        self.assertEqual(ev("slopeDecel", {"ma20Ago20": 100, "ma20Ago10": 103, "ma20": 104.03}), PASS)
+        self.assertEqual(ev("slopeDecel", {"ma20Ago20": 100, "ma20Ago10": 103, "ma20": 106.6}), FAIL)
+        self.assertEqual(ev("slopeDecel", {"ma20Ago20": 100, "ma20Ago10": 103, "ma20": 101.97}), FAIL)
+        self.assertEqual(ev("slopeDecel", {"ma20": 104}), NA)
+        self.assertEqual(ev("volExpand", {"volAccel": 1.5}), PASS)
+        self.assertEqual(ev("volExpand", {"volAccel": 1.0}), FAIL)
+        self.assertEqual(ev("notVolQuiet", {"volAccel": 0.6}), FAIL)
+        self.assertEqual(ev("notVolQuiet", {}), PASS)                  # 資料不足不擋停損
+        self.assertEqual(ev("instEarly", {"instStreak": 3}), PASS)
+        self.assertEqual(ev("instEarly", {"instStreak": 8}), FAIL)
+        self.assertEqual(ev("instPersistent", {"instBuyDays10": 8}), PASS)
+        self.assertEqual(ev("instBreak", {"instStreak": -2, "instPriorBuyDays10": 8}), PASS)
+        self.assertEqual(ev("instBreak", {"instStreak": -2, "instPriorBuyDays10": 4}), FAIL)
+        self.assertEqual(ev("instBreak", {"instStreak": -1, "instPriorBuyDays10": 9}), FAIL)
+        # 指標：新到舊；近 5 日量 2 倍、法人前 10 日買 8 天後連 2 賣
+        n = 45
+        ds = [f"2026{1 + i // 28:02d}{1 + i % 28:02d}" for i in range(n)][::-1]
+        q = [{"date": d, "close": 100 + (n - i) * 0.5, "open": 100, "high": 130, "low": 90, "change": 0.5,
+              "volume": 2000 if i < 5 else 1000, "value": None} for i, d in enumerate(ds)]
+        nets = [-5000, -3000] + [4000] * 8 + [-1000, 1000] * 10
+        ins = [{"date": d, "foreign_net": nets[i] if i < len(nets) else 0, "trust_net": 0, "dealer_net": 0} for i, d in enumerate(ds)]
+        rec = _indicators(q, ins, None, None, ds[0])
+        self.assertEqual(rec["volAccel"], 2.0)
+        self.assertIn("ma20Ago20", rec)
+        self.assertEqual(rec["instStreak"], -2)
+        self.assertEqual(rec["instPriorBuyDays10"], 9)   # 8 天 4000 張＋1 天 1000 張
+        self.assertEqual(rec["instBuyDays10"], 8)
+        vs = dict(preset_variants(["accel"], default_settings()))
+        self.assertEqual(len(vs), 9)
+        import json as _j
+        self.assertIn("notVolQuiet", _j.dumps(vs["量縮時不因跌破月線出場"]["_playbooks"]))
+        for o in vs.values():
+            apply_variant(default_settings(), o)
+
     def test_audit(self):
         import json as _j
         from twradar.backtest import apply_variant, preset_variants

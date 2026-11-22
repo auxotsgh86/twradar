@@ -775,6 +775,7 @@ def _veto_ids(settings: dict) -> list[str]:
 
 def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
     """內建的規則對照組：
+    accel   斜率變化×成交量變化×法人慣性（出場：減速＋量增、只看減速、慣性中斷；減碼；量縮不停損；上車：剛開始連買、持續買超）
     v08     v0.8 候選：v0.7 不加碼、A＋B 含／不加碼、A＋乾淨紅K、A＋不追高
     audit   個股訊號修復稽核（v0.6 為底）：v0.6 含／不加碼、Fix A～D、全修復含／不加碼
     neon    外部建議：不加碼、法人只看 5 日、轉買須力道、不追高、實體紅K、出貨警訊拿掉爆量長黑、多頭獲利出場放寬、全上
@@ -870,6 +871,18 @@ def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
             out.append(("A＋B（不加碼）", {"_playbooks": nb(**ab), "_maxAdds": 0}))
             out.append(("A＋乾淨紅K（不加不追高）", {"_playbooks": nb(inst="5d", quality="clean")}))
             out.append(("A＋不追高（不加乾淨紅K）", {"_playbooks": nb(inst="5d", entry_extra=("biasMa5Ok",))}))
+        elif n == "accel":   # 斜率變化×成交量變化×法人慣性
+            from .rules import accel_playbooks as ap
+            dv = {"all": ["slopeDecel", "volExpand"]}
+            out.append(("出場：減速＋量增", {"_playbooks": ap(exit_when=dv)}))
+            out.append(("出場：只看減速", {"_playbooks": ap(exit_when="slopeDecel")}))
+            out.append(("減碼：減速＋量增", {"_playbooks": ap(reduce_when=dv)}))
+            out.append(("量縮時不因跌破月線出場", {"_playbooks": ap(quiet_ma=True)}))
+            out.append(("出場：法人慣性中斷", {"_playbooks": ap(exit_when="instBreak")}))
+            out.append(("出場：慣性中斷＋減速", {"_playbooks": ap(exit_when={"all": ["instBreak", "slopeDecel"]})}))
+            out.append(("出場：慣性中斷或（減速＋量增）", {"_playbooks": ap(exit_when={"any": ["instBreak", dv]})}))
+            out.append(("上車：法人剛開始連買（2～4 天）", {"_playbooks": ap(entry_extra=("instEarly",))}))
+            out.append(("上車：法人持續買超（10 日 ≥ 7 天）", {"_playbooks": ap(entry_extra=("instPersistent",))}))
         elif n == "neon":   # 外部建議：堵法人轉買後門、不追高、實體紅K、持有面少洗盤、不加碼對照
             from .rules import neon_playbooks as nb
             out.append(("不加碼（只看上車訊號）", {"_maxAdds": 0}))

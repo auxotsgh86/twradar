@@ -744,6 +744,79 @@ def red_vol_k_clean(c: Ctx) -> Res:
     return red_vol_k_quality(c)
 
 
+def _slopes(c: Ctx):
+    m, a10, a20 = c.g("ma20"), c.g("ma20Ago10"), c.g("ma20Ago20")
+    if m is None or not a10 or not a20:
+        return None
+    return (m / a10 - 1) * 100, (a10 / a20 - 1) * 100
+
+
+@condition("slopeDecel", "月線上揚減速", "hold", ("slopeDecelPts",), ("ma20", "ma20Ago10", "ma20Ago20"),
+           "月線還在上揚，但近 10 日的上升幅度比前 10 日少了設定的百分點以上（還在漲、力道變弱）")
+def slope_decel(c: Ctx) -> Res:
+    s = _slopes(c)
+    if s is None:
+        return Res(NA)
+    now, before = s
+    if 0 < now <= before - c.P["slopeDecelPts"]:
+        return Res(PASS, f"月線 10 日 {now:+.1f}%（前 10 日 {before:+.1f}%）")
+    return Res(FAIL)
+
+
+@condition("volExpand", "量增", "hold", ("volExpandRatio",), ("volAccel",), "近 5 日均量是之前 20 日均量的設定倍數以上")
+def vol_expand(c: Ctx) -> Res:
+    v = c.g("volAccel")
+    if v is None:
+        return Res(NA)
+    return Res(PASS, f"5 日均量 {v:.2f} 倍") if v >= c.P["volExpandRatio"] else Res(FAIL)
+
+
+@condition("notVolQuiet", "不是量縮", "hold", ("volQuietRatio",), ("volAccel",),
+           "近 5 日均量高於之前 20 日均量的設定倍數；量縮（可能是洗盤）時不成立，資料不足時視為成立（不擋停損）")
+def not_vol_quiet(c: Ctx) -> Res:
+    v = c.g("volAccel")
+    if v is not None and v <= c.P["volQuietRatio"]:
+        return Res(FAIL, f"量縮：5 日均量 {v:.2f} 倍")
+    return Res(PASS)
+
+
+@condition("instEarly", "法人剛開始連買", "entry", ("instEarlyMin", "instEarlyMax"), ("instStreak",),
+           "外資＋投信合計連續買超的天數在設定範圍內（建倉初期，還沒買太久）")
+def inst_early(c: Ctx) -> Res:
+    s = c.g("instStreak")
+    if s is None:
+        return Res(NA)
+    lo, hi = c.P["instEarlyMin"], c.P["instEarlyMax"]
+    if lo <= s <= hi:
+        return Res(PASS, f"法人連買第 {s} 天")
+    return Res(FAIL, need=f"法人連買 {int(lo)}～{int(hi)} 天（目前 {s:+d}）")
+
+
+@condition("instPersistent", "法人持續買超", "entry", ("instPersistDays",), ("instBuyDays10",),
+           "近 10 日中外資＋投信合計買超的天數達設定值（持續建倉，不是單一大日子）")
+def inst_persistent(c: Ctx) -> Res:
+    n = c.g("instBuyDays10")
+    if n is None:
+        return Res(NA)
+    if n >= c.P["instPersistDays"]:
+        return Res(PASS, f"近 10 日買超 {n} 天")
+    return Res(FAIL, need=f"近 10 日買超 ≥ {int(c.P['instPersistDays'])} 天（目前 {n} 天）")
+
+
+@condition("instBreak", "法人買超慣性中斷", "hold", ("instBreakDays", "instPersistDays"), ("instStreak", "instPriorBuyDays10"),
+           "外資＋投信原本持續買超（之前 10 日買超達設定天數），轉為連續賣超達設定天數")
+def inst_break(c: Ctx) -> Res:
+    s, n = c.g("instStreak"), c.g("instPriorBuyDays10")
+    if s is None:
+        return Res(NA)
+    if s <= -c.P["instBreakDays"]:
+        if n is None:
+            return Res(NA)
+        if n >= c.P["instPersistDays"]:
+            return Res(PASS, f"之前 10 日買超 {n} 天，轉為連 {-s} 賣")
+    return Res(FAIL)
+
+
 @condition("breakMa20Deep", "深跌破下彎月線", "hold", ("breakMaBullPct",), ("close", "ma20", "ma20Prev"),
            "收盤低於月線超過較寬的幅度，且月線下彎（大盤多頭時用）")
 def break_ma20_deep(c: Ctx) -> Res:
