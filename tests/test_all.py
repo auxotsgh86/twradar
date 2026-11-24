@@ -2113,6 +2113,17 @@ class MacroTests(unittest.TestCase):
         self.assertEqual(len(vs), 9)
         import json as _j
         self.assertIn("notVolQuiet", _j.dumps(vs["量縮時不因跌破月線出場"]["_playbooks"]))
+        q = dict(preset_variants(["quiet"], default_settings()))
+        self.assertEqual(len(q), 8)
+        self.assertEqual(q["量縮不停損：門檻 0.7 倍"]["volQuietRatio"], 0.7)
+        hold = {r["label"]: _j.dumps(r.get("when")) for r in q["量縮不停損：只套停損"]["_playbooks"]["hold"]}
+        self.assertIn("notVolQuiet", hold["停損"])
+        self.assertNotIn("notVolQuiet", hold["獲利出場"])
+        hold = {r["label"]: _j.dumps(r.get("when")) for r in q["量縮不停損：只套獲利出場"]["_playbooks"]["hold"]}
+        self.assertNotIn("notVolQuiet", hold["停損"])
+        self.assertIn("notVolQuiet", hold["獲利出場"])
+        for o in q.values():
+            apply_variant(default_settings(), o)
         for o in vs.values():
             apply_variant(default_settings(), o)
 

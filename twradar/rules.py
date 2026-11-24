@@ -211,11 +211,12 @@ def neon_playbooks(inst: str = "", entry_extra: tuple = (), quality: bool = Fals
 def accel_playbooks(exit_when=None, reduce_when=None, quiet_ma: bool = False, entry_extra: tuple = ()) -> dict:
     """斜率×量×法人慣性的對照（以目前預設為底）。
     exit_when／reduce_when：持有時另外的出場／減碼條件（排在停損之後）；
-    quiet_ma：月線相關的停損與獲利出場在量縮時不觸發（量縮跌破可能是洗盤）；entry_extra：上車另外要求的條件。"""
+    quiet_ma：月線相關的停損與獲利出場在量縮時不觸發（量縮跌破可能是洗盤）；"stop"／"profit" 只套在停損／獲利出場；entry_extra：上車另外要求的條件。"""
     pb = entry_with(*entry_extra) if entry_extra else default_playbooks()
     hold = []
     for r in pb["hold"]:
-        if quiet_ma and r.get("label") in ("停損", "獲利出場"):
+        labels = {True: ("停損", "獲利出場"), "stop": ("停損",), "profit": ("獲利出場",)}.get(quiet_ma, ())
+        if r.get("label") in labels:
             def q(x):
                 if isinstance(x, str) and (x.startswith("belowMa20") or x.startswith("breakMa20")):
                     return {"all": [x, "notVolQuiet"]}

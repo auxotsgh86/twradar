@@ -775,6 +775,7 @@ def _veto_ids(settings: dict) -> list[str]:
 
 def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
     """內建的規則對照組：
+    quiet   量縮不停損的穩健性：門檻 0.7～1.0 倍、只套停損／獲利出場、＋法人剛開始連買、不加碼
     accel   斜率變化×成交量變化×法人慣性（出場：減速＋量增、只看減速、慣性中斷；減碼；量縮不停損；上車：剛開始連買、持續買超）
     v08     v0.8 候選：v0.7 不加碼、A＋B 含／不加碼、A＋乾淨紅K、A＋不追高
     audit   個股訊號修復稽核（v0.6 為底）：v0.6 含／不加碼、Fix A～D、全修復含／不加碼
@@ -871,6 +872,14 @@ def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
             out.append(("A＋B（不加碼）", {"_playbooks": nb(**ab), "_maxAdds": 0}))
             out.append(("A＋乾淨紅K（不加不追高）", {"_playbooks": nb(inst="5d", quality="clean")}))
             out.append(("A＋不追高（不加乾淨紅K）", {"_playbooks": nb(inst="5d", entry_extra=("biasMa5Ok",))}))
+        elif n == "quiet":   # 「量縮時不因跌破月線出場」的穩健性：相鄰門檻、只套停損／獲利出場、疊加法人剛開始連買
+            from .rules import accel_playbooks as ap
+            for v in (0.7, 0.8, 0.9, 1.0):
+                out.append((f"量縮不停損：門檻 {v} 倍", {"_playbooks": ap(quiet_ma=True), "volQuietRatio": v}))
+            out.append(("量縮不停損：只套停損", {"_playbooks": ap(quiet_ma="stop")}))
+            out.append(("量縮不停損：只套獲利出場", {"_playbooks": ap(quiet_ma="profit")}))
+            out.append(("量縮不停損＋法人剛開始連買", {"_playbooks": ap(quiet_ma=True, entry_extra=("instEarly",))}))
+            out.append(("量縮不停損（不加碼）", {"_playbooks": ap(quiet_ma=True), "_maxAdds": 0}))
         elif n == "accel":   # 斜率變化×成交量變化×法人慣性
             from .rules import accel_playbooks as ap
             dv = {"all": ["slopeDecel", "volExpand"]}

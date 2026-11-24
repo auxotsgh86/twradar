@@ -410,7 +410,9 @@ def run_paper(cfg, args) -> int:
     for b in s["books"]:
         print(f"{b['slots']:>2} 份｜{b['start']}～{b['latest']}（{b['days']} 天）｜資產 {b['totalPct']:+.2f}%（回落 {b['maxDD']}%）"
               f"｜0050 {b['benchPct'] if b['benchPct'] is not None else '—'}%（回落 {b['benchMaxDD']}%）"
-              f"｜持股 {b['npos']} 檔、現金 {b['cashPct']}%｜已出場 {b['closed']} 筆，勝率 {b['winPct']}%，平均 {b['avgRet']}%")
+              f"｜持股 {b['npos']} 檔、現金 {b['cashPct']}%｜已出場 {b['closed']} 筆"
+              + (f"，勝率 {b['winPct']}%，平均 {b['avgRet']:+.2f}%" if b["closed"] else "")
+              + (f"｜明天開盤：買 {sum(o['side'] == 'buy' for o in b['orders'])}、賣 {sum(o['side'] == 'sell' for o in b['orders'])}"))
     return 0
 
 
@@ -525,7 +527,7 @@ def main(argv=None) -> None:
     bt.add_argument("--universe", default="auto", help="auto（預設）、watchlist，或 CSV 檔（代號,組別）")
     bt.add_argument("--grid", action="append", default=[], help="參數組合，例：--grid profitTargetPct=8,10,15（可重複）")
     bt.add_argument("--compare", action="append", default=[],
-                    help="規則對照組：tdcc（集保籌碼集中）、settled（起漲前籌碼沉澱）、trial（試單）、bullhold／bullstop／bull（依大盤環境調整出場）、v04／v03（前幾版規則）、veto（否決條件逐條拿掉）、inst1d（法人改回看單日）、v08（v0.8 候選：A＋B）、accel（斜率×量×法人慣性）、audit、market（不用大盤逆風），可用逗號合併")
+                    help="規則對照組：tdcc（集保籌碼集中）、settled（起漲前籌碼沉澱）、trial（試單）、bullhold／bullstop／bull（依大盤環境調整出場）、v04／v03（前幾版規則）、veto（否決條件逐條拿掉）、inst1d（法人改回看單日）、v08（v0.8 候選：A＋B）、accel（斜率×量×法人慣性）、quiet（量縮不停損穩健性）、audit、market（不用大盤逆風），可用逗號合併")
     bt.add_argument("--no-study", action="store_true", help="不做條件研究")
     bt.add_argument("--no-scan", action="store_true", help="不做全市場掃描驗證")
     bt.add_argument("--max-adds", type=int, default=2)
