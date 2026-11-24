@@ -1133,7 +1133,7 @@ class V3RulesTests(unittest.TestCase):
         path.write_text(json.dumps(data), encoding="utf-8")
         s = SettingsStore(path, 50).get()
         self.assertEqual(s["playbooks"]["entry"][1]["label"], "自訂")
-        self.assertEqual(s["rulesVersion"], 7)
+        self.assertEqual(s["rulesVersion"], 8)
         # v0.3 預設 → 升級為目前預設；參數不再重設
         from twradar.rules import v03_playbooks
         data["playbooks"], data["rulesVersion"] = v03_playbooks(), 3
@@ -1142,7 +1142,7 @@ class V3RulesTests(unittest.TestCase):
                 p_["value"] = 20
         path.write_text(json.dumps(data), encoding="utf-8")
         s = SettingsStore(path, 50).get()
-        self.assertEqual((s["playbooks"], s["rulesVersion"]), (default_playbooks(), 7))
+        self.assertEqual((s["playbooks"], s["rulesVersion"]), (default_playbooks(), 8))
         # v0.4 預設 → v0.5
         from twradar.rules import v04_playbooks
         data["playbooks"], data["rulesVersion"] = v04_playbooks(), 4
@@ -1533,7 +1533,8 @@ class BacktestTests(unittest.TestCase):
               "mktClose": 100, "mktMa20": 99, "mktMa20Prev": 98}
         from twradar.rules import v04_playbooks
         Sb, S = S, {**S, "playbooks": v04_playbooks()}   # 預設（v0.5 起）就是多頭放寬停損
-        self.assertEqual(Sb["playbooks"]["hold"], bull_playbooks(stop=True)["hold"])
+        from twradar.rules import quiet_ma_playbooks
+        self.assertEqual(Sb["playbooks"]["hold"], quiet_ma_playbooks(bull_playbooks(stop=True))["hold"])   # v0.8 另加量縮不停損
         self.assertEqual(evaluate(r2, hold, P, S)["hold"]["light"], "exit")
         self.assertEqual(evaluate(r2, hold, P, Sb)["hold"]["light"], "keep")
         self.assertEqual(evaluate({**r2, "close": 96.5}, hold, P, Sb)["hold"]["light"], "exit")            # 超過 3%
@@ -2196,6 +2197,31 @@ class MacroTests(unittest.TestCase):
         self.assertEqual(len(vs), 8)
         for _, o in vs:
             apply_variant(S, o)
+
+    def test_v08_upgrade(self):
+        """v0.7 的預設升級到 v0.8：月線相關出場在量縮時不觸發；虧損停損、保本線不受影響。"""
+        import json as _j
+        from twradar.rules import default_playbooks, upgrade, v07_playbooks
+        s = {"rulesVersion": 7, "playbooks": v07_playbooks(), "params": []}
+        upgrade(s)
+        self.assertEqual(s["playbooks"], default_playbooks())
+        hold = {r["label"]: r.get("when") for r in s["playbooks"]["hold"]}
+        self.assertIn("notVolQuiet", _j.dumps(hold["停損"]))
+        self.assertIn("notVolQuiet", _j.dumps(hold["獲利出場"]))
+        self.assertIn("stopLoss", hold["停損"]["any"])          # 虧損停損照舊、不看量
+        self.assertIn("giveback", hold["停損"]["any"])
+        self.assertNotIn("notVolQuiet", _j.dumps(hold["出貨警訊"]))
+        # 大盤非多頭、跌破下彎月線 2%：量正常 → 停損；量縮（洗盤）→ 不停損；虧損超過 10% 不論量都停損
+        from twradar.analysis import evaluate
+        from twradar.settings import default_settings
+        S = {**default_settings(), "playbooks": default_playbooks()}
+        P = dict(DEFAULT_RULES)
+        st = {"code": "X", "holding": True, "cost": 100.0}
+        r = {"close": 98.0, "ma20": 100.0, "ma20Prev": 100.5, "ma5": 99.0, "vol": 100, "vol5": 100, "instNet": -50,
+             "mktClose": 97, "mktMa20": 99, "mktMa20Prev": 99.5}
+        self.assertEqual(evaluate({**r, "volAccel": 1.0}, st, P, S)["hold"]["light"], "exit")
+        self.assertNotEqual(evaluate({**r, "volAccel": 0.6}, st, P, S)["hold"]["light"], "exit")
+        self.assertEqual(evaluate({**r, "volAccel": 0.6, "close": 88.0}, st, P, S)["hold"]["light"], "exit")
 
     def test_v07_upgrade(self):
         """v0.6 的預設升級到 v0.7：上車只看法人 5 日累計。"""

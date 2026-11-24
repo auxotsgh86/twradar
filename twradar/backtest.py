@@ -777,6 +777,7 @@ def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
     """內建的規則對照組：
     quiet   量縮不停損的穩健性：門檻 0.7～1.0 倍、只套停損／獲利出場、＋法人剛開始連買、不加碼
     accel   斜率變化×成交量變化×法人慣性（出場：減速＋量增、只看減速、慣性中斷；減碼；量縮不停損；上車：剛開始連買、持續買超）
+    v07     v0.7（前一版：沒有量縮不停損）
     v08     v0.8 候選：v0.7 不加碼、A＋B 含／不加碼、A＋乾淨紅K、A＋不追高
     audit   個股訊號修復稽核（v0.6 為底）：v0.6 含／不加碼、Fix A～D、全修復含／不加碼
     neon    外部建議：不加碼、法人只看 5 日、轉買須力道、不追高、實體紅K、出貨警訊拿掉爆量長黑、多頭獲利出場放寬、全上
@@ -846,6 +847,9 @@ def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
             out.append(("外資撤出（3 項）不上車", {"_playbooks": veto_with("foreignExit")}))
             out.append(("外資撤出（2 項）不上車", {"_playbooks": veto_with("foreignExit"), "foreignExitSignals": 2}))
             out.append(("外資撤出＋廣度 < 40% 不上車", {"_playbooks": veto_with("foreignExit", "breadthWeak")}))
+        elif n == "v07":
+            from .rules import v07_playbooks
+            out.append(("v0.7（前一版）", {"_playbooks": v07_playbooks()}))
         elif n == "v06":
             from .rules import v06_playbooks
             out.append(("v0.6（前一版）", {"_playbooks": v06_playbooks()}))
@@ -867,7 +871,8 @@ def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
         elif n == "v08":   # v0.8 候選：v0.7（Fix A）再加 Fix B（不追高＋乾淨紅K）
             from .rules import neon_playbooks as nb
             ab = dict(inst="5d", entry_extra=("biasMa5Ok",), quality="clean")
-            out.append(("v0.7（不加碼）", {"_maxAdds": 0}))
+            from .rules import v07_playbooks
+            out.append(("v0.7（不加碼）", {"_playbooks": v07_playbooks(), "_maxAdds": 0}))
             out.append(("A＋B（含加碼）", {"_playbooks": nb(**ab)}))
             out.append(("A＋B（不加碼）", {"_playbooks": nb(**ab), "_maxAdds": 0}))
             out.append(("A＋乾淨紅K（不加不追高）", {"_playbooks": nb(inst="5d", quality="clean")}))

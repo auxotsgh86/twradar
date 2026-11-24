@@ -30,7 +30,7 @@ LIGHT_LABEL = {"go": "加碼訊號", "wait": "觀察中", "stop": "不宜加碼"
 CHIP_CONDS = ("inst", "main", "retail")
 
 
-RULES_VERSION = 7
+RULES_VERSION = 8
 
 
 def v03_playbooks() -> dict:
@@ -65,7 +65,27 @@ def v03_playbooks() -> dict:
 
 
 def default_playbooks() -> dict:
-    """預設規則 v0.7（2026-11-22，見 docs/STRATEGY.md 第 13 節）：v0.6，上車的法人條件只看 5 日累計
+    """預設規則 v0.8（2026-11-24，見 docs/STRATEGY.md 第 15 節）：v0.7，月線相關的停損與獲利出場在量縮時不觸發
+    （近 5 日均量 ≤ 之前 20 日均量的 volQuietRatio 倍：量縮跌破多半是洗盤；虧損停損與保本線照舊）。"""
+    return quiet_ma_playbooks(v07_playbooks())
+
+
+def quiet_ma_playbooks(pb: dict, labels=("停損", "獲利出場")) -> dict:
+    """月線相關的出場條件（belowMa20*／breakMa20*）另外要求「不是量縮」。"""
+    def q(x):
+        if isinstance(x, str) and (x.startswith("belowMa20") or x.startswith("breakMa20")):
+            return {"all": [x, "notVolQuiet"]}
+        if isinstance(x, list):
+            return [q(y) for y in x]
+        if isinstance(x, dict):
+            return {k: q(v) if k in ("all", "any", "none", "not") else v for k, v in x.items()}
+        return x
+    pb["hold"] = [{**r, "when": q(r["when"])} if r.get("label") in labels else r for r in pb["hold"]]
+    return pb
+
+
+def v07_playbooks() -> dict:
+    """v0.7（2026-11-22，見 docs/STRATEGY.md 第 13 節）：v0.6，上車的法人條件只看 5 日累計
     （拿掉「法人由賣轉買」這個入口：單日轉買雜訊大，回溯兩段樣本的每筆品質都提升）。"""
     pb = v06_playbooks()
     for r in pb["entry"]:
@@ -208,24 +228,20 @@ def neon_playbooks(inst: str = "", entry_extra: tuple = (), quality: bool = Fals
     return pb
 
 
-def accel_playbooks(exit_when=None, reduce_when=None, quiet_ma: bool = False, entry_extra: tuple = ()) -> dict:
-    """斜率×量×法人慣性的對照（以目前預設為底）。
+def accel_playbooks(exit_when=None, reduce_when=None, quiet_ma=False, entry_extra: tuple = ()) -> dict:
+    """斜率×量×法人慣性的對照（以 v0.7 為底，2026-11-24 的回溯）。
     exit_when／reduce_when：持有時另外的出場／減碼條件（排在停損之後）；
     quiet_ma：月線相關的停損與獲利出場在量縮時不觸發（量縮跌破可能是洗盤）；"stop"／"profit" 只套在停損／獲利出場；entry_extra：上車另外要求的條件。"""
-    pb = entry_with(*entry_extra) if entry_extra else default_playbooks()
+    pb = v07_playbooks()
+    if entry_extra:
+        for r in pb["entry"]:
+            if r.get("label") == "上車":
+                r["when"] = {"all": [*r["when"]["all"], *entry_extra]}
+    labels = {True: ("停損", "獲利出場"), "stop": ("停損",), "profit": ("獲利出場",)}.get(quiet_ma, ())
+    if labels:
+        quiet_ma_playbooks(pb, labels)
     hold = []
     for r in pb["hold"]:
-        labels = {True: ("停損", "獲利出場"), "stop": ("停損",), "profit": ("獲利出場",)}.get(quiet_ma, ())
-        if r.get("label") in labels:
-            def q(x):
-                if isinstance(x, str) and (x.startswith("belowMa20") or x.startswith("breakMa20")):
-                    return {"all": [x, "notVolQuiet"]}
-                if isinstance(x, list):
-                    return [q(y) for y in x]
-                if isinstance(x, dict):
-                    return {k: q(v) if k in ("all", "any", "none", "not") else v for k, v in x.items()}
-                return x
-            r = {**r, "when": q(r["when"])}
         hold.append(r)
         if r.get("label") == "停損":
             if exit_when is not None:
@@ -319,7 +335,7 @@ ENGINE_PARAMS = [
     {"id": "maxUpperShadowPct", "label": "實體紅K：上影線佔整根 K 線 <", "value": 40, "unit": "%", "min": 0, "max": 100, "note": "對照組用"},
     {"id": "slopeDecelPts", "label": "月線減速：近 10 日上升幅度比前 10 日少 ≥", "value": 1, "unit": "百分點", "min": 0, "max": 20, "note": "對照組「斜率×量×慣性」用"},
     {"id": "volExpandRatio", "label": "量增：5 日均量 ≥ 之前 20 日均量的", "value": 1.3, "unit": "倍", "min": 0, "max": 10, "note": ""},
-    {"id": "volQuietRatio", "label": "量縮：5 日均量 ≤ 之前 20 日均量的", "value": 0.8, "unit": "倍", "min": 0, "max": 10, "note": ""},
+    {"id": "volQuietRatio", "label": "量縮：5 日均量 ≤ 之前 20 日均量的", "value": 0.8, "unit": "倍", "min": 0, "max": 10, "note": "v0.8：量縮時不因跌破月線出場"},
     {"id": "instEarlyMin", "label": "法人剛開始連買：連買天數 ≥", "value": 2, "unit": "日", "min": 1, "max": 30, "note": ""},
     {"id": "instEarlyMax", "label": "法人剛開始連買：連買天數 ≤", "value": 4, "unit": "日", "min": 1, "max": 30, "note": ""},
     {"id": "instPersistDays", "label": "法人持續買超：近 10 日買超天數 ≥", "value": 7, "unit": "日", "min": 1, "max": 10, "note": "慣性中斷也用"},
@@ -379,7 +395,7 @@ def upgrade(s: dict) -> dict:
         return s
     pb = s.get("playbooks")
     if isinstance(pb, dict):
-        olds = [v03_playbooks(), v04_playbooks(), v05_playbooks(), v06_playbooks()] + ([p3_playbooks()] if v < 3 else [])
+        olds = [v03_playbooks(), v04_playbooks(), v05_playbooks(), v06_playbooks(), v07_playbooks()] + ([p3_playbooks()] if v < 3 else [])
         for k in ("entry", "hold"):
             if not pb.get(k) or any(pb.get(k) == old[k] for old in olds):
                 pb[k] = default_playbooks()[k]
