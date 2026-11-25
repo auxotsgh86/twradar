@@ -45,6 +45,21 @@ def aggregate(t) -> dict:
     return out
 
 
+def login(api, api_key: str, secret_key: str):
+    """各版本 shioaji 的 login 參數不同：只傳這一版有的參數（新版沒有 contracts_timeout）。"""
+    import inspect
+    kw = {"api_key": api_key, "secret_key": secret_key}
+    try:
+        params = inspect.signature(api.login).parameters
+    except (TypeError, ValueError):
+        params = {}
+    if "contracts_timeout" in params:
+        kw["contracts_timeout"] = 30000
+    if "fetch_contract" in params:
+        kw["fetch_contract"] = True
+    return api.login(**kw)
+
+
 class Sinopac:
     """api：已登入的 shioaji.Shioaji（測試時可換成假的物件）。"""
 
@@ -64,7 +79,7 @@ class Sinopac:
             raise SinopacError("沒有安裝 shioaji：在 config.json 填好 sinopac_api_key 後重新執行 ./deploy/install.sh，"
                                "並用 ~/twradar-app/.venv/bin/python 執行") from e
         api = sj.Shioaji(simulation=False)
-        api.login(api_key=api_key, secret_key=secret_key, contracts_timeout=30000)
+        login(api, api_key, secret_key)
         return cls(api)
 
     def logout(self) -> None:

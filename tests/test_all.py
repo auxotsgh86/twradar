@@ -2019,6 +2019,23 @@ class TickflowTests(unittest.TestCase):
         s = tickflow.series(self.db, "2330")
         self.assertEqual([x["buyPct"] for x in s], [round(3 / 7 * 100, 1)] * 2)
 
+    def test_login_kwargs(self):
+        """新版 shioaji 的 login 沒有 contracts_timeout：只傳有的參數。"""
+        from twradar.providers.sinopac import login
+        got = {}
+
+        class New:
+            def login(self, api_key, secret_key, fetch_contract=True, subscribe_trade=True):
+                got.update(api_key=api_key, fetch_contract=fetch_contract)
+
+        class Old:
+            def login(self, api_key, secret_key, contracts_timeout=0):
+                got.update(timeout=contracts_timeout)
+        login(New(), "k", "s")
+        self.assertEqual(got, {"api_key": "k", "fetch_contract": True})
+        login(Old(), "k", "s")
+        self.assertEqual(got["timeout"], 30000)
+
     def test_read_only(self):
         """只用 ticks 與商品檔：程式裡不會出現下單、帳務或憑證函式。"""
         import inspect
