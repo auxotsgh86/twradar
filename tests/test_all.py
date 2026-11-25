@@ -1343,6 +1343,16 @@ class BacktestTests(unittest.TestCase):
         base = [x for x in r["rows"] if x["key"] == "base"]
         self.assertTrue(all(x["excess"] in (0, 0.0) for x in base if x["n"]))
         self.assertIn("切段 3 天", pivot.render(r))
+        self.assertIn("轉上率", pivot.render(r))
+        self.assertEqual(len(r["features"]), 2 * len(pivot.FEATURES) * 2)
+        # 轉折：急跌 10 天後急漲 → 轉折↑；平點之後的下一段結果
+        C3 = C[:110] + [C[109] * (1.03 ** (k + 1)) for k in range(10)]
+        self.assertTrue(any((pivot.flags(C3, V, N, i, 5) or {}).get("turn_up") for i in range(110, n)))
+        f = pivot.flags(C3, V, N, 110, 5) or pivot.flags(C, V, N, hit[0], 5)
+        self.assertEqual(pivot.outcome(C3, 109, 5, 0.05), "轉上")
+        self.assertEqual(pivot.outcome(C, 100, 5, 0.05), "續跌")
+        self.assertIsNone(pivot.outcome(C, n - 2, 5, 0.05))
+        self.assertIsNotNone(f)
 
     def test_paper_portfolio(self):
         """實盤追蹤：只往後記錄、隔天開盤成交、份數上限、已處理的日子不重算。"""
