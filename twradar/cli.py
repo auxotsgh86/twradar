@@ -416,6 +416,24 @@ def run_paper(cfg, args) -> int:
     return 0
 
 
+def run_pivot(cfg, args) -> int:
+    from . import pivot
+    from .dates import norm_date
+    db, _ = open_all(cfg)
+    last = db.one("SELECT MAX(date) AS d FROM market WHERE taiex IS NOT NULL")["d"]
+    first = db.one("SELECT MIN(date) AS d FROM quotes")["d"]
+    start = norm_date(args.start) if args.start else first
+    end = norm_date(args.end) if args.end else last
+    r = pivot.study(db, start, end, norm_date(args.split) if args.split else None,
+                    tuple(int(x) for x in args.windows.split(",")), tuple(int(x) for x in args.horizons.split(",")))
+    print(pivot.render(r))
+    if args.json:
+        import json
+        with open(args.json, "w", encoding="utf-8") as f:
+            json.dump(r, f, ensure_ascii=False, indent=1)
+    return 0
+
+
 def run_backtest(cfg, args) -> int:
     import csv
     from datetime import datetime
@@ -516,6 +534,13 @@ def main(argv=None) -> None:
     sc.add_argument("--top", type=int, default=20)
     tk = sub.add_parser("track", help="模型追蹤：補建過去的紀錄並更新摘要")
     tk.add_argument("--since", help="從這天（YYYYMMDD）起補建，預設只更新報酬與摘要")
+    pv = sub.add_parser("pivot-study", help="平點研究：W 天斜率由跌（漲）轉平之後的報酬（不影響規則）")
+    pv.add_argument("--start")
+    pv.add_argument("--end")
+    pv.add_argument("--split", help="樣本外起點（預設：期間的後 1/3）")
+    pv.add_argument("--windows", default="3,5,10")
+    pv.add_argument("--horizons", default="5,10")
+    pv.add_argument("--json", help="另存結果 JSON")
     pp = sub.add_parser("paper", help="實盤追蹤（紙上投資組合）：顯示成績；收盤分析後會自動往前記錄")
     pp.add_argument("--date", help="手動處理到這天（YYYYMMDD）；第一次執行就從這天開始")
     pp.add_argument("--reset", action="store_true", help="清除所有紀錄、重新開始")
@@ -593,6 +618,8 @@ def main(argv=None) -> None:
         sys.exit(run_backtest(cfg, args))
     elif args.cmd == "track":
         sys.exit(run_track(cfg, args))
+    elif args.cmd == "pivot-study":
+        sys.exit(run_pivot(cfg, args))
     elif args.cmd == "paper":
         sys.exit(run_paper(cfg, args))
     elif args.cmd == "holders-history":

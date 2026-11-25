@@ -1308,6 +1308,41 @@ class BacktestTests(unittest.TestCase):
                                                variants=[("不加碼", {"_maxAdds": 0})], study=False, scan=False))
         self.assertEqual(sum(t["adds"] for t in trades0["results"][0]["tradeList"]), 0)
 
+    def test_pivot(self):
+        """平點研究：由跌轉平＝谷、由漲轉平＝峰；隔天開盤買；不用未來資料；整體可跑。"""
+        from twradar import pivot
+        import random
+        rnd = random.Random(7)
+        n = 120
+        # 前 100 天緩漲＋雜訊（建立波動度），之後 10 天急跌，再 10 天走平
+        C = [100 * (1.002 ** k) * (1 + rnd.uniform(-0.01, 0.01)) for k in range(100)]
+        C += [C[-1] * (0.97 ** (k + 1)) for k in range(10)]
+        C += [C[-1] * (1 + rnd.uniform(-0.001, 0.001)) for _ in range(10)]
+        V = [1000] * 100 + [1500] * 10 + [500] * 10
+        N = [10] * n
+        hit = [i for i in range(n) if (pivot.flags(C, V, N, i, 5) or {}).get("trough")]
+        self.assertTrue(hit and all(i >= 110 for i in hit), hit)
+        self.assertFalse(any((pivot.flags(C, V, N, i, 5) or {}).get("peak") for i in range(100, n)))
+        # 峰：鏡像
+        C2 = C[:100] + [C[99] * (1.03 ** (k + 1)) for k in range(10)]
+        C2 += [C2[-1] * (1 + rnd.uniform(-0.001, 0.001)) for _ in range(10)]
+        self.assertTrue(any((pivot.flags(C2, V, N, i, 5) or {}).get("peak_loud") is False and
+                            (pivot.flags(C2, V, N, i, 5) or {}).get("peak") for i in range(110, n)))
+        # 不用未來資料：改掉 i 之後的價格，第 i 天的判定不變
+        i = hit[0]
+        fut = C[:i + 1] + [x * 3 for x in C[i + 1:]]
+        self.assertEqual(pivot.flags(C, V, N, i, 5), pivot.flags(fut, V, N, i, 5))
+        # 隔天開盤買、第 i+h 天收盤
+        O = [x * 1.01 for x in C]
+        self.assertAlmostEqual(pivot.forward(O, C, 50, 5), (C[55] / O[51] - 1) * 100)
+        self.assertIsNone(pivot.forward(O, C, n - 3, 5))
+        # 整體
+        r = pivot.study(self.db, self.dates[0], self.dates[-1], windows=(3, 5), horizons=(5,))
+        self.assertEqual(len(r["rows"]), 2 * len(pivot.GROUPS) * 1 * 2)
+        base = [x for x in r["rows"] if x["key"] == "base"]
+        self.assertTrue(all(x["excess"] in (0, 0.0) for x in base if x["n"]))
+        self.assertIn("切段 3 天", pivot.render(r))
+
     def test_paper_portfolio(self):
         """實盤追蹤：只往後記錄、隔天開盤成交、份數上限、已處理的日子不重算。"""
         from twradar import paper
