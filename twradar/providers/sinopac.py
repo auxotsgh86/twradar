@@ -61,7 +61,8 @@ class Sinopac:
         try:
             import shioaji as sj
         except ImportError as e:
-            raise SinopacError("沒有安裝 shioaji：python3 -m pip install --user shioaji") from e
+            raise SinopacError("沒有安裝 shioaji：在 config.json 填好 sinopac_api_key 後重新執行 ./deploy/install.sh，"
+                               "並用 ~/twradar-app/.venv/bin/python 執行") from e
         api = sj.Shioaji(simulation=False)
         api.login(api_key=api_key, secret_key=secret_key, contracts_timeout=30000)
         return cls(api)

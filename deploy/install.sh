@@ -30,6 +30,11 @@ rm -rf "$APP/.venv"
 uv venv --quiet --python-preference "$PREF" --python ">=3.10" "$APP/.venv" || die "無法建立 Python 環境"
 PY="$APP/.venv/bin/python"
 uv pip install --quiet --python "$PY" certifi || echo "（certifi 安裝失敗，略過）"
+# 永豐 Shioaji（選用）：config.json 有 sinopac_api_key，或環境變數 TWRADAR_SINOPAC=1 時才安裝
+if [ "${TWRADAR_SINOPAC:-}" = "1" ] || { [ -f "$DATA/config.json" ] && \
+     "$PY" -c "import json,sys; sys.exit(0 if json.load(open('$DATA/config.json')).get('sinopac_api_key') else 1)" 2>/dev/null; }; then
+  uv pip install --quiet --python "$PY" shioaji && echo "已安裝 shioaji（永豐逐筆成交）" || echo "（shioaji 安裝失敗，略過：逐筆收集不會執行）"
+fi
 
 say "3/5 建立設定與資料庫（$DATA）"
 export TWRADAR_HOME="$DATA"
