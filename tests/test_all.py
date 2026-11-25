@@ -1979,15 +1979,22 @@ class TickflowTests(unittest.TestCase):
     def test_aggregate(self):
         from twradar.providers.sinopac import aggregate
         a = aggregate({"close": [100, 100, 101, 50, 100], "volume": [5, 10, 60, 200, 0], "tick_type": [1, 2, 1, 2, 0]})
-        # 100×5×1000＝50 萬（小單）；10 張＝100 萬（大單賣）；101×60＝606 萬（特大買）；50×200＝1000 萬（特大賣）
-        self.assertEqual((a["n"], a["vol"], a["buy"], a["sell"], a["unk"]), (5, 275, 65, 210, 0))
-        self.assertEqual((a["bigBuy"], a["bigSell"], a["hugeBuy"], a["hugeSell"]), (60, 210, 60, 200))
+        # 第 1 筆是開盤撮合（無法判斷）；10 張＝100 萬（小單賣）；101×60＝606 萬（大單買）；50×200＝1000 萬（大單賣）
+        self.assertEqual((a["n"], a["vol"], a["buy"], a["sell"], a["unk"]), (5, 275, 60, 210, 5))
+        self.assertEqual((a["bigBuy"], a["bigSell"], a["hugeBuy"], a["hugeSell"]), (60, 200, 0, 0))
         self.assertAlmostEqual(a["vwap"], (500 + 1000 + 6060 + 10000) / 275, places=3)
+        # 收盤集合競價（13:30，ts 為台北時間當成 UTC 的奈秒）不算主動；2000 萬以上算特大單
+        day = 1795564800 * 10 ** 9          # 2026-11-25 00:00
+        hm = lambda h, m: day + (h * 3600 + m * 60) * 10 ** 9   # noqa: E731
+        b = aggregate({"ts": [hm(9, 0), hm(10, 0), hm(13, 30)], "close": [2000, 2000, 2000], "volume": [100, 12, 50],
+                       "tick_type": [2, 1, 1]})
+        self.assertEqual((b["buy"], b["sell"], b["unk"], b["hugeBuy"]), (12, 0, 150, 12))
 
     def test_collect(self):
         from twradar import tickflow
         from twradar.providers.sinopac import Sinopac
-        data = {("2330", d): {"close": [500, 501], "volume": [3, 4], "tick_type": [1, 2]} for d in ("20261120", "20261123", "20261124")}
+        data = {("2330", d): {"close": [500, 500, 501], "volume": [1, 3, 4], "tick_type": [2, 1, 2]}
+                for d in ("20261120", "20261123", "20261124")}
         data[("1101", "20261124")] = {"close": [30], "volume": [1], "tick_type": [1]}
         api = self.FakeApi(data)
         slept = []
@@ -2007,6 +2014,16 @@ class TickflowTests(unittest.TestCase):
         r2 = tickflow.collect(self.db, sp, pairs, budget_mb=100)
         self.assertEqual(r2["skipped"], 5)
         self.assertEqual(len(api.calls) - n, 1)                            # 只重試 1101 1123
+        # 舊版彙總（src＝sinopac）會重抓
+        with self.db.tx() as c:
+            c.execute("UPDATE tickflow SET src='sinopac' WHERE code='2330' AND date='20261124'")
+        self.assertNotIn(("2330", "20261124"), tickflow.done(self.db, [("2330", "20261124")]))
+        # 官方剩餘流量不足 → 停止
+        class Low(self.FakeApi):
+            def usage(self):
+                return types.SimpleNamespace(bytes=490 * 10 ** 6, limit_bytes=500 * 10 ** 6, remaining_bytes=10 * 10 ** 6)
+        r4 = tickflow.collect(self.db, Sinopac(Low(data), sleep=lambda x: None), [("2330", "20261124")], budget_mb=100)
+        self.assertIn("剩餘流量", r4["stopped"])
         # 流量用完（有成交卻連續拿到空資料）→ 停止
         api2 = self.FakeApi(data, empty_after=0)
         sp2 = Sinopac(api2, sleep=lambda x: None)
@@ -2017,7 +2034,7 @@ class TickflowTests(unittest.TestCase):
         sp3.bytes = 10 ** 9
         self.assertIn("上限", tickflow.collect(self.db, sp3, [("2330", "20261120")], budget_mb=1)["stopped"])
         s = tickflow.series(self.db, "2330")
-        self.assertEqual([x["buyPct"] for x in s], [round(3 / 7 * 100, 1)] * 2)
+        self.assertEqual([x["buyPct"] for x in s], [round(3 / 7 * 100, 1)])   # 1124 改成舊版後還沒重抓
 
     def test_login_kwargs(self):
         """新版 shioaji 的 login 沒有 contracts_timeout：只傳有的參數。"""

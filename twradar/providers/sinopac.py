@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import time
 
-BIG_VALUE = 1_000_000        # 單筆成交金額 ≥ 100 萬元＝大單
-HUGE_VALUE = 5_000_000       # ≥ 500 萬元＝特大單
+BIG_VALUE = 5_000_000        # 單筆成交金額 ≥ 500 萬元＝大單（100 萬太低：台積電 1 張就超過）
+HUGE_VALUE = 20_000_000      # ≥ 2000 萬元＝特大單
+CLOSE_AUCTION = 13 * 3600 + 25 * 60   # 13:25 之後是收盤集合競價
 TICK_BYTES = 64              # 估算流量：每筆約 8 個欄位 × 8 bytes
 MIN_INTERVAL = 0.25          # 每 10 秒最多 50 次
 
@@ -22,19 +23,31 @@ class SinopacError(RuntimeError):
     pass
 
 
+def _tod(ts) -> int | None:
+    """ticks 的 ts：奈秒，台北時間當成 UTC 編碼 → 當天第幾秒。"""
+    try:
+        return int(ts // 1_000_000_000) % 86400
+    except (TypeError, ValueError):
+        return None
+
+
 def aggregate(t) -> dict:
-    """一天的 ticks（物件或 dict，欄位 close、volume（張）、tick_type）→ 每日彙總（張）。"""
-    g = (lambda k: t[k]) if isinstance(t, dict) else (lambda k: getattr(t, k))
+    """一天的 ticks（物件或 dict，欄位 close、volume（張）、tick_type，可有 ts）→ 每日彙總（張）。
+    開盤第一筆與 13:25 之後（收盤集合競價）是撮合、沒有主動方，算「無法判斷」，不算外盤／內盤。"""
+    g = (lambda k: t.get(k)) if isinstance(t, dict) else (lambda k: getattr(t, k, None))
     close, vol, typ = list(g("close")), list(g("volume")), list(g("tick_type"))
+    ts = list(g("ts") or []) or [None] * len(close)
     out = {"n": len(close), "vol": 0, "buy": 0, "sell": 0, "unk": 0, "bigBuy": 0, "bigSell": 0, "hugeBuy": 0, "hugeSell": 0,
            "amount": 0.0}
-    for p, v, k in zip(close, vol, typ):
+    for j, (p, v, k, x) in enumerate(zip(close, vol, typ, ts)):
         if not v or p is None:
             continue
         val = p * v * 1000
         out["vol"] += v
         out["amount"] += val
-        side = "buy" if k == 1 else "sell" if k == 2 else "unk"
+        tod = _tod(x) if x is not None else None
+        auction = j == 0 or (tod is not None and tod >= CLOSE_AUCTION)
+        side = "unk" if auction else "buy" if k == 1 else "sell" if k == 2 else "unk"
         out[side] += v
         if side != "unk" and val >= BIG_VALUE:
             out["big" + side.title()] += v
@@ -81,6 +94,21 @@ class Sinopac:
         api = sj.Shioaji(simulation=False)
         login(api, api_key, secret_key)
         return cls(api)
+
+    def usage(self) -> dict | None:
+        """官方的流量用量（新版 shioaji 有 api.usage()）：{"bytes", "limit", "remaining"}；沒有就回傳 None。"""
+        f = getattr(self.api, "usage", None)
+        if not f:
+            return None
+        try:
+            u = f()
+        except Exception:  # noqa: BLE001
+            return None
+        get = (lambda k: u.get(k)) if isinstance(u, dict) else (lambda k: getattr(u, k, None))
+        b, lim, rem = get("bytes"), get("limit_bytes"), get("remaining_bytes")
+        if b is None and rem is None:
+            return None
+        return {"bytes": b, "limit": lim, "remaining": rem}
 
     def logout(self) -> None:
         try:

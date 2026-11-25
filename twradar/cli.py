@@ -447,8 +447,11 @@ def run_sinopac_probe(cfg, args) -> int:
         print("tick_type 分布：", dict(Counter(list(t.tick_type))))
         print("前 3 筆：", [dict(ts=t.ts[i], close=t.close[i], volume=t.volume[i], type=t.tick_type[i]) for i in range(min(3, a["n"]))])
         q = db.one("SELECT volume FROM quotes WHERE code=? AND date=?", (args.code, d))
-        print(f"彙總：成交 {a['vol']} 張（證交所 {q['volume'] if q else '—'}）｜外盤 {a['buy']}、內盤 {a['sell']}、無法判斷 {a['unk']}"
-              f"｜大單買 {a['bigBuy']}、賣 {a['bigSell']}｜均價 {a['vwap']}")
+        u = sp.usage()
+        if u:
+            print(f"官方流量：已用 {(u['bytes'] or 0) / 1e6:.1f} MB／上限 {(u['limit'] or 0) / 1e6:.0f} MB（剩 {(u['remaining'] or 0) / 1e6:.0f} MB）")
+        print(f"彙總：成交 {a['vol']} 張（證交所 {round(q['volume'] / 1000) if q and q['volume'] else '—'} 張，含盤後與鉅額）｜外盤 {a['buy']}、內盤 {a['sell']}、無法判斷 {a['unk']}"
+              f"｜大單（≥500 萬）買 {a['bigBuy']}、賣 {a['bigSell']}｜特大單（≥2000 萬）買 {a['hugeBuy']}、賣 {a['hugeSell']}｜均價 {a['vwap']}")
     finally:
         sp.logout()
     return 0
@@ -491,6 +494,7 @@ def run_tick_history(cfg, args) -> int:
         sp.logout()
     left = r["todo"] - r["saved"]
     print(f"完成：存 {r['saved']}、已有 {r['skipped']}、剩 {left}；查詢 {r['calls']} 次、約 {r['mb']} MB"
+          + (f"（官方：今天已用 {r['usedMb']} MB／{r['limitMb']} MB）" if r.get("usedMb") is not None else "")
           + (f"｜停止：{r['stopped']}" if r["stopped"] else ""))
     if left:
         print("明天（08:00 流量重置後）再執行同一個指令會從中斷處繼續。")

@@ -1,7 +1,7 @@
 """逐筆成交的每日彙總（主動買賣、大單）：收集與查詢。資料來源：永豐 Shioaji（providers/sinopac.py）。
 
 每檔每天存一列（張）：vol 成交量、buy 外盤（買方主動）、sell 內盤（賣方主動）、unk 無法判斷、
-bigBuy／bigSell 單筆 ≥ 100 萬元的主動買／賣、hugeBuy／hugeSell ≥ 500 萬元、amount 成交金額（元）、vwap 均價。
+bigBuy／bigSell 單筆 ≥ 500 萬元的主動買／賣、hugeBuy／hugeSell ≥ 2000 萬元（開盤、收盤集合競價不算主動）、amount 成交金額（元）、vwap 均價。
 只存彙總、不存原始 ticks（一天一檔可能上萬筆）。先累積資料，規則還沒用到。
 """
 from __future__ import annotations
@@ -15,6 +15,8 @@ from .providers.sinopac import aggregate
 log = logging.getLogger("twradar.tickflow")
 
 COLS = ("n", "vol", "buy", "sell", "unk", "bigBuy", "bigSell", "hugeBuy", "hugeSell", "amount", "vwap")
+SRC = "sinopac2"   # 彙總定義版本：v2＝大單 500 萬／2000 萬、集合競價不算主動（舊的 sinopac 會重抓）
+MIN_REMAIN_MB = 15  # 官方剩餘流量低於這個就停
 EMPTY_STOP = 3     # 連續幾檔「有成交卻拿到 0 筆」→ 判定今天的流量用完，停止
 
 
@@ -23,7 +25,8 @@ def done(db: DB, pairs: list[tuple[str, str]]) -> set[tuple[str, str]]:
     codes = sorted({c for c, _ in pairs})
     for i in range(0, len(codes), 500):
         ch = codes[i:i + 500]
-        have |= {(r["code"], r["date"]) for r in db.q(f"SELECT code, date FROM tickflow WHERE code IN ({','.join('?' * len(ch))})", ch)}
+        have |= {(r["code"], r["date"]) for r in db.q(f"SELECT code, date FROM tickflow WHERE src IN (?, 'nocontract') "
+                                                       f"AND code IN ({','.join('?' * len(ch))})", (SRC, *ch))}
     return have
 
 
@@ -45,6 +48,11 @@ def collect(db: DB, client, pairs: list[tuple[str, str]], budget_mb: float = 450
         if client.bytes / 1e6 >= budget_mb:
             st["stopped"] = f"已達預估流量上限 {budget_mb:g} MB"
             break
+        if k % 25 == 0:
+            u = client.usage() if hasattr(client, "usage") else None
+            if u and u.get("remaining") is not None and u["remaining"] / 1e6 < MIN_REMAIN_MB:
+                st["stopped"] = f"官方剩餘流量只剩 {u['remaining'] / 1e6:.0f} MB（每個交易日 08:00 重置）"
+                break
         traded = (vols.get((code, d)) or 0) > 0
         try:
             t = client.ticks(code, d)
@@ -54,7 +62,7 @@ def collect(db: DB, client, pairs: list[tuple[str, str]], budget_mb: float = 450
         if t is None:
             row, src = {c: None for c in COLS}, "nocontract"
         else:
-            row, src = aggregate(t), "sinopac"
+            row, src = aggregate(t), SRC
             if row["n"] == 0 and traded:
                 empties += 1
                 if empties >= EMPTY_STOP:
@@ -69,6 +77,10 @@ def collect(db: DB, client, pairs: list[tuple[str, str]], budget_mb: float = 450
         if progress and (k + 1) % 50 == 0:
             progress(f"{k + 1}/{len(todo)}（{code} {d}）約 {client.bytes / 1e6:.0f} MB")
     st["mb"] = round(client.bytes / 1e6, 1)
+    u = client.usage() if hasattr(client, "usage") else None
+    if u and u.get("bytes") is not None:
+        st["usedMb"] = round(u["bytes"] / 1e6, 1)
+        st["limitMb"] = round(u["limit"] / 1e6) if u.get("limit") else None
     st["calls"] = client.calls
     return st
 
@@ -82,7 +94,7 @@ def daily_targets(db: DB, S: dict, d: str) -> list[str]:
 
 
 def series(db: DB, code: str, days: int = 60) -> list[dict]:
-    rows = db.q("SELECT * FROM tickflow WHERE code=? AND src='sinopac' ORDER BY date DESC LIMIT ?", (code, days))
+    rows = db.q("SELECT * FROM tickflow WHERE code=? AND src=? ORDER BY date DESC LIMIT ?", (code, SRC, days))
     out = []
     for r in reversed(rows):
         r = dict(r)
