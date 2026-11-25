@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import tempfile
+import types
 import threading
 import unittest
 import urllib.parse
@@ -1932,6 +1933,95 @@ def _tdcc_table(people17=1000, whale_pct=50.0, new_format=True):
     else:
         rows += f"<tr><td>16</td><td>合 計</td><td>{people17:,}</td><td>9,999,999</td><td>100.00</td></tr>"
     return rows
+
+
+class TickflowTests(unittest.TestCase):
+    """永豐逐筆成交：彙總、收集（跳過已有、流量用完就停、限速）、不下單。"""
+
+    class FakeApi:
+        def __init__(self, data, empty_after=None):
+            self.data, self.calls, self.empty_after = data, [], empty_after
+            self.contracts = types.SimpleNamespace(get=lambda code: None if code == "9999" else types.SimpleNamespace(code=code))
+
+        def ticks(self, contract, date):
+            self.assertDate(date)
+            date = date.replace("-", "")
+            self.calls.append((contract.code, date))
+            if self.empty_after is not None and len(self.calls) > self.empty_after:
+                return types.SimpleNamespace(close=[], volume=[], tick_type=[])
+            return types.SimpleNamespace(**self.data.get((contract.code, date), {"close": [], "volume": [], "tick_type": []}))
+
+        def logout(self):
+            pass
+
+        @staticmethod
+        def assertDate(date):
+            assert len(date) == 10 and date[4] == "-" and date[7] == "-", date   # shioaji 要 YYYY-MM-DD
+
+    def setUp(self):
+        from twradar.db import DB
+        self.db = DB(Path(tempfile.mkdtemp()) / "t.sqlite3")
+        with self.db.tx() as c:
+            for code in ("1101", "2330", "9999"):
+                for d in ("20261120", "20261123", "20261124"):
+                    c.execute("INSERT INTO quotes(date, code, market, close, volume) VALUES(?,?,?,?,?)", (d, code, "TWSE", 100, 5000))
+
+    def test_aggregate(self):
+        from twradar.providers.sinopac import aggregate
+        a = aggregate({"close": [100, 100, 101, 50, 100], "volume": [5, 10, 60, 200, 0], "tick_type": [1, 2, 1, 2, 0]})
+        # 100×5×1000＝50 萬（小單）；10 張＝100 萬（大單賣）；101×60＝606 萬（特大買）；50×200＝1000 萬（特大賣）
+        self.assertEqual((a["n"], a["vol"], a["buy"], a["sell"], a["unk"]), (5, 275, 65, 210, 0))
+        self.assertEqual((a["bigBuy"], a["bigSell"], a["hugeBuy"], a["hugeSell"]), (60, 210, 60, 200))
+        self.assertAlmostEqual(a["vwap"], (500 + 1000 + 6060 + 10000) / 275, places=3)
+
+    def test_collect(self):
+        from twradar import tickflow
+        from twradar.providers.sinopac import Sinopac
+        data = {("2330", d): {"close": [500, 501], "volume": [3, 4], "tick_type": [1, 2]} for d in ("20261120", "20261123", "20261124")}
+        data[("1101", "20261124")] = {"close": [30], "volume": [1], "tick_type": [1]}
+        api = self.FakeApi(data)
+        slept = []
+        clock = iter(range(0, 1000)).__next__
+        sp = Sinopac(api, sleep=slept.append, clock=lambda: clock() * 0.1)
+        pairs = [(c, d) for d in ("20261124", "20261123") for c in ("1101", "2330", "9999")]
+        r = tickflow.collect(self.db, sp, pairs, budget_mb=100)
+        # 1101 在 1123 有成交卻拿到 0 筆：不存（之後再試）；9999 找不到商品：記 nocontract
+        self.assertEqual(r["saved"], 5, r)
+        rows = {(x["code"], x["date"]): dict(x) for x in self.db.q("SELECT * FROM tickflow")}
+        self.assertEqual(rows[("2330", "20261124")]["buy"], 3)
+        self.assertEqual(rows[("9999", "20261124")]["src"], "nocontract")
+        self.assertNotIn(("1101", "20261123"), rows)
+        self.assertTrue(slept and all(0 < x <= 0.25 for x in slept))      # 限速：每次間隔 ≥ 0.25 秒
+        # 再跑一次：已有的跳過
+        n = len(api.calls)
+        r2 = tickflow.collect(self.db, sp, pairs, budget_mb=100)
+        self.assertEqual(r2["skipped"], 5)
+        self.assertEqual(len(api.calls) - n, 1)                            # 只重試 1101 1123
+        # 流量用完（有成交卻連續拿到空資料）→ 停止
+        api2 = self.FakeApi(data, empty_after=0)
+        sp2 = Sinopac(api2, sleep=lambda x: None)
+        r3 = tickflow.collect(self.db, sp2, [("2330", "20261120"), ("1101", "20261120"), ("1101", "20261123")], budget_mb=100)
+        self.assertIn("流量", r3["stopped"])
+        # 預估流量上限
+        sp3 = Sinopac(self.FakeApi(data), sleep=lambda x: None)
+        sp3.bytes = 10 ** 9
+        self.assertIn("上限", tickflow.collect(self.db, sp3, [("2330", "20261120")], budget_mb=1)["stopped"])
+        s = tickflow.series(self.db, "2330")
+        self.assertEqual([x["buyPct"] for x in s], [round(3 / 7 * 100, 1)] * 2)
+
+    def test_read_only(self):
+        """只用 ticks 與商品檔：程式裡不會出現下單、帳務或憑證函式。"""
+        import inspect
+        from twradar import tickflow
+        from twradar.providers import sinopac
+        src = inspect.getsource(sinopac) + inspect.getsource(tickflow)
+        for bad in ("place_order", "activate_ca", "cancel_order", "update_order", "list_positions", "account_balance"):
+            self.assertNotIn(bad + "(", src)
+
+    def test_config_secret_not_in_repr(self):
+        from twradar.config import Config
+        c = Config(sinopac_api_key="AK-SECRET", sinopac_secret_key="SK-SECRET")
+        self.assertNotIn("SECRET", repr(c))
 
 
 class MacroTests(unittest.TestCase):

@@ -66,6 +66,11 @@ CREATE TABLE IF NOT EXISTS macro (             -- 大盤環境：外資台指期
   date TEXT PRIMARY KEY, fut_foreign INTEGER, fut_trust INTEGER, fut_dealer INTEGER, usd_twd REAL, breadth20 REAL, src TEXT,
   breadth200 REAL
 );
+CREATE TABLE IF NOT EXISTS tickflow (          -- 逐筆成交每日彙總（張）：外盤／內盤、大單（≥100 萬）、特大單（≥500 萬）；src＝sinopac／nocontract
+  code TEXT NOT NULL, date TEXT NOT NULL, n INTEGER, vol INTEGER, buy INTEGER, sell INTEGER, unk INTEGER,
+  big_buy INTEGER, big_sell INTEGER, huge_buy INTEGER, huge_sell INTEGER, amount REAL, vwap REAL, src TEXT,
+  PRIMARY KEY (code, date)
+);
 CREATE TABLE IF NOT EXISTS paper_nav (         -- 實盤追蹤（紙上投資組合）：每本帳（資金份數）每天收盤的資產；只往後記錄，不重算
   book INTEGER NOT NULL, date TEXT NOT NULL, equity REAL, cash REAL, npos INTEGER, bench REAL, version TEXT, cands INTEGER,
   PRIMARY KEY (book, date)

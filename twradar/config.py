@@ -55,6 +55,10 @@ class Config:
     user_agent: str = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
                        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36 twradar/0.2")
     max_watchlist: int = 50
+    # 永豐 Shioaji（選用）：只讀逐筆成交；不下單、不啟用憑證。留空＝不使用
+    sinopac_api_key: str = field(default="", repr=False)
+    sinopac_secret_key: str = field(default="", repr=False)
+    sinopac_daily: bool = True          # 有設定 Key 時，每天收盤分析後收當天的逐筆彙總
     # 以下不存檔
     legacy: dict = field(default_factory=dict, repr=False)   # 尚未搬到 settings.json 的舊欄位
     env: dict = field(default_factory=dict, repr=False)      # 環境變數覆寫（Docker），例如 finmind_token
@@ -118,6 +122,8 @@ def load_config() -> Config:
             setattr(cfg, key, os.environ[env])
     if os.environ.get("TWRADAR_PORT"):
         cfg.port = int(os.environ["TWRADAR_PORT"])
+    if os.environ.get("SJ_API_KEY") and os.environ.get("SJ_SEC_KEY"):
+        cfg.sinopac_api_key, cfg.sinopac_secret_key = os.environ["SJ_API_KEY"], os.environ["SJ_SEC_KEY"]
     if os.environ.get("TWRADAR_FINMIND_TOKEN"):
         cfg.env["finmind_token"] = os.environ["TWRADAR_FINMIND_TOKEN"]
     if ensure_credentials(cfg) or not path.exists() or "token" in data:

@@ -416,6 +416,87 @@ def run_paper(cfg, args) -> int:
     return 0
 
 
+def _sinopac(cfg):
+    from .providers.sinopac import Sinopac
+    return Sinopac.login(cfg.sinopac_api_key, cfg.sinopac_secret_key)
+
+
+def run_sinopac_probe(cfg, args) -> int:
+    """登入永豐、抓一檔一天的 ticks，確認權限、欄位與流量估計。"""
+    import time as _t
+    from collections import Counter
+    from .providers.sinopac import SinopacError, aggregate
+    from .dates import norm_date
+    db, _ = open_all(cfg)
+    d = norm_date(args.date) if args.date else db.one("SELECT MAX(date) AS d FROM market WHERE taiex IS NOT NULL")["d"]
+    try:
+        t0 = _t.time()
+        sp = _sinopac(cfg)
+        print(f"登入成功（{_t.time() - t0:.1f} 秒）；shioaji 版本 {getattr(__import__('shioaji'), '__version__', '?')}")
+    except SinopacError as e:
+        print(e)
+        return 1
+    try:
+        t0 = _t.time()
+        t = sp.ticks(args.code, d)
+        if t is None:
+            print(f"找不到商品 {args.code}")
+            return 1
+        a = aggregate(t)
+        print(f"{args.code} {d}：{a['n']} 筆（{_t.time() - t0:.1f} 秒，估計約 {sp.bytes / 1e6:.2f} MB）")
+        print("tick_type 分布：", dict(Counter(list(t.tick_type))))
+        print("前 3 筆：", [dict(ts=t.ts[i], close=t.close[i], volume=t.volume[i], type=t.tick_type[i]) for i in range(min(3, a["n"]))])
+        q = db.one("SELECT volume FROM quotes WHERE code=? AND date=?", (args.code, d))
+        print(f"彙總：成交 {a['vol']} 張（證交所 {q['volume'] if q else '—'}）｜外盤 {a['buy']}、內盤 {a['sell']}、無法判斷 {a['unk']}"
+              f"｜大單買 {a['bigBuy']}、賣 {a['bigSell']}｜均價 {a['vwap']}")
+    finally:
+        sp.logout()
+    return 0
+
+
+def run_tick_history(cfg, args) -> int:
+    from . import tickflow
+    from .backtest import BTConfig, rank_universe
+    from .dates import norm_date
+    from .providers.sinopac import SinopacError
+    db, st = open_all(cfg)
+    days = [r["date"] for r in db.q("SELECT date FROM market WHERE taiex IS NOT NULL AND date>=? AND date<=? ORDER BY date DESC",
+                                    (norm_date(args.start) if args.start else "20200302",
+                                     norm_date(args.end) if args.end else "99999999"))]
+    if not days:
+        print("期間內沒有交易日")
+        return 1
+    want = set(args.universe.split(","))
+    codes = set()
+    if "watchlist" in want:
+        codes |= {w["code"] for w in st.get()["watchlist"]}
+    tags = want & {"大型", "中型", "上櫃", "large", "mid", "otc"}
+    if tags:
+        alias = {"large": "大型", "mid": "中型", "otc": "上櫃"}
+        tags = {alias.get(x, x) for x in tags}
+        u = rank_universe(db, days[0], BTConfig("", "", ""))
+        codes |= {c for c, t in u.items() if t & tags}
+    if args.codes:
+        codes |= set(args.codes.split(","))
+    pairs = [(c, d) for d in days for c in sorted(codes)]     # 新的日子先抓
+    print(f"{len(codes)} 檔 × {len(days)} 天＝{len(pairs)} 組（{days[-1]}～{days[0]}，新的先抓）；本次流量上限約 {args.budget_mb:g} MB", flush=True)
+    try:
+        sp = _sinopac(cfg)
+    except SinopacError as e:
+        print(e)
+        return 1
+    try:
+        r = tickflow.collect(db, sp, pairs, args.budget_mb, progress=lambda m: print(m, flush=True))
+    finally:
+        sp.logout()
+    left = r["todo"] - r["saved"]
+    print(f"完成：存 {r['saved']}、已有 {r['skipped']}、剩 {left}；查詢 {r['calls']} 次、約 {r['mb']} MB"
+          + (f"｜停止：{r['stopped']}" if r["stopped"] else ""))
+    if left:
+        print("明天（08:00 流量重置後）再執行同一個指令會從中斷處繼續。")
+    return 0
+
+
 def run_pivot(cfg, args) -> int:
     from . import pivot
     from .dates import norm_date
@@ -534,6 +615,15 @@ def main(argv=None) -> None:
     sc.add_argument("--top", type=int, default=20)
     tk = sub.add_parser("track", help="模型追蹤：補建過去的紀錄並更新摘要")
     tk.add_argument("--since", help="從這天（YYYYMMDD）起補建，預設只更新報酬與摘要")
+    sp_ = sub.add_parser("sinopac-probe", help="永豐 Shioaji：登入並抓一檔一天的逐筆成交，確認可用")
+    sp_.add_argument("--code", default="2330")
+    sp_.add_argument("--date", help="YYYYMMDD（預設：最新交易日）")
+    th = sub.add_parser("tick-history", help="永豐 Shioaji：補抓逐筆成交的每日彙總（主動買賣、大單）；可中斷、明天續抓")
+    th.add_argument("--universe", default="watchlist,大型", help="watchlist、大型、中型、上櫃（或 large、mid、otc），逗號分隔")
+    th.add_argument("--codes", help="另外加的代號，逗號分隔")
+    th.add_argument("--start", default="20241001")
+    th.add_argument("--end")
+    th.add_argument("--budget-mb", type=float, default=450, help="本次預估流量上限（未交易帳戶每日 500 MB）")
     pv = sub.add_parser("pivot-study", help="平點研究：W 天斜率由跌（漲）轉平之後的報酬（不影響規則）")
     pv.add_argument("--start")
     pv.add_argument("--end")
@@ -618,6 +708,10 @@ def main(argv=None) -> None:
         sys.exit(run_backtest(cfg, args))
     elif args.cmd == "track":
         sys.exit(run_track(cfg, args))
+    elif args.cmd == "sinopac-probe":
+        sys.exit(run_sinopac_probe(cfg, args))
+    elif args.cmd == "tick-history":
+        sys.exit(run_tick_history(cfg, args))
     elif args.cmd == "pivot-study":
         sys.exit(run_pivot(cfg, args))
     elif args.cmd == "paper":

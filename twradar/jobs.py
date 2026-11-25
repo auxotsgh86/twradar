@@ -188,6 +188,20 @@ class Crawler:
             except Exception as e:  # noqa: BLE001
                 log.exception("實盤追蹤 %s 失敗", d)
                 self.db.log("warn", f"{d} 實盤追蹤（紙上投資組合）失敗：{e!r}")
+            if self.cfg.sinopac_api_key and self.cfg.sinopac_daily:
+                from . import tickflow
+                from .providers.sinopac import Sinopac
+                try:
+                    sp = Sinopac.login(self.cfg.sinopac_api_key, self.cfg.sinopac_secret_key)
+                    try:
+                        codes = tickflow.daily_targets(self.db, self.settings.get(), d)
+                        r = tickflow.collect(self.db, sp, [(c, d) for c in codes], budget_mb=200)
+                    finally:
+                        sp.logout()
+                    self.db.log("info", f"{d} 逐筆彙總：{r['saved']} 檔（約 {r['mb']} MB）" + (f"，{r['stopped']}" if r["stopped"] else ""))
+                except Exception as e:  # noqa: BLE001
+                    log.exception("逐筆彙總 %s 失敗", d)
+                    self.db.log("warn", f"{d} 逐筆彙總（永豐）失敗：{e!r}")
 
     def crawl_weekly(self, d: str) -> str | None:
         """集保股權分散表：上次資料距今滿 7 天才抓（每週一次）；失敗只記錄，不影響當日狀態。"""
