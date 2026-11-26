@@ -124,14 +124,20 @@ class Macro:
             sp = self.spot[i - WIN + 1:i + 1] if i - WIN + 1 >= 0 else []
             if len(sp) == WIN and None not in sp:
                 out["foreignSpot5d"] = round(sum(sp) / 1e8, 1)           # 億元
+            if self.spot[i] is not None:
+                out["foreignSpot1d"] = round(self.spot[i] / 1e8, 1)       # 當日，億元
             if self.fut[i] is not None:
                 out["futForeign"] = self.fut[i]
                 if j >= 0 and self.fut[j] is not None:
                     out["futForeignChg5"] = self.fut[i] - self.fut[j]     # 口；負＝空單增加
+                if i >= 1 and self.fut[i - 1] is not None:
+                    out["futForeignChg1"] = self.fut[i] - self.fut[i - 1]  # 當日
             if self.fx[i] is not None:
                 out["usdTwd"] = self.fx[i]
                 if j >= 0 and self.fx[j]:
                     out["usdTwdChg5Pct"] = round((self.fx[i] / self.fx[j] - 1) * 100, 3)   # 正＝新台幣貶值
+                if i >= 1 and self.fx[i - 1]:
+                    out["usdTwdChg1Pct"] = round((self.fx[i] / self.fx[i - 1] - 1) * 100, 3)
             k = i - LOOKBACK
             if self.br[i] is not None:
                 out["breadth20"] = self.br[i]

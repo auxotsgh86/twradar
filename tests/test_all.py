@@ -2134,6 +2134,9 @@ class MacroTests(unittest.TestCase):
         self.assertEqual(f["foreignSpot5d"], -250.0)
         self.assertEqual(f["futForeignChg5"], -5000)
         self.assertGreater(f["usdTwdChg5Pct"], 0.3)
+        self.assertEqual(f["foreignSpot1d"], -50.0)          # 當日
+        self.assertEqual(f["futForeignChg1"], -1000)
+        self.assertAlmostEqual(f["usdTwdChg1Pct"], round((33.95 / 33.9 - 1) * 100, 3))
         self.assertEqual(f["breadth20Chg10"], 0.0)
         self.assertEqual(Macro(db, days[-1]).fields(days[3]).get("foreignSpot5d"), None)   # 不足 5 天
         # 判定日以前的資料才算：days[29] 時外資還沒開始賣
