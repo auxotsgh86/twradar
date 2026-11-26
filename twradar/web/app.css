@@ -157,3 +157,9 @@ table.compact th{line-height:1.25}
 tr.evrow td{text-align:left;white-space:normal;background:var(--surface2);font-size:12.5px;color:var(--muted);padding-top:2px}
 tr.evrow ul{margin:0;padding-left:1.1em}
 tr.evrow b{color:var(--fg)}
+
+/* 總覽：當日／5 日變化分兩行 */
+.chgline { font-size: .82em; line-height: 1.35; white-space: nowrap; }
+.chgline .muted { display: inline-block; min-width: 2.6em; font-size: .82rem; }
+.chgline.main { font-size: 1em; }
+.kv .v .chgline { display: block; }

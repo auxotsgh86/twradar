@@ -81,8 +81,8 @@ const TIPS = {
   dealer: "證券商用自有資金的買賣超，包含發行權證的避險交易；進出很快，對方向的參考性較低。",
   attitude: "看外資近 5 日在三個地方是否同時撤出：現貨賣超、台指期空單增加、新台幣貶值。成立項數達到設定值（預設 3 項）時，系統暫停新的上車訊號。",
   spot5: "外資在集中市場的買賣超金額：「當日」是這一天，「5 日」是最近 5 個交易日的加總。負數代表外資在賣。單日容易被大額調整扭曲，看 5 日比較能看出態度。",
-  fut: "外資在台指期貨「空單比多單多出幾口」，也就是淨空單；數字越大，外資押注下跌或避險的部位越大（新聞常說的「外資淨空單 10 萬口」就是這個）。旁邊是當日與 5 日的變化：空單減少（回補）偏多，空單增加偏空。",
-  fx: "1 美元可以換多少新台幣。數字變大＝新台幣貶值，常伴隨外資把錢匯出；數字變小＝新台幣升值、資金流入。旁邊標的是新台幣當日與 5 日的升貶。",
+  fut: "外資在台指期貨「空單比多單多出幾口」，也就是淨空單；數字越大，外資押注下跌或避險的部位越大（新聞常說的「外資淨空單 10 萬口」就是這個）。下面是當日與 5 日的變化（紅＝空單增加、綠＝減少）：空單減少（回補）通常偏多，空單增加通常偏空。",
+  fx: "1 美元可以換多少新台幣。數字變大＝新台幣貶值，常伴隨外資把錢匯出；數字變小＝新台幣升值、資金流入。下面標的是新台幣當日與 5 日的升貶（紅＝升值、綠＝貶值）。",
   breadth: "全部上市櫃普通股中，收盤價站在自己月線（20 日均價）之上的比例，看短線強弱。指數在漲但廣度很低，代表只有少數權值股在撐盤。價格已做除權息還原，除息不會被當成跌破。",
   breadth200: "全部上市櫃普通股中，收盤價站在自己 200 日均線之上的比例，看長期結構。短期廣度很低、長期廣度還過半，通常是多頭中的修正；長期廣度也跌破一半，代表長期趨勢轉弱。",
 };
@@ -96,18 +96,22 @@ function marketHTML(m) {
     ${climateHTML(m.climate)}`;
 }
 /* 大盤環境：外資態度三項（近 5 日）、市場廣度，以及白話解讀 */
-/* 台指期淨部位變化：數字變大（往多方）＝空單減少，變小＝空單增加；淨多單時改說多單 */
+/* 當日／5 日分兩行；顏色只看數字增減：增加紅、減少綠（不代表偏多偏空） */
+const updn = v => v > 0 ? "up" : v < 0 ? "down" : "";
+const chgLine = (label, text, dir, main = false) => `<div class="chgline${main ? " main" : ""}"><span class="muted">${label}</span> <span class="num ${dir}">${text}</span></div>`;
 function futChg(label, chg, net) {
   if (chg === undefined || chg === null) return "";
   const short = net === undefined || net === null || net <= 0;
-  const word = chg === 0 ? "不變" : short ? (chg > 0 ? "空單減少 " : "空單增加 ") : (chg > 0 ? "多單增加 " : "多單減少 ");
-  return `<span class="small muted">　${label}</span><span class="small num ${cls(chg)}"> ${word}${chg === 0 ? "" : fmt(Math.abs(chg), 0)}</span>`;
+  if (chg === 0) return chgLine(label, short ? "空單不變" : "多單不變", "");
+  // 淨部位數字變大＝空單減少（淨空時）或多單增加（淨多時）
+  const more = short ? chg < 0 : chg > 0;
+  return chgLine(label, `${short ? "空單" : "多單"}${more ? "增加" : "減少"} ${fmt(Math.abs(chg), 0)}`, more ? "up" : "down");
 }
-/* 匯率變化：美元兌新台幣上升＝新台幣貶值（紅色以外：資金流出用綠） */
 function twdChg(label, pct) {
   if (pct === undefined || pct === null) return "";
-  const word = pct > 0 ? "新台幣貶 " : pct < 0 ? "新台幣升 " : "新台幣持平";
-  return `<span class="small muted">　${label}</span><span class="small num ${cls(-pct)}"> ${word}${pct === 0 ? "" : Math.abs(pct).toFixed(2) + "%"}</span>`;
+  if (pct === 0) return chgLine(label, "新台幣持平", "");
+  // 美元兌新台幣上升＝新台幣貶值（新台幣價值減少）
+  return chgLine(label, `新台幣${pct > 0 ? "貶" : "升"} ${Math.abs(pct).toFixed(2)}%`, pct > 0 ? "down" : "up");
 }
 function climateHTML(c, {reading = true} = {}) {
   if (!c) return "";
@@ -118,8 +122,8 @@ function climateHTML(c, {reading = true} = {}) {
     `<li><div class="rt">${esc(t.text)}</div>${t.concept ? `<div class="rc"><b>一般解讀</b>　${esc(t.concept)}</div>` : ""}${t.evidence ? `<div class="re"><b>過去資料</b>　${esc(t.evidence.replace(/^過去資料/, ""))}</div>` : ""}</li>`).join("")}</ul></div>` : "";
   return `<div class="market climate">
     ${kv("attitude", "外資態度（近 5 日）", b)}
-    ${kv("spot5", "外資現貨買賣超（億）", `<span class="small muted">當日</span> <span class="num ${cls(c.foreignSpot1d)}">${fmtS(c.foreignSpot1d, 0)}</span><span class="small muted">　5 日</span> <span class="num ${cls(c.foreignSpot5d)}">${fmtS(c.foreignSpot5d, 0)}</span>`)}
-    ${kv("fut", P(c.futForeign) || c.futForeign <= 0 ? "外資台指期淨空單（口）" : "外資台指期淨多單（口）", `<span class="num ${cls(c.futForeign)}">${P(c.futForeign) ? "—" : fmt(Math.abs(c.futForeign), 0)}</span>${futChg("當日", c.futForeignChg1, c.futForeign)}${futChg("5 日", c.futForeignChg5, c.futForeign)}`)}
+    ${kv("spot5", "外資現貨買賣超（億）", chgLine("當日", fmtS(c.foreignSpot1d, 0), updn(c.foreignSpot1d), true) + chgLine("5 日", fmtS(c.foreignSpot5d, 0), updn(c.foreignSpot5d), true))}
+    ${kv("fut", P(c.futForeign) || c.futForeign <= 0 ? "外資台指期淨空單（口）" : "外資台指期淨多單（口）", `<span class="num">${P(c.futForeign) ? "—" : fmt(Math.abs(c.futForeign), 0)}</span>${futChg("當日", c.futForeignChg1, c.futForeign)}${futChg("5 日", c.futForeignChg5, c.futForeign)}`)}
     ${kv("fx", "美元兌新台幣", `<span class="num">${fmt(c.usdTwd, 3)}</span>${twdChg("當日", c.usdTwdChg1Pct)}${twdChg("5 日", c.usdTwdChg5Pct)}`)}
     ${kv("breadth", "市場廣度（月線／200 日線）", `<span class="num">${P(c.breadth20) ? "—" : c.breadth20.toFixed(0) + "%"}</span><span class="small num muted">${P(c.breadth200) ? "" : "／" + c.breadth200.toFixed(0) + "%"}</span>`)}</div>${rd}`;
 }
