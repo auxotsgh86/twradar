@@ -153,7 +153,7 @@ def holders_history_codes(db, st, which: str, weeks: list[str]) -> list[str]:
 
 
 def run_macro_history(cfg, args) -> int:
-    """外資台指期淨未平倉、美元兌新台幣（期交所，每段一年）與市場廣度（由已有行情計算）。"""
+    """外資台指期淨未平倉、美元兌新台幣（期交所，每段一年）、美債 10 年期殖利率（FRED）與市場廣度（由已有行情計算）。"""
     from datetime import timedelta
 
     from .dates import to_date
@@ -181,6 +181,13 @@ def run_macro_history(cfg, args) -> int:
             fx = sum(1 for r in rows if "usd_twd" in r)
             print(f"{s}～{e}：外資期貨 {fut} 天、匯率 {fx} 天" + ("；" + "；".join(errs) if errs else ""), flush=True)
             a = b + timedelta(days=1)
+        try:
+            from .providers.fred import Fred
+            us = Fred(Fetcher(3.0, cfg.user_agent)).ust10y((to_date(start) - timedelta(days=40)).strftime("%Y%m%d"), end)
+            db.put_us_rates(us)
+            print(f"美債 10 年期殖利率（FRED）：{len(us)} 天" + (f"（{us[0]['date']}～{us[-1]['date']}）" if us else ""), flush=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"美債殖利率（FRED）抓取失敗：{e}")
     n = compute_breadth(db)
     print(f"市場廣度：新算 {n} 天（除權息還原；短期＝站上月線、長期＝站上 200 日線）")
     r = db.one("SELECT COUNT(fut_foreign) AS f, COUNT(usd_twd) AS x, COUNT(breadth20) AS b, COUNT(breadth200) AS b2, "

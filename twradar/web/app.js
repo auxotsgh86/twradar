@@ -82,6 +82,7 @@ const TIPS = {
   attitude: "看外資近 5 日在三個地方是否同時撤出：現貨賣超、台指期空單增加、新台幣貶值。成立項數達到設定值（預設 3 項）時，系統暫停新的上車訊號。",
   spot5: "外資在集中市場的買賣超金額：「當日」是這一天，「5 日」是最近 5 個交易日的加總。負數代表外資在賣。單日容易被大額調整扭曲，看 5 日比較能看出態度。",
   fut: "外資在台指期貨「空單比多單多出幾口」，也就是淨空單；數字越大，外資押注下跌或避險的部位越大（新聞常說的「外資淨空單 10 萬口」就是這個）。下面是當日與 5 日的變化（紅＝空單增加、綠＝減少）：空單減少（回補）通常偏多，空單增加通常偏空。",
+  ust: "美國 10 年期公債殖利率（全球資金的無風險報酬率）。上升時美元通常走強、資金回流美國，科技股評價也較受壓；下降則相反。bp＝基點，0.01%。美股收盤是台灣清晨，所以這裡用的是前一個美國交易日的收盤值。目前只供參考，還沒放進訊號。",
   fx: "1 美元可以換多少新台幣。數字變大＝新台幣貶值，常伴隨外資把錢匯出；數字變小＝新台幣升值、資金流入。下面標的是新台幣當日與 5 日的升貶（紅＝升值、綠＝貶值）。",
   breadth: "全部上市櫃普通股中，收盤價站在自己月線（20 日均價）之上的比例，看短線強弱。指數在漲但廣度很低，代表只有少數權值股在撐盤。價格已做除權息還原，除息不會被當成跌破。",
   breadth200: "全部上市櫃普通股中，收盤價站在自己 200 日均線之上的比例，看長期結構。短期廣度很低、長期廣度還過半，通常是多頭中的修正；長期廣度也跌破一半，代表長期趨勢轉弱。",
@@ -113,6 +114,10 @@ function twdChg(label, pct) {
   // 美元兌新台幣上升＝新台幣貶值（新台幣價值減少）
   return chgLine(label, `新台幣${pct > 0 ? "貶" : "升"} ${Math.abs(pct).toFixed(2)}%`, pct > 0 ? "down" : "up");
 }
+function bpLine(label, bp) {
+  if (bp === undefined || bp === null) return "";
+  return chgLine(label, bp === 0 ? "持平" : `${bp > 0 ? "上升" : "下降"} ${Math.abs(bp).toFixed(1)} bp`, updn(bp));
+}
 function climateHTML(c, {reading = true} = {}) {
   if (!c) return "";
   const st = c.foreignState, txt = {exit: "外資撤出：暫停上車", ok: "外資未撤出", na: "外資態度資料不足"}[st] || "";
@@ -125,6 +130,7 @@ function climateHTML(c, {reading = true} = {}) {
     ${kv("spot5", "外資現貨買賣超（億）", chgLine("當日", fmtS(c.foreignSpot1d, 0), updn(c.foreignSpot1d), true) + chgLine("5 日", fmtS(c.foreignSpot5d, 0), updn(c.foreignSpot5d), true))}
     ${kv("fut", P(c.futForeign) || c.futForeign <= 0 ? "外資台指期淨空單（口）" : "外資台指期淨多單（口）", `<span class="num">${P(c.futForeign) ? "—" : fmt(Math.abs(c.futForeign), 0)}</span>${futChg("當日", c.futForeignChg1, c.futForeign)}${futChg("5 日", c.futForeignChg5, c.futForeign)}`)}
     ${kv("fx", "美元兌新台幣", `<span class="num">${fmt(c.usdTwd, 3)}</span>${twdChg("當日", c.usdTwdChg1Pct)}${twdChg("5 日", c.usdTwdChg5Pct)}`)}
+    ${kv("ust", "美 10 年債殖利率", `<span class="num">${P(c.ust10y) ? "—" : c.ust10y.toFixed(2) + "%"}</span>${P(c.ust10yDate) ? "" : `<span class="small muted"> 美國 ${mmdd(c.ust10yDate)}</span>`}${bpLine("當日", c.ust10yChg1)}${bpLine("5 日", c.ust10yChg5)}`)}
     ${kv("breadth", "市場廣度（月線／200 日線）", `<span class="num">${P(c.breadth20) ? "—" : c.breadth20.toFixed(0) + "%"}</span><span class="small num muted">${P(c.breadth200) ? "" : "／" + c.breadth200.toFixed(0) + "%"}</span>`)}</div>${rd}`;
 }
 const ck = (label, st, why) => `<span class="ck ${st}" title="${esc(why || "")}">${{pass: "✓", fail: "✕", na: "?"}[st] || "?"} ${label}</span>`;
@@ -531,7 +537,7 @@ async function viewReport(date) {
     <div class="sec"><h2>精簡表</h2>${tableHTML(st)}</div>
     ${e.model ? `<div class="small ${e.model.status === "偏離" ? "" : "muted"}" style="margin:8px 0">${e.model.status === "偏離" ? "⚠ " : ""}模型追蹤：${esc(e.model.status)}。${esc(e.model.text)}</div>` : ""}
     ${modelWeeklyHTML(e.model)}
-    <div class="sec glossary"><h2>名詞說明</h2><dl>${[["外資買賣超", "foreign"], ["投信買賣超", "trust"], ["自營商買賣超", "dealer"], ["外資態度", "attitude"],
+    <div class="sec glossary"><h2>名詞說明</h2><dl>${[["外資買賣超", "foreign"], ["投信買賣超", "trust"], ["自營商買賣超", "dealer"], ["外資態度", "attitude"], ["美 10 年債殖利率", "ust"],
       ["外資現貨 5 日", "spot5"], ["外資台指期淨空單", "fut"], ["美元兌新台幣", "fx"], ["市場廣度（短期）", "breadth"], ["長期廣度", "breadth200"]].map(([k, t]) => `<dt>${k}</dt><dd>${esc(TIPS[t])}</dd>`).join("")}
       <dt>其他本土（差額）</dt><dd>三大法人合計的反向，是推算出來的；證交所沒有公布是誰，推測包括公股行庫與國安基金、壽險、企業與大股東，以及用現股買賣的散戶。</dd>
       <dt>燈號</dt><dd>綠＝上車／加碼訊號，黃＝觀察中（還差哪些條件寫在下方），紅＝轉弱／不宜加碼。</dd></dl></div>

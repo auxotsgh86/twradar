@@ -7,6 +7,9 @@ from __future__ import annotations
 
 import bisect
 from collections import deque
+from datetime import timedelta
+
+from .dates import to_date
 
 from .db import DB
 
@@ -112,7 +115,16 @@ class Macro:
         self.fx = [mac.get(d, {}).get("usd_twd") for d in self.days]
         self.br = [mac.get(d, {}).get("breadth20") for d in self.days]
         self.br200 = [mac.get(d, {}).get("breadth200") for d in self.days]
+        # 美債殖利率：判定台股 d 日只能用美國 d 之前（不含 d）的收盤值（美股收盤是台灣清晨）
+        us = db.q("SELECT date, ust10y FROM us_rates WHERE date<? AND date>=? AND ust10y IS NOT NULL ORDER BY date",
+                  (until, (to_date(since) - timedelta(days=30)).strftime("%Y%m%d") if since else ""))
+        self.us_days = [r["date"] for r in us]
+        self.us_val = [r["ust10y"] for r in us]
         self._cache: dict[str, dict] = {}
+
+    def _us_at(self, d: str) -> int:
+        """美國 d 之前（不含）最近一個觀測的索引；沒有回傳 -1。"""
+        return bisect.bisect_left(self.us_days, d) - 1
 
     def fields(self, d: str) -> dict:
         if d in self._cache:
@@ -138,6 +150,15 @@ class Macro:
                     out["usdTwdChg5Pct"] = round((self.fx[i] / self.fx[j] - 1) * 100, 3)   # 正＝新台幣貶值
                 if i >= 1 and self.fx[i - 1]:
                     out["usdTwdChg1Pct"] = round((self.fx[i] / self.fx[i - 1] - 1) * 100, 3)
+            u = self._us_at(d)
+            if u >= 0 and (to_date(d) - to_date(self.us_days[u])).days <= 7:
+                out["ust10y"], out["ust10yDate"] = self.us_val[u], self.us_days[u]
+                if u >= 1:
+                    out["ust10yChg1"] = round((self.us_val[u] - self.us_val[u - 1]) * 100, 1)        # 基點
+                if j >= 0:
+                    u5 = self._us_at(self.days[j])
+                    if u5 >= 0:
+                        out["ust10yChg5"] = round((self.us_val[u] - self.us_val[u5]) * 100, 1)   # 和 5 個台股交易日前對齊的值比
             k = i - LOOKBACK
             if self.br[i] is not None:
                 out["breadth20"] = self.br[i]
@@ -189,6 +210,8 @@ def history_rank(db: DB, d: str, rec: dict) -> dict:
 
 
 FWD = (10, 20)   # 歷史統計：之後 10、20 個交易日的加權指數報酬
+
+UST_BP = 15    # 美債殖利率 5 日變動達這麼多基點才寫進情境解讀
 
 CONCEPT = {
     ("foreign", "sell_add"): "現貨賣、期貨也加空，是外資最一致的看空：不只賣掉持股，還押注大盤下跌。",
@@ -326,6 +349,14 @@ def reading(f: dict, rank: dict, state: str, hit: int, need: int, P: dict, stats
         word = "貶" if fx > 0 else "升"
         tail = {"depr": "", "appr": "", "near_depr": f"，接近 {thr:g}% 的門檻", "near_appr": f"，接近 {thr:g}% 的門檻", "flat": "，大致持平"}[cls["fx"]]
         item("fx", f"新台幣 5 日{word} {v}%{tail}。")
+    u5 = f.get("ust10yChg5")
+    if u5 is not None and abs(u5) >= UST_BP:
+        up = u5 > 0
+        out.append({"text": f"美國 10 年期公債殖利率 {f['ust10y']:.2f}%，5 日{'上升' if up else '下降'} {abs(u5):.0f} 個基點（美國 {f['ust10yDate'][4:6]}/{f['ust10yDate'][6:]} 收盤）。",
+                    "concept": ("殖利率上升時，美元通常走強、資金回流美國，外資較容易賣台股；科技股的價值多來自遠期獲利，"
+                                "利率越高、折算回今天越不值錢，本益比常被壓縮。" if up else
+                                "殖利率下降時，美元通常轉弱、資金較願意流向新興市場；科技股的評價壓力也減輕。"),
+                    "evidence": "還沒有用我們的資料驗證過；只供參考，不影響訊號。"})
     b = f.get("breadth20")
     if "breadth" in cls:
         br = rank.get("breadth20")

@@ -279,6 +279,13 @@ class Crawler:
             self.db.put_macro(rows)
         for e in errs:
             self.db.log("warn", f"大盤環境資料抓取失敗：{e}")
+        try:   # 美債殖利率（FRED）：最近一個月，覆寫
+            from .providers.fred import Fred
+            us = Fred(self.f).ust10y((to_date(d) - timedelta(days=31)).strftime("%Y%m%d"), d)
+            self.db.put_us_rates(us)
+        except Exception as e:  # noqa: BLE001
+            errs.append(f"美債殖利率（FRED）：{e}")
+            self.db.log("warn", f"美債殖利率抓取失敗：{e}")
         self.db.set_setting("macro", {"date": d, "at": _now(), "rows": len(rows), "errors": errs})
         return len(rows)
 

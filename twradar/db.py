@@ -66,6 +66,9 @@ CREATE TABLE IF NOT EXISTS macro (             -- 大盤環境：外資台指期
   date TEXT PRIMARY KEY, fut_foreign INTEGER, fut_trust INTEGER, fut_dealer INTEGER, usd_twd REAL, breadth20 REAL, src TEXT,
   breadth200 REAL
 );
+CREATE TABLE IF NOT EXISTS us_rates (          -- 美國利率（FRED）；date 是美國的交易日
+  date TEXT PRIMARY KEY, ust10y REAL
+);
 CREATE TABLE IF NOT EXISTS tickflow (          -- 逐筆成交每日彙總（張）：外盤／內盤、大單（≥100 萬）、特大單（≥500 萬）；src＝sinopac／nocontract
   code TEXT NOT NULL, date TEXT NOT NULL, n INTEGER, vol INTEGER, buy INTEGER, sell INTEGER, unk INTEGER,
   big_buy INTEGER, big_sell INTEGER, huge_buy INTEGER, huge_sell INTEGER, amount REAL, vwap REAL, src TEXT,
@@ -235,6 +238,11 @@ class DB:
                 cols = ("date", *self.MACRO_COLS)
                 c.execute(f"INSERT OR REPLACE INTO macro({','.join(cols)}) VALUES({','.join('?' * len(cols))})",
                           [m.get(k) for k in cols])
+        return len(rows)
+
+    def put_us_rates(self, rows: list[dict]) -> int:
+        with self.tx() as c:
+            c.executemany("INSERT OR REPLACE INTO us_rates(date, ust10y) VALUES(?, ?)", [(r["date"], r["ust10y"]) for r in rows])
         return len(rows)
 
     def holders_latest(self) -> str | None:

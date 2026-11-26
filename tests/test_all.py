@@ -2472,6 +2472,30 @@ class VectorTests(unittest.TestCase):
         db.put_macro(rows)
         return db, days
 
+    def test_ust(self):
+        """美債殖利率：FRED 解析、台股 d 日只用美國 d 之前的值、方向（上升＝偏空）、向量研究多了 [4]。"""
+        from twradar.macro import Macro
+        from twradar.providers.fred import parse
+        from twradar.vector import load, render, study, vector
+        rows = parse(b"observation_date,DGS10\n2026-11-23,4.10\n2026-11-24,.\n2026-11-25,4.25\n")
+        self.assertEqual(rows, [{"date": "20261123", "ust10y": 4.10}, {"date": "20261125", "ust10y": 4.25}])
+        db, days = self._db()
+        us = [{"date": d, "ust10y": 4.0 + i * 0.01} for i, d in enumerate(days)]   # 每天升 1 bp
+        us[-1]["ust10y"] = 9.99                                                    # 和台股最後一天同一天的美國值：不能用
+        db.put_us_rates(us)
+        f = Macro(db, days[-1], days[-40]).fields(days[-1])
+        self.assertEqual(f["ust10yDate"], days[-2])
+        self.assertAlmostEqual(f["ust10y"], 4.0 + (len(days) - 2) * 0.01)
+        self.assertEqual(f["ust10yChg1"], 1.0)
+        self.assertEqual(f["ust10yChg5"], 5.0)
+        s = load(db)
+        self.assertAlmostEqual(s["ust"][-1], f["ust10y"])
+        v = vector(s, 60)
+        self.assertAlmostEqual(v["raw_ust"][-1], -5.0)       # 殖利率上升 5 bp → −5（偏空）
+        r = study(db, windows=(60,), horizons=(10,))
+        self.assertIn("[4] 美債 10 年期殖利率", render(r, (10,)))
+        self.assertGreater(r["windows"][60]["ust"]["coverage"], 0)
+
     def test_z_direction(self):
         from twradar.vector import load, vector
         db, days = self._db(shock=True)

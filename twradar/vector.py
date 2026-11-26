@@ -4,6 +4,8 @@
 - spot：外資現貨 5 日累計買賣超（億元）
 - fut ：外資台指期淨未平倉 5 日變化（口；正＝空單減少）
 - fx  ：−（美元兌新台幣 5 日變化 %）（正＝新台幣升值）
+- ust ：−（美債 10 年期殖利率 5 日變化，基點）（正＝殖利率下降）；只用前一個美國交易日的收盤；預設不放進 net_score，
+        另在 [4] 比較加進去前後
 每項做滾動 Z-score（視窗 W 個交易日，含當天），截斷在 ±3。
 - net_score  ：可用 Z-score 的等權平均（至少 2 項）
 - dispersion ：可用 Z-score 的樣本標準差（至少 2 項；現貨、期貨、匯率互相打架時變大）
@@ -11,9 +13,11 @@
 """
 from __future__ import annotations
 
+import bisect
 import math
 from statistics import fmean, stdev
 
+from .dates import to_date
 from .db import DB
 
 ZCAP = 3.0
@@ -30,15 +34,27 @@ def load(db: DB, until: str | None = None) -> dict:
     m = db.q("SELECT date, taiex, foreign_amt FROM market WHERE taiex IS NOT NULL AND date<=? ORDER BY date", (lim,))
     mac = {r["date"]: dict(r) for r in db.q("SELECT date, fut_foreign, usd_twd FROM macro WHERE date<=?", (lim,))}
     days = [r["date"] for r in m]
+    # 美債殖利率：台股 d 日只能用美國 d 之前（不含 d）最近的收盤值
+    us = db.q("SELECT date, ust10y FROM us_rates WHERE date<? AND ust10y IS NOT NULL ORDER BY date", (lim,))
+    ud, uv = [r["date"] for r in us], [r["ust10y"] for r in us]
+    ust = []
+    for d in days:
+        k = bisect.bisect_left(ud, d) - 1
+        ust.append(uv[k] if k >= 0 and (to_date(d) - to_date(ud[k])).days <= 7 else None)
     return {"days": days, "taiex": [r["taiex"] for r in m], "spot": [r["foreign_amt"] for r in m],
             "fut": [(mac.get(d) or {}).get("fut_foreign") for d in days],
-            "fx": [(mac.get(d) or {}).get("usd_twd") for d in days]}
+            "fx": [(mac.get(d) or {}).get("usd_twd") for d in days], "ust": ust}
+
+
+UST_BP = 15
 
 
 def raw_features(s: dict) -> dict[str, list]:
-    """每天的 3 個 5 日變化量（方向已統一：正＝偏多）。只用當天與之前的資料。"""
+    """每天的 5 日變化量（方向已統一：正＝偏多）。只用當天與之前的資料。
+    spot 外資現貨、fut 台指期淨部位、fx 新台幣（升為正）、ust 美債殖利率（下降為正，基點）。"""
     n = len(s["days"])
-    spot, fut, fx = [None] * n, [None] * n, [None] * n
+    spot, fut, fx, ust = [None] * n, [None] * n, [None] * n, [None] * n
+    us = s.get("ust") or [None] * n
     for i in range(n):
         w = s["spot"][i - 4:i + 1] if i >= 4 else []
         if len(w) == 5 and None not in w:
@@ -47,7 +63,9 @@ def raw_features(s: dict) -> dict[str, list]:
             fut[i] = s["fut"][i] - s["fut"][i - 5]
         if i >= 5 and s["fx"][i] and s["fx"][i - 5]:
             fx[i] = -(s["fx"][i] / s["fx"][i - 5] - 1) * 100
-    return {"spot": spot, "fut": fut, "fx": fx}
+        if i >= 5 and us[i] is not None and us[i - 5] is not None:
+            ust[i] = -(us[i] - us[i - 5]) * 100
+    return {"spot": spot, "fut": fut, "fx": fx, "ust": ust}
 
 
 def rolling_z(xs: list, window: int, min_obs: int | None = None) -> list:
@@ -67,13 +85,16 @@ def rolling_z(xs: list, window: int, min_obs: int | None = None) -> list:
     return out
 
 
-def vector(s: dict, window: int) -> dict[str, list]:
+BASE_KEYS = ("spot", "fut", "fx")
+
+
+def vector(s: dict, window: int, keys: tuple = BASE_KEYS) -> dict[str, list]:
     raw = raw_features(s)
     z = {k: rolling_z(v, window) for k, v in raw.items()}
     n = len(s["days"])
     net, disp = [None] * n, [None] * n
     for i in range(n):
-        zs = [z[k][i] for k in ("spot", "fut", "fx") if z[k][i] is not None]
+        zs = [z[k][i] for k in keys if z[k][i] is not None]
         if len(zs) >= 2:
             net[i] = fmean(zs)
             disp[i] = stdev(zs)
@@ -182,6 +203,25 @@ def study(db: DB, windows=(60,), horizons=(10, 20), split: str | None = None, st
                     "外資撤出不成立": group([i for i in idx if fe[i] is False], ret, mdd),
                     "net < −1（向量偏空）": g["net < −1"],
                 }
+        # [4] 美債殖利率：單獨的預測力、加進向量後有沒有變好、和外資撤出的關係
+        v4 = vector(s, w, BASE_KEYS + ("ust",))
+        zu, ru = v["z_ust"], v["raw_ust"]
+        res["ust"] = {"coverage": sum(1 for i in period if ru[i] is not None), "ic": {}, "groups": {}}
+        for sm, idx in samples.items():
+            for h in horizons:
+                ret, mdd = fwd[h]
+                res["ust"]["ic"][f"{sm}:{h}"] = {
+                    "z_ust": spearman([zu[i] for i in idx], [ret[i] for i in idx])[0],
+                    "net3": spearman([net[i] for i in idx], [ret[i] for i in idx])[0],
+                    "net4": spearman([v4["net"][i] for i in idx], [ret[i] for i in idx])[0]}
+                res["ust"]["groups"][f"{sm}:{h}"] = {
+                    f"殖利率 5 日上升 ≥ {UST_BP} bp": group([i for i in idx if ru[i] is not None and ru[i] <= -UST_BP], ret, mdd),
+                    f"殖利率 5 日下降 ≥ {UST_BP} bp": group([i for i in idx if ru[i] is not None and ru[i] >= UST_BP], ret, mdd),
+                    "殖利率變動不大": group([i for i in idx if ru[i] is not None and abs(ru[i]) < UST_BP], ret, mdd),
+                    "外資撤出＋殖利率上升": group([i for i in idx if fe[i] is True and ru[i] is not None and ru[i] <= -UST_BP], ret, mdd),
+                    "外資撤出、殖利率沒上升": group([i for i in idx if fe[i] is True and ru[i] is not None and ru[i] > -UST_BP], ret, mdd),
+                    "殖利率上升、外資未撤出": group([i for i in idx if fe[i] is False and ru[i] is not None and ru[i] <= -UST_BP], ret, mdd),
+                }
         out["windows"][w] = res
     return out
 
@@ -209,6 +249,27 @@ def render(r: dict, horizons=(10, 20)) -> str:
                 L.append(f"{'組別':<22}{'樣本':<5}{'天數':>6}{'段':>5}{'平均報酬':>9}{'上漲%':>7}{'平均回落':>9}{'最差回落':>9}")
                 for sm in ("IS", "OOS"):
                     for name, g in res[key][f"{sm}:{h}"].items():
+                        if not g["n"]:
+                            L.append(f"{name:<22}{sm:<5}{0:>6}")
+                            continue
+                        L.append(f"{name:<22}{sm:<5}{g['n']:>6}{g['episodes']:>5}{f(g['ret']):>9}{g['up']:>6}%{f(g['mdd']):>9}{f(g['worst']):>9}")
+        u = res.get("ust")
+        if u:
+            L.append(f"\n[4] 美債 10 年期殖利率（有資料 {u['coverage']} 天；判定日只用前一個美國交易日的收盤）")
+            if not u["coverage"]:
+                L.append("沒有殖利率資料：先跑 macro-history")
+                continue
+            L.append("Rank IC（與未來報酬）：z_ust＝殖利率單獨（下降為正）；net3＝現貨＋期貨＋匯率；net4＝再加殖利率")
+            L.append(f"{'樣本':<6}{'h':>4}{'z_ust':>9}{'net3':>9}{'net4':>9}")
+            for sm in ("IS", "OOS"):
+                for h in horizons:
+                    x = u["ic"][f"{sm}:{h}"]
+                    L.append(f"{sm:<6}{h:>4}{f(x['z_ust'], 3):>9}{f(x['net3'], 3):>9}{f(x['net4'], 3):>9}")
+            for h in horizons:
+                L.append(f"-- 未來 {h} 日")
+                L.append(f"{'組別':<22}{'樣本':<5}{'天數':>6}{'段':>5}{'平均報酬':>9}{'上漲%':>7}{'平均回落':>9}{'最差回落':>9}")
+                for sm in ("IS", "OOS"):
+                    for name, g in u["groups"][f"{sm}:{h}"].items():
                         if not g["n"]:
                             L.append(f"{name:<22}{sm:<5}{0:>6}")
                             continue
