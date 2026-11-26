@@ -59,6 +59,9 @@ class Config:
     sinopac_api_key: str = field(default="", repr=False)
     sinopac_secret_key: str = field(default="", repr=False)
     sinopac_daily: bool = True          # 有設定 Key 時，每天收盤分析後收當天的逐筆彙總
+    sinopac_backfill: bool = True       # 有設定 Key 時，平日 08:10（流量重置後）自動補抓歷史，補完就停
+    sinopac_backfill_start: str = "20241001"
+    sinopac_backfill_universe: str = "watchlist,大型"
     # 以下不存檔
     legacy: dict = field(default_factory=dict, repr=False)   # 尚未搬到 settings.json 的舊欄位
     env: dict = field(default_factory=dict, repr=False)      # 環境變數覆寫（Docker），例如 finmind_token

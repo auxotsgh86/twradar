@@ -463,33 +463,19 @@ def run_tick_history(cfg, args) -> int:
     from .dates import norm_date
     from .providers.sinopac import SinopacError
     db, st = open_all(cfg)
-    days = [r["date"] for r in db.q("SELECT date FROM market WHERE taiex IS NOT NULL AND date>=? AND date<=? ORDER BY date DESC",
-                                    (norm_date(args.start) if args.start else "20200302",
-                                     norm_date(args.end) if args.end else "99999999"))]
-    if not days:
+    pairs, nc, nd = tickflow.backfill_pairs(db, st.get(), norm_date(args.start) if args.start else "20200302",
+                                            norm_date(args.end) if args.end else "99999999", args.universe, args.codes or "")
+    if not pairs:
         print("期間內沒有交易日")
         return 1
-    want = set(args.universe.split(","))
-    codes = set()
-    if "watchlist" in want:
-        codes |= {w["code"] for w in st.get()["watchlist"]}
-    tags = want & {"大型", "中型", "上櫃", "large", "mid", "otc"}
-    if tags:
-        alias = {"large": "大型", "mid": "中型", "otc": "上櫃"}
-        tags = {alias.get(x, x) for x in tags}
-        u = rank_universe(db, days[0], BTConfig("", "", ""))
-        codes |= {c for c, t in u.items() if t & tags}
-    if args.codes:
-        codes |= set(args.codes.split(","))
-    pairs = [(c, d) for d in days for c in sorted(codes)]     # 新的日子先抓
-    print(f"{len(codes)} 檔 × {len(days)} 天＝{len(pairs)} 組（{days[-1]}～{days[0]}，新的先抓）；本次流量上限約 {args.budget_mb:g} MB", flush=True)
+    print(f"{nc} 檔 × {nd} 天＝{len(pairs)} 組（{pairs[-1][1]}～{pairs[0][1]}，新的先抓）；本次流量上限約 {args.budget_mb:g} MB", flush=True)
     try:
         sp = _sinopac(cfg)
     except SinopacError as e:
         print(e)
         return 1
     try:
-        r = tickflow.collect(db, sp, pairs, args.budget_mb, progress=lambda m: print(m, flush=True))
+        r = tickflow.collect(db, sp, pairs, args.budget_mb, progress=lambda m: print(m, flush=True), reserve_mb=args.reserve_mb)
     finally:
         sp.logout()
     left = r["todo"] - r["saved"]
@@ -498,6 +484,18 @@ def run_tick_history(cfg, args) -> int:
           + (f"｜停止：{r['stopped']}" if r["stopped"] else ""))
     if left:
         print("明天（08:00 流量重置後）再執行同一個指令會從中斷處繼續。")
+    return 0
+
+
+def run_tick_coverage(cfg, args) -> int:
+    from . import tickflow
+    db, st = open_all(cfg)
+    c = tickflow.coverage(db, st.get(), args.start, args.universe)
+    print(f"補抓範圍：{c['stocks']} 檔 × {c['days']} 天＝{c['total']} 組｜已完成 {c['done']}（{c['done'] / c['total'] * 100 if c['total'] else 0:.1f}%）"
+          f"、剩 {c['left']}｜已有資料 {c['from'] or '—'}～{c['to'] or '—'}｜資料表共 {c['rows']} 列")
+    s = db.get_setting("tickBackfill")
+    if s:
+        print(f"上次自動補抓：{s.get('at')}｜存 {s.get('saved')}、剩 {s.get('left')}" + (f"｜{s['stopped']}" if s.get("stopped") else ""))
     return 0
 
 
@@ -628,6 +626,10 @@ def main(argv=None) -> None:
     th.add_argument("--start", default="20241001")
     th.add_argument("--end")
     th.add_argument("--budget-mb", type=float, default=450, help="本次預估流量上限（未交易帳戶每日 500 MB）")
+    th.add_argument("--reserve-mb", type=float, default=15, help="官方剩餘流量低於這個就停（自動排程保留 120 MB 給收盤後的每日收集）")
+    tc = sub.add_parser("tick-coverage", help="永豐逐筆彙總的補抓進度")
+    tc.add_argument("--start", default="20241001")
+    tc.add_argument("--universe", default="watchlist,大型")
     pv = sub.add_parser("pivot-study", help="平點研究：W 天斜率由跌（漲）轉平之後的報酬（不影響規則）")
     pv.add_argument("--start")
     pv.add_argument("--end")
@@ -714,6 +716,8 @@ def main(argv=None) -> None:
         sys.exit(run_track(cfg, args))
     elif args.cmd == "sinopac-probe":
         sys.exit(run_sinopac_probe(cfg, args))
+    elif args.cmd == "tick-coverage":
+        sys.exit(run_tick_coverage(cfg, args))
     elif args.cmd == "tick-history":
         sys.exit(run_tick_history(cfg, args))
     elif args.cmd == "pivot-study":

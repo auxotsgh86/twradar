@@ -365,6 +365,27 @@ class Crawler:
         self.db.set_setting("backfill", state)
         self.db.log("info", f"歷史資料補抓完成：{state['done']} 個交易日")
 
+    def tick_backfill(self) -> dict | None:
+        """永豐逐筆彙總的自動補抓：抓到官方剩餘流量只剩保留量（留給收盤後的每日收集）就停，明天繼續。"""
+        from . import tickflow
+        from .providers.sinopac import Sinopac
+        cfg = self.cfg
+        pairs, _, _ = tickflow.backfill_pairs(self.db, self.settings.get(), cfg.sinopac_backfill_start,
+                                              universe=cfg.sinopac_backfill_universe)
+        if not pairs or not tickflow.coverage(self.db, self.settings.get(), cfg.sinopac_backfill_start,
+                                              cfg.sinopac_backfill_universe)["left"]:
+            return None
+        sp = Sinopac.login(cfg.sinopac_api_key, cfg.sinopac_secret_key)
+        try:
+            r = tickflow.collect(self.db, sp, pairs, budget_mb=480, reserve_mb=tickflow.BACKFILL_RESERVE_MB)
+        finally:
+            sp.logout()
+        left = r["todo"] - r["saved"]
+        self.db.set_setting("tickBackfill", {"at": _now(), "saved": r["saved"], "left": left, "stopped": r["stopped"],
+                                             "usedMb": r.get("usedMb")})
+        self.db.log("info", f"逐筆彙總補抓：存 {r['saved']}、剩 {left}" + (f"（{r['stopped']}）" if r["stopped"] else ""))
+        return r
+
     def ensure_history(self, stock: dict, need: int = 61) -> None:
         """單一個股歷史不足（例如官方來源被擋、或剛加入的股票）時，用逐檔資料源一次補齊。"""
         n = self.db.one("SELECT COUNT(*) AS n FROM quotes WHERE code=?", (stock["code"],))["n"]
@@ -430,6 +451,7 @@ class Scheduler:
         self.c = crawler
         self.w = worker
         self.db = crawler.db
+        self._ticks: threading.Thread | None = None
         threading.Thread(target=self._loop, daemon=True, name="scheduler").start()
 
     def slots(self, day: str) -> list[tuple[str, str, bool]]:
@@ -473,6 +495,22 @@ class Scheduler:
             # 啟動時錯過的時段只補一次
             self.w.submit(f"抓取 {target}{'（最後一次）' if final else ''}",
                           lambda target=target, final=final: self.c.crawl_day(target, final=final))
+        # 永豐逐筆彙總自動補抓：平日 08:10 以後（流量 08:00 重置）、每天一次、獨立執行緒（不佔用證交所抓取的佇列）
+        key = f"{day} ticks"
+        cfg = self.c.cfg
+        if (cfg.sinopac_api_key and cfg.sinopac_backfill and key not in fired and not is_weekend(day)
+                and n.hour * 60 + n.minute >= 8 * 60 + 10 and n.hour < 13):
+            fired[key] = True
+            changed = True
+            if not (self._ticks and self._ticks.is_alive()):
+                def run():
+                    try:
+                        self.c.tick_backfill()
+                    except Exception as e:  # noqa: BLE001
+                        log.exception("逐筆彙總補抓")
+                        self.db.log("warn", f"逐筆彙總補抓失敗：{e!r}")
+                self._ticks = threading.Thread(target=run, daemon=True, name="tick-backfill")
+                self._ticks.start()
         if changed:
             keep = {k: v for k, v in fired.items() if k[:8] >= (n - timedelta(days=3)).strftime("%Y%m%d")}
             self.db.set_setting("sched_fired", keep)

@@ -31,7 +31,7 @@ def done(db: DB, pairs: list[tuple[str, str]]) -> set[tuple[str, str]]:
 
 
 def collect(db: DB, client, pairs: list[tuple[str, str]], budget_mb: float = 450,
-            progress: Callable[[str], None] | None = None) -> dict:
+            progress: Callable[[str], None] | None = None, reserve_mb: float = MIN_REMAIN_MB) -> dict:
     """依序抓 (代號, 日期) 的 ticks、彙總後存檔；已有的跳過。流量估計超過 budget_mb、或判定流量用完時停止。"""
     have = done(db, pairs)
     todo = [p for p in pairs if p not in have]
@@ -50,8 +50,8 @@ def collect(db: DB, client, pairs: list[tuple[str, str]], budget_mb: float = 450
             break
         if k % 25 == 0:
             u = client.usage() if hasattr(client, "usage") else None
-            if u and u.get("remaining") is not None and u["remaining"] / 1e6 < MIN_REMAIN_MB:
-                st["stopped"] = f"官方剩餘流量只剩 {u['remaining'] / 1e6:.0f} MB（每個交易日 08:00 重置）"
+            if u and u.get("remaining") is not None and u["remaining"] / 1e6 < reserve_mb:
+                st["stopped"] = f"官方剩餘流量 {u['remaining'] / 1e6:.0f} MB，低於保留的 {reserve_mb:g} MB（每個交易日 08:00 重置）"
                 break
         traded = (vols.get((code, d)) or 0) > 0
         try:
@@ -83,6 +83,40 @@ def collect(db: DB, client, pairs: list[tuple[str, str]], budget_mb: float = 450
         st["limitMb"] = round(u["limit"] / 1e6) if u.get("limit") else None
     st["calls"] = client.calls
     return st
+
+
+BACKFILL_RESERVE_MB = 120    # 自動補抓時保留給收盤後每日收集的流量
+
+
+def backfill_pairs(db: DB, S: dict, start: str = "20241001", end: str = "99999999", universe: str = "watchlist,大型",
+                   extra: str = "") -> tuple[list[tuple[str, str]], int, int]:
+    """補抓清單：新的日子先抓。回傳 (pairs, 檔數, 天數)。"""
+    from .backtest import BTConfig, rank_universe
+    days = [r["date"] for r in db.q("SELECT date FROM market WHERE taiex IS NOT NULL AND date>=? AND date<=? ORDER BY date DESC",
+                                    (start, end))]
+    if not days:
+        return [], 0, 0
+    want = set(universe.split(","))
+    codes = set()
+    if "watchlist" in want:
+        codes |= {w["code"] for w in S.get("watchlist") or []}
+    alias = {"large": "大型", "mid": "中型", "otc": "上櫃"}
+    tags = {alias.get(x, x) for x in want} & {"大型", "中型", "上櫃"}
+    if tags:
+        u = rank_universe(db, days[0], BTConfig("", "", ""))
+        codes |= {c for c, t in u.items() if t & tags}
+    if extra:
+        codes |= set(extra.split(","))
+    return [(c, d) for d in days for c in sorted(codes)], len(codes), len(days)
+
+
+def coverage(db: DB, S: dict, start: str = "20241001", universe: str = "watchlist,大型") -> dict:
+    pairs, nc, nd = backfill_pairs(db, S, start, universe=universe)
+    have = done(db, pairs)
+    got = [d for c, d in pairs if (c, d) in have]
+    return {"stocks": nc, "days": nd, "total": len(pairs), "done": len(have), "left": len(pairs) - len(have),
+            "from": min(got) if got else None, "to": max(got) if got else None,
+            "rows": db.one("SELECT COUNT(*) AS n FROM tickflow WHERE src=?", (SRC,))["n"]}
 
 
 def daily_targets(db: DB, S: dict, d: str) -> list[str]:

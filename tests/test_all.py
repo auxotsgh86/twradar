@@ -2036,6 +2036,19 @@ class TickflowTests(unittest.TestCase):
         s = tickflow.series(self.db, "2330")
         self.assertEqual([x["buyPct"] for x in s], [round(3 / 7 * 100, 1)])   # 1124 改成舊版後還沒重抓
 
+    def test_backfill_pairs_and_coverage(self):
+        from twradar import tickflow
+        with self.db.tx() as c:
+            for d in ("20261120", "20261123", "20261124"):
+                c.execute("INSERT INTO market(date, taiex) VALUES(?, 20000)", (d,))
+            c.execute("INSERT INTO tickflow(code,date,n,src) VALUES('2330','20261124',5,?)", (tickflow.SRC,))
+        S = {"watchlist": [{"code": "2330"}, {"code": "1101"}]}
+        pairs, nc, nd = tickflow.backfill_pairs(self.db, S, "20261120", universe="watchlist")
+        self.assertEqual((nc, nd), (2, 3))
+        self.assertEqual(pairs[:2], [("1101", "20261124"), ("2330", "20261124")])     # 新的日子先抓
+        c = tickflow.coverage(self.db, S, "20261120", "watchlist")
+        self.assertEqual((c["total"], c["done"], c["left"], c["to"]), (6, 1, 5, "20261124"))
+
     def test_login_kwargs(self):
         """新版 shioaji 的 login 沒有 contracts_timeout：只傳有的參數。"""
         from twradar.providers.sinopac import login
