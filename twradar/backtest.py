@@ -775,6 +775,7 @@ def _veto_ids(settings: dict) -> list[str]:
 
 def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
     """內建的規則對照組：
+    flatturn 月線由下彎轉平＋5 日線向上的上車：另開路線（含帶量紅K、相鄰門檻）、只用這條
     quiet   量縮不停損的穩健性：門檻 0.7～1.0 倍、只套停損／獲利出場、＋法人剛開始連買、不加碼
     accel   斜率變化×成交量變化×法人慣性（出場：減速＋量增、只看減速、慣性中斷；減碼；量縮不停損；上車：剛開始連買、持續買超）
     v07     v0.7（前一版：沒有量縮不停損）
@@ -877,6 +878,14 @@ def preset_variants(names: list[str], settings: dict) -> list[tuple[str, dict]]:
             out.append(("A＋B（不加碼）", {"_playbooks": nb(**ab), "_maxAdds": 0}))
             out.append(("A＋乾淨紅K（不加不追高）", {"_playbooks": nb(inst="5d", quality="clean")}))
             out.append(("A＋不追高（不加乾淨紅K）", {"_playbooks": nb(inst="5d", entry_extra=("biasMa5Ok",))}))
+        elif n == "flatturn":   # 月線由下彎轉平＋5 日線向上的上車
+            from .rules import flatturn_playbooks as ft
+            out.append(("另開路線：月線轉平＋5 日線向上", {"_playbooks": ft("extra")}))
+            out.append(("另開路線＋帶量紅K", {"_playbooks": ft("extra", red_k=True)}))
+            out.append(("另開路線（前 10 日下彎 ≥ 1%）", {"_playbooks": ft("extra"), "flatPriorPct": 1}))
+            out.append(("另開路線（前 10 日下彎 ≥ 3%）", {"_playbooks": ft("extra"), "flatPriorPct": 3}))
+            out.append(("另開路線（近 10 日 ±1%）", {"_playbooks": ft("extra"), "flatNowPct": 1}))
+            out.append(("只用月線轉平上車（取代趨勢向上）", {"_playbooks": ft("only")}))
         elif n == "quiet":   # 「量縮時不因跌破月線出場」的穩健性：相鄰門檻、只套停損／獲利出場、疊加法人剛開始連買
             from .rules import accel_playbooks as ap
             for v in (0.7, 0.8, 0.9, 1.0):

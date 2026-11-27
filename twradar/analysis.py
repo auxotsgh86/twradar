@@ -315,6 +315,8 @@ def _indicators(q: list, ins: list, m, srcs: set | None, d: str, mh: list | None
         closes = [r["close"] for r in q if r["close"] is not None]
         if len(closes) >= 5:
             rec["ma5"] = round(sum(closes[:5]) / 5, 2)
+            if len(closes) >= 8:
+                rec["ma5Ago3"] = round(sum(closes[3:8]) / 5, 2)    # 3 個交易日前的 5 日線（看 5 日線方向）
         if len(closes) >= 20:
             rec["ma20"] = round(sum(closes[:20]) / 20, 2)
         if len(closes) >= 2:

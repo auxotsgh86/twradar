@@ -751,6 +751,26 @@ def _slopes(c: Ctx):
     return (m / a10 - 1) * 100, (a10 / a20 - 1) * 100
 
 
+@condition("ma20Flattening", "月線由下彎轉平", "entry", ("flatPriorPct", "flatNowPct"), ("ma20", "ma20Ago10", "ma20Ago20"),
+           "前 10 日月線下彎達設定幅度，近 10 日月線變化在 ± 設定幅度內（下跌趨勢停止）")
+def ma20_flattening(c: Ctx) -> Res:
+    s = _slopes(c)
+    if s is None:
+        return Res(NA)
+    now, before = s
+    if before <= -c.P["flatPriorPct"] and abs(now) <= c.P["flatNowPct"]:
+        return Res(PASS, f"月線由下彎（前 10 日 {before:+.1f}%）轉平（近 10 日 {now:+.1f}%）")
+    return Res(FAIL, need=f"月線由下彎轉平（前 10 日 {before:+.1f}%、近 10 日 {now:+.1f}%）")
+
+
+@condition("ma5Rising", "5 日線向上", "entry", (), ("ma5", "ma5Ago3"), "今天的 5 日線高於 3 個交易日前")
+def ma5_rising(c: Ctx) -> Res:
+    m, a = c.g("ma5"), c.g("ma5Ago3")
+    if m is None or a is None:
+        return Res(NA)
+    return Res(PASS, "5 日線向上") if m > a else Res(FAIL, need="5 日線向上")
+
+
 @condition("slopeDecel", "月線上揚減速", "hold", ("slopeDecelPts",), ("ma20", "ma20Ago10", "ma20Ago20"),
            "月線還在上揚，但近 10 日的上升幅度比前 10 日少了設定的百分點以上（還在漲、力道變弱）")
 def slope_decel(c: Ctx) -> Res:

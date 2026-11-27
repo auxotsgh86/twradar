@@ -33,12 +33,15 @@ GROUPS = (
     ("峰：由漲轉平", "peak"),
     ("峰＋量增", "peak_loud"),
     ("峰＋量增＋月線向上", "peak_loud_up"),
+    ("月線轉平＋5 日線向上", "flat20_up5"),
+    ("同上＋站上月線＋法人買超", "flat20_up5_inst"),
     ("轉折↑：由跌轉漲", "turn_up"),
     ("轉折↑＋月線向上", "turn_up_up"),
     ("轉折↑＋量增", "turn_up_loud"),
     ("轉折↓：由漲轉跌", "turn_dn"),
     ("轉折↓＋量增", "turn_dn_loud"),
 )
+FLAT_PRIOR, FLAT_NOW = 2.0, 0.5   # 月線轉平（%）：與規則參數 flatPriorPct／flatNowPct 預設相同
 TURN = 0.5          # 轉折：這一段斜率 ≥ +0.5σ（由跌轉漲）或 ≤ −0.5σ（由漲轉跌）
 # 平點之後的下一段（W 天）：轉上（≥ +0.5σ）、續跌（≤ −0.5σ）、盤整；以及哪些特徵讓平點比較會轉上
 FEATURES = (
@@ -78,9 +81,15 @@ def flags(C: list, V: list, N: list, i: int, W: int, lr: list | None = None) -> 
     tu, td = prev <= -MOVE * sig and now >= TURN * sig, prev >= MOVE * sig and now <= -TURN * sig
     quiet, loud = vr is not None and vr <= QUIET, vr is not None and vr >= LOUD
     streak2 = None if None in N[i - 1:i + 1] else N[i] > 0 and N[i - 1] > 0
+    # 均線：月線由下彎轉平（前 10 日 ≤ −2%、近 10 日 ±0.5%）＋5 日線向上（高於 3 天前）
+    m20, m20a, m20b = fmean(C[i - 19:i + 1]), fmean(C[i - 29:i - 9]), fmean(C[i - 39:i - 19]) if i >= 40 else None
+    f20 = m20b is not None and (m20a / m20b - 1) * 100 <= -FLAT_PRIOR and abs(m20 / m20a - 1) * 100 <= FLAT_NOW
+    up5 = fmean(C[i - 4:i + 1]) > fmean(C[i - 7:i - 2])
+    f20u5 = f20 and up5
     return {"base": True, "up": up, "trough": trough, "trough_up": trough and up,
             "trough_up_quiet": trough and up and quiet, "trough_up_quiet_inst": trough and up and quiet and inst is True,
             "peak": peak, "peak_loud": peak and loud, "peak_loud_up": peak and loud and up,
+            "flat20_up5": f20u5, "flat20_up5_inst": f20u5 and C[i] > m20 and inst is True,
             "turn_up": tu, "turn_up_up": tu and up, "turn_up_loud": tu and loud, "turn_dn": td, "turn_dn_loud": td and loud,
             # 特徵（平點轉換率用）
             "sig": sig, "quiet": quiet if vr is not None else None, "inst": inst, "streak2": streak2,

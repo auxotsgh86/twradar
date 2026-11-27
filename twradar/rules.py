@@ -252,6 +252,27 @@ def accel_playbooks(exit_when=None, reduce_when=None, quiet_ma=False, entry_extr
     return pb
 
 
+def flatturn_playbooks(mode: str = "extra", red_k: bool = False) -> dict:
+    """月線由下彎轉平＋5 日線向上的上車（以目前預設為底）。
+    mode="extra"：另開一條上車路線（原本的上車照舊）；"only"：上車只用這條（取代趨勢向上＋回測月線有守）。"""
+    pb = default_playbooks()
+    cond = ["notHolding", "ma20Flattening", "ma5Rising", "aboveMa5And20", "inst5dBuy"] + (["redVolK"] if red_k else [])
+    entry = []
+    for r in pb["entry"]:
+        if r.get("label") == "上車":
+            rule = {**r, "label": "上車（月線轉平）", "when": {"all": cond}}
+            if mode == "only":
+                entry.append({**r, "when": {"all": [x for x in r["when"]["all"] if x not in ("trendUp", "pullbackHeld")]
+                                                + ["ma20Flattening", "ma5Rising"]}})
+                continue
+            entry.append(r)
+            entry.append(rule)
+            continue
+        entry.append(r)
+    pb["entry"] = entry
+    return pb
+
+
 def veto_with(*conds: str) -> dict:
     """以 v0.5 為底，否決條件另外加上 conds（任一成立就不上車）。"""
     pb = v05_playbooks()
@@ -333,6 +354,8 @@ ENGINE_PARAMS = [
     {"id": "ma20SlopePct", "label": "盤整不進場：月線 10 日上升 ≥", "value": 1, "unit": "%", "min": -10, "max": 20, "note": "對照組「大型股」用"},
     {"id": "instTurnPct", "label": "法人轉買：當日買超佔成交量 ≥", "value": 3, "unit": "%", "min": 0, "max": 100, "note": "對照組用"},
     {"id": "maxUpperShadowPct", "label": "實體紅K：上影線佔整根 K 線 <", "value": 40, "unit": "%", "min": 0, "max": 100, "note": "對照組用"},
+    {"id": "flatPriorPct", "label": "月線轉平：前 10 日月線下彎 ≥", "value": 2, "unit": "%", "min": 0, "max": 30, "note": "對照組「月線轉平」用"},
+    {"id": "flatNowPct", "label": "月線轉平：近 10 日月線變化 ≤ ±", "value": 0.5, "unit": "%", "min": 0, "max": 10, "note": ""},
     {"id": "slopeDecelPts", "label": "月線減速：近 10 日上升幅度比前 10 日少 ≥", "value": 1, "unit": "百分點", "min": 0, "max": 20, "note": "對照組「斜率×量×慣性」用"},
     {"id": "volExpandRatio", "label": "量增：5 日均量 ≥ 之前 20 日均量的", "value": 1.3, "unit": "倍", "min": 0, "max": 10, "note": ""},
     {"id": "volQuietRatio", "label": "量縮：5 日均量 ≤ 之前 20 日均量的", "value": 0.8, "unit": "倍", "min": 0, "max": 10, "note": "v0.8：量縮時不因跌破月線出場"},

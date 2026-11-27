@@ -2259,6 +2259,35 @@ class MacroTests(unittest.TestCase):
         for o in vs.values():
             apply_variant(S, o)
 
+    def test_flatturn(self):
+        """月線由下彎轉平＋5 日線向上：條件方向、另開路線不影響原本的上車、對照組。"""
+        import json as _j
+        from twradar.backtest import apply_variant, preset_variants
+        from twradar.conditions import BUILTIN, Ctx, PASS, FAIL, NA
+        from twradar.rules import default_playbooks, flatturn_playbooks
+        from twradar.settings import default_settings
+        P = dict(DEFAULT_RULES)
+        ev = lambda cid, rec: BUILTIN[cid].fn(Ctx(rec, {}, P)).state  # noqa: E731
+        self.assertEqual(ev("ma20Flattening", {"ma20Ago20": 100, "ma20Ago10": 96, "ma20": 96.2}), PASS)   # −4% 後 +0.2%
+        self.assertEqual(ev("ma20Flattening", {"ma20Ago20": 100, "ma20Ago10": 96, "ma20": 93}), FAIL)    # 還在下彎
+        self.assertEqual(ev("ma20Flattening", {"ma20Ago20": 100, "ma20Ago10": 101, "ma20": 101}), FAIL)  # 之前沒下彎
+        self.assertEqual(ev("ma20Flattening", {"ma20": 96}), NA)
+        self.assertEqual(ev("ma5Rising", {"ma5": 101, "ma5Ago3": 100}), PASS)
+        self.assertEqual(ev("ma5Rising", {"ma5": 99, "ma5Ago3": 100}), FAIL)
+        pb = flatturn_playbooks("extra")
+        labels = [r["label"] for r in pb["entry"]]
+        self.assertEqual(labels.index("上車（月線轉平）"), labels.index("上車") + 1)
+        orig = next(r for r in default_playbooks()["entry"] if r["label"] == "上車")
+        self.assertEqual(next(r for r in pb["entry"] if r["label"] == "上車"), orig)
+        only = next(r for r in flatturn_playbooks("only")["entry"] if r["label"] == "上車")["when"]["all"]
+        self.assertNotIn("trendUp", only)
+        self.assertIn("ma20Flattening", only)
+        self.assertIn("redVolK", _j.dumps(flatturn_playbooks("extra", red_k=True)["entry"]))
+        vs = dict(preset_variants(["flatturn"], default_settings()))
+        self.assertEqual(len(vs), 6)
+        for o in vs.values():
+            apply_variant(default_settings(), o)
+
     def test_accel(self):
         """斜率變化×成交量變化×法人慣性：指標方向、條件、對照組。"""
         from twradar.analysis import _indicators
