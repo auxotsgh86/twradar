@@ -2506,6 +2506,12 @@ class VectorTests(unittest.TestCase):
         from twradar.macro import Macro
         from twradar.providers.fred import parse
         from twradar.vector import load, render, study, vector
+        from twradar.providers.fred import parse_tnx
+        tnx = {"chart": {"result": [{"meta": {"gmtoffset": -18000}, "timestamp": [1795809600, 1795896000],   # 11/27、11/28 美東 10:00
+                                     "indicators": {"quote": [{"close": [4.21, None]}]}}]}}
+        self.assertEqual(parse_tnx(tnx), [{"date": "20261127", "ust10y": 4.21}])
+        tnx["chart"]["result"][0]["indicators"]["quote"][0]["close"] = [42.1, None]       # 舊式 ×10 報價
+        self.assertEqual(parse_tnx(tnx)[0]["ust10y"], 4.21)
         rows = parse(b"observation_date,DGS10\n2026-11-23,4.10\n2026-11-24,.\n2026-11-25,4.25\n")
         self.assertEqual(rows, [{"date": "20261123", "ust10y": 4.10}, {"date": "20261125", "ust10y": 4.25}])
         db, days = self._db()

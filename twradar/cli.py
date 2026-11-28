@@ -172,7 +172,7 @@ def run_macro_history(cfg, args) -> int:
         opts = st.source_plan(cfg.env)[2].get("taifex") or {}
         tf = Taifex(Fetcher(max(cfg.request_interval, 3.0), cfg.user_agent), **({"base": opts["base"]} if opts.get("base") else {}))
         a = to_date(start)
-        while a.strftime("%Y%m%d") <= end:
+        while not args.ust_only and a.strftime("%Y%m%d") <= end:
             b = min(a + timedelta(days=364), to_date(end))
             s, e = a.strftime("%Y%m%d"), b.strftime("%Y%m%d")
             rows, errs = tf.fetch(s, e)
@@ -182,12 +182,12 @@ def run_macro_history(cfg, args) -> int:
             print(f"{s}～{e}：外資期貨 {fut} 天、匯率 {fx} 天" + ("；" + "；".join(errs) if errs else ""), flush=True)
             a = b + timedelta(days=1)
         try:
-            from .providers.fred import Fred
-            us = Fred(Fetcher(3.0, cfg.user_agent)).ust10y((to_date(start) - timedelta(days=40)).strftime("%Y%m%d"), end)
+            from .providers.fred import fetch_ust10y
+            us, src = fetch_ust10y((to_date(start) - timedelta(days=40)).strftime("%Y%m%d"), end, log=lambda m: print(m, flush=True))
             db.put_us_rates(us)
-            print(f"美債 10 年期殖利率（FRED）：{len(us)} 天" + (f"（{us[0]['date']}～{us[-1]['date']}）" if us else ""), flush=True)
+            print(f"美債 10 年期殖利率（{src}）：{len(us)} 天" + (f"（{us[0]['date']}～{us[-1]['date']}）" if us else ""), flush=True)
         except Exception as e:  # noqa: BLE001
-            print(f"美債殖利率（FRED）抓取失敗：{e}")
+            print(f"美債殖利率抓取失敗（FRED 與 Yahoo 都連不上）：{e}")
     n = compute_breadth(db)
     print(f"市場廣度：新算 {n} 天（除權息還原；短期＝站上月線、長期＝站上 200 日線）")
     r = db.one("SELECT COUNT(fut_foreign) AS f, COUNT(usd_twd) AS x, COUNT(breadth20) AS b, COUNT(breadth200) AS b2, "
@@ -615,6 +615,7 @@ def main(argv=None) -> None:
     mh.add_argument("--start", help="開始日（預設：資料庫第一個交易日）")
     mh.add_argument("--end", help="結束日（預設：今天）")
     mh.add_argument("--no-fetch", action="store_true", help="不抓期交所，只計算市場廣度")
+    mh.add_argument("--ust-only", action="store_true", help="只抓美債殖利率（不抓期交所）")
     al = sub.add_parser("alerts", help="注意股、處置股：抓取並列出")
     al.add_argument("--date", help="日期（預設：最新交易日）")
     al.add_argument("--no-fetch", action="store_true", help="只列出資料庫裡的，不抓取")
