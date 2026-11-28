@@ -43,7 +43,7 @@ class Fred:
         self.t, self.url = transport, url
 
     def ust10y(self, start: str, end: str) -> list[dict]:
-        return parse(self.t.get(self.url.format(sid="DGS10", a=_dash(start), b=_dash(end))))
+        return parse(self.t.get(self.url.format(sid="DGS10", a=_dash(start), b=_dash(end)), retries=0))   # 失敗就改用 Yahoo，不重試
 
 
 YAHOO_TNX = "https://{host}.finance.yahoo.com/v8/finance/chart/%5ETNX?period1={a}&period2={b}&interval=1d"
